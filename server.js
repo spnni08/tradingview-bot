@@ -4,11 +4,14 @@ import Anthropic from "@anthropic-ai/sdk";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
-
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
+
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+app.use(express.json());
 
 app.get("/", (req, res) => {
   res.send("TradingView bot läuft");
@@ -16,6 +19,24 @@ app.get("/", (req, res) => {
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
+});
+
+app.get("/test-telegram", async (req, res) => {
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: CHAT_ID,
+        text: "✅ Telegram Test: Dein Trading Bot funktioniert."
+      })
+    });
+
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post("/webhook", async (req, res) => {
@@ -32,16 +53,36 @@ app.post("/webhook", async (req, res) => {
           content: `Analysiere dieses TradingView Signal für 5-Minuten-Trading:
 ${JSON.stringify(signal, null, 2)}
 
-Antworte kurz als JSON mit:
-decision, risk, confidence, reason.`,
-        },
-      ],
+Antworte kurz mit:
+- Entscheidung: CONFIRM / REJECT
+- Risiko: LOW / MEDIUM / HIGH
+- Confidence: 0-100%
+- Grund: kurz`
+        }
+      ]
+    });
+
+    const analysisText = msg.content[0].text;
+
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: CHAT_ID,
+        text: `📊 ${signal.symbol} (${signal.timeframe})
+💰 Preis: ${signal.price}
+⚡ Aktion: ${signal.action}
+🕒 Zeit: ${signal.time}
+
+🤖 KI Analyse:
+${analysisText}`
+      })
     });
 
     res.json({
       status: "ok",
       received: signal,
-      analysis: msg.content[0].text,
+      analysis: analysisText
     });
   } catch (err) {
     console.error("Fehler:", err);
