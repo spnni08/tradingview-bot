@@ -4,6 +4,8 @@ import Anthropic from "@anthropic-ai/sdk";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.use(express.json());
+
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
@@ -11,82 +13,183 @@ const anthropic = new Anthropic({
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-app.use(express.json());
+let lastSignal = null;
 
-app.get("/", (req, res) => {
-  res.send("TradingView bot läuft");
-});
+function getPriority(score, decision, risk) {
+  if (decision === "REJECT" || score < 50) return "❌ IGNORE";
+  if (score >= 75 && risk !== "HIGH") return "🔥 HIGH QUALITY";
+  return "⚠️ MEDIUM";
+}
 
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", time: new Date().toISOString() });
-});
-
-app.get("/test-telegram", async (req, res) => {
-  try {
-    const r = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+async function sendTelegram(text) {
+  const response = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+    {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: CHAT_ID,
-        text: "✅ Telegram Test: Dein Trading Bot funktioniert."
-      })
-    });
+        text,
+        parse_mode: "HTML",
+      }),
+    }
+  );
 
-    const data = await r.json();
-    res.json(data);
+  return response.json();
+}
+
+app.get("/", (req, res) => {
+  res.send("TradingView AI Bot läuft");
+});
+
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    time: new Date().toISOString(),
+  });
+});
+
+app.get("/last-signal", (req, res) => {
+  res.json({
+    lastSignal,
+  });
+});
+
+app.get("/test-telegram", async (req, res) => {
+  try {
+    const result = await sendTelegram(
+      "✅ Telegram Test: Dein Trading Bot funktioniert."
+    );
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 app.post("/webhook", async (req, res) => {
+  const receivedAt = new Date().toISOString();
+
   try {
     const signal = req.body;
+
+    lastSignal = {
+      receivedAt,
+      signal,
+    };
+
     console.log("Signal erhalten:", signal);
+
+    const prompt = `
+Du bist ein vorsichtiger Trading-Signal-Analyst für 5-Minuten-Charts.
+
+Analysiere dieses TradingView Signal:
+
+${JSON.stringify(signal, null, 2)}
+
+Bewerte das Signal nach:
+- RSI / Momentum
+- Trendrichtung
+- Volatilität
+- Risiko
+- Wahrscheinlichkeit
+- Entry / Take Profit / Stop Loss
+
+WICHTIG:
+Antworte NUR als gültiges JSON.
+Keine Erklärung außerhalb vom JSON.
+
+JSON Format:
+{
+  "decision": "CONFIRM" oder "REJECT",
+  "score": Zahl von 0 bis 100,
+  "risk": "LOW" oder "MEDIUM" oder "HIGH",
+  "confidence": Zahl von 0 bis 100,
+  "reason": "kurze Begründung auf Deutsch",
+  "entry": Zahl,
+  "take_profit": Zahl,
+  "stop_loss": Zahl,
+  "timeframe": "5m",
+  "priority_note": "kurzer Hinweis"
+}
+`;
 
     const msg = await anthropic.messages.create({
       model: "claude-3-5-haiku-latest",
-      max_tokens: 400,
+      max_tokens: 700,
       messages: [
         {
           role: "user",
-          content: `Analysiere dieses TradingView Signal für 5-Minuten-Trading:
-${JSON.stringify(signal, null, 2)}
-
-Antworte kurz mit:
-- Entscheidung: CONFIRM / REJECT
-- Risiko: LOW / MEDIUM / HIGH
-- Confidence: 0-100%
-- Grund: kurz`
-        }
-      ]
+          content: prompt,
+        },
+      ],
     });
 
-    const analysisText = msg.content[0].text;
+    const rawText = msg.content[0].text;
 
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: CHAT_ID,
-        text: `📊 ${signal.symbol} (${signal.timeframe})
-💰 Preis: ${signal.price}
-⚡ Aktion: ${signal.action}
-🕒 Zeit: ${signal.time}
+    let ai;
+    try {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      ai = JSON.parse(jsonMatch[0]);
+    } catch (err) {
+      ai = {
+        decision: "REJECT",
+        score: 0,
+        risk: "HIGH",
+        confidence: 0,
+        reason: "KI-Antwort konnte nicht sauber gelesen werden.",
+        entry: Number(signal.price) || 0,
+        take_profit: 0,
+        stop_loss: 0,
+        timeframe: signal.timeframe || "5m",
+        priority_note: rawText,
+      };
+    }
 
-🤖 KI Analyse:
-${analysisText}`
-      })
-    });
+    const score = Number(ai.score) || 0;
+    const priority = getPriority(score, ai.decision, ai.risk);
+
+    const telegramText = `
+${priority}
+
+📊 <b>${signal.symbol || "Unknown"}</b> (${signal.timeframe || "5m"})
+⚡ Aktion: <b>${signal.action || "N/A"}</b>
+💰 Preis: ${signal.price || "N/A"}
+🕒 Zeit: ${signal.time || receivedAt}
+
+🧠 <b>KI Bewertung</b>
+Entscheidung: <b>${ai.decision}</b>
+Score: <b>${score}/100</b>
+Risiko: <b>${ai.risk}</b>
+Confidence: <b>${ai.confidence}%</b>
+
+🎯 <b>Trade Plan</b>
+Entry: ${ai.entry}
+TP: ${ai.take_profit}
+SL: ${ai.stop_loss}
+
+📝 Grund:
+${ai.reason}
+
+⚠️ Keine Finanzberatung.
+`;
+
+    const telegramResult = await sendTelegram(telegramText);
 
     res.json({
       status: "ok",
-      received: signal,
-      analysis: analysisText
+      receivedAt,
+      signal,
+      ai,
+      priority,
+      telegram: telegramResult,
     });
   } catch (err) {
     console.error("Fehler:", err);
-    res.status(500).json({ error: err.message });
+
+    res.status(500).json({
+      status: "error",
+      message: err.message,
+    });
   }
 });
 
