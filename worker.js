@@ -952,7 +952,7 @@ Winrate: ${stats.winrate}%`);
         await sendTelegramTo(env, chatId, "📋 Keine offenen empfohlenen Trades.");
         return;
       }
-      const lines = ["📋 Offene Trades (empfohlen)\n"];
+      const lines = ["Offene Trades (empfohlen)\n"];
       for (const r of rows) {
         const ago = Math.floor((Date.now() - r.created_at) / 60000);
         lines.push(`${r.ai_direction === 'LONG' ? '🟢' : '🔴'} ${r.symbol} (${r.ai_direction})`);
