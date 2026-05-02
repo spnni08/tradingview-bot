@@ -1091,7 +1091,6 @@ async function sendTelegramTo(env, chatId, text) {
 
 // ─── Dashboard HTML ──────────────────────────────────────────────────────────
 
-function dashboardHtml() {
   return `<!doctype html>
 <html lang="de">
 <head>
