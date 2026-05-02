@@ -66,8 +66,10 @@ export default {
       const snapshot = await getSnapshot(env, symbol);
       if (!snapshot) return Response.json({ error: "No snapshot found for symbol" }, { status: 404 });
 
-      const ruleScore = calculateRuleScore(snapshot);
-      const ai = await analyzeWithClaude(env, snapshot, ruleScore);
+      const snap1h = await getSnapshot(env, symbol, "1H");
+      const snap4h = await getSnapshot(env, symbol, "4H");
+      const ruleScore = calculateRuleScore(snapshot, snap1h, snap4h);
+      const ai = await analyzeWithClaude(env, snapshot, ruleScore, snap1h, snap4h);
       const text = formatTelegram(snapshot, ai, ruleScore, "🧠 MANUELLER CHART-CHECK");
       const telegram = await sendTelegram(env, text);
 
@@ -90,8 +92,12 @@ export default {
         });
       }
 
-      const ruleScore = calculateRuleScore(signal);
-      const ai = await analyzeWithClaude(env, signal, ruleScore);
+      // Multi-Timeframe Snapshots laden
+      const snap1h = await getSnapshot(env, signal.symbol, "1H");
+      const snap4h = await getSnapshot(env, signal.symbol, "4H");
+
+      const ruleScore = calculateRuleScore(signal, snap1h, snap4h);
+      const ai = await analyzeWithClaude(env, signal, ruleScore, snap1h, snap4h);
 
       const finalScore = clamp(Math.round((Number(ai.score || 0) * 0.75) + (ruleScore.score * 0.25)));
       ai.score = finalScore;
@@ -163,7 +169,7 @@ function getPriority(score, recommendation, risk) {
 
 // ─── Regelbasierter Score (Top-Down Strategie) ───────────────────────────────
 
-function calculateRuleScore(signal) {
+function calculateRuleScore(signal, snap1h, snap4h) {
   let score = 50;
   const notes = [];
 
@@ -241,6 +247,65 @@ function calculateRuleScore(signal) {
   if (!wantsLong && !wantsShort) {
     score -= 20;
     notes.push("Kein klares Signal");
+  }
+
+  // ── Strategie-Regel 7: Multi-Timeframe Bestätigung (stärkster Filter) ──
+  // 4H Bias ist die Hauptregel laut Strategie — wenn 4H verfügbar, stark gewichten
+  if (snap4h) {
+    const p4h = Number(snap4h.price);
+    const ema200_4h = Number(snap4h.ema200);
+    const ema50_4h = Number(snap4h.ema50);
+    const trend4h = snap4h.trend || "";
+    const rsi4h = Number(snap4h.rsi);
+
+    if (wantsLong) {
+      if (p4h > ema200_4h) {
+        score += 20;
+        notes.push("4H über EMA200 ✓✓");
+      } else {
+        score -= 30;
+        notes.push("4H unter EMA200 — gegen Hauptbias ✗✗");
+      }
+      if (trend4h === "bullish") { score += 10; notes.push("4H Trend bullish ✓"); }
+      if (trend4h === "bearish") { score -= 15; notes.push("4H Trend bearish ✗"); }
+      // EMA flach auf 4H = kein Trade
+      if (ema50_4h && ema200_4h) {
+        const spread = Math.abs(ema50_4h - ema200_4h) / ema200_4h * 100;
+        if (spread < 0.3) { score -= 20; notes.push("4H EMA flach — kein Trade ✗"); }
+      }
+    }
+    if (wantsShort) {
+      if (p4h < ema200_4h) {
+        score += 20;
+        notes.push("4H unter EMA200 ✓✓");
+      } else {
+        score -= 30;
+        notes.push("4H über EMA200 — gegen Hauptbias ✗✗");
+      }
+      if (trend4h === "bearish") { score += 10; notes.push("4H Trend bearish ✓"); }
+      if (trend4h === "bullish") { score -= 15; notes.push("4H Trend bullish ✗"); }
+    }
+  }
+
+  // 1H Bestätigung — mittlerer Filter
+  if (snap1h) {
+    const p1h = Number(snap1h.price);
+    const ema200_1h = Number(snap1h.ema200);
+    const trend1h = snap1h.trend || "";
+    const rsi1h = Number(snap1h.rsi);
+
+    if (wantsLong) {
+      if (p1h > ema200_1h) { score += 10; notes.push("1H über EMA200 ✓"); }
+      else { score -= 10; notes.push("1H unter EMA200 ✗"); }
+      if (trend1h === "bullish") { score += 5; notes.push("1H bullish ✓"); }
+      if (!isNaN(rsi1h) && rsi1h > 60) { score -= 8; notes.push(`1H RSI ${rsi1h.toFixed(0)} zu hoch`); }
+    }
+    if (wantsShort) {
+      if (p1h < ema200_1h) { score += 10; notes.push("1H unter EMA200 ✓"); }
+      else { score -= 10; notes.push("1H über EMA200 ✗"); }
+      if (trend1h === "bearish") { score += 5; notes.push("1H bearish ✓"); }
+      if (!isNaN(rsi1h) && rsi1h < 40) { score -= 8; notes.push(`1H RSI ${rsi1h.toFixed(0)} zu niedrig`); }
+    }
   }
 
   return { score: clamp(score), reason: notes.join(" | ") || "Keine Daten" };
@@ -409,46 +474,65 @@ async function saveSignal(env, signal, ai, ruleScore) {
 }
 
 async function saveSnapshot(env, signal) {
+  // Timeframe-aware key: symbol + timeframe (z.B. BTCUSDT_1H, BTCUSDT_4H, BTCUSDT_5)
+  const tf = signal.timeframe || "5";
+  const key = `${signal.symbol}_${tf}`;
+
   await env.DB.prepare(`
     CREATE TABLE IF NOT EXISTS snapshots (
-      symbol TEXT PRIMARY KEY,
+      key TEXT PRIMARY KEY,
+      symbol TEXT,
+      timeframe TEXT,
       updated_at INTEGER,
       raw_signal TEXT
     )
   `).run();
 
   await env.DB.prepare(`
-    INSERT INTO snapshots (symbol, updated_at, raw_signal)
-    VALUES (?, ?, ?)
-    ON CONFLICT(symbol) DO UPDATE SET
+    INSERT INTO snapshots (key, symbol, timeframe, updated_at, raw_signal)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
       updated_at = excluded.updated_at,
       raw_signal = excluded.raw_signal
-  `).bind(signal.symbol, Date.now(), JSON.stringify(signal)).run();
+  `).bind(key, signal.symbol, tf, Date.now(), JSON.stringify(signal)).run();
 }
 
-async function getSnapshot(env, symbol) {
-  const row = await env.DB.prepare(
-    `SELECT raw_signal FROM snapshots WHERE symbol = ?`
-  ).bind(symbol).first();
-  return row ? JSON.parse(row.raw_signal) : null;
+async function getSnapshot(env, symbol, timeframe) {
+  const tf = timeframe || "5";
+  const key = `${symbol}_${tf}`;
+  try {
+    const row = await env.DB.prepare(
+      `SELECT raw_signal FROM snapshots WHERE key = ?`
+    ).bind(key).first();
+    return row ? JSON.parse(row.raw_signal) : null;
+  } catch {
+    // Fallback: alte Tabelle ohne key-Spalte
+    try {
+      const row2 = await env.DB.prepare(
+        `SELECT raw_signal FROM snapshots WHERE symbol = ?`
+      ).bind(symbol).first();
+      return row2 ? JSON.parse(row2.raw_signal) : null;
+    } catch {
+      return null;
+    }
+  }
 }
 async function getSnapshots(env) {
   try {
-    await env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS snapshots (
-        symbol TEXT PRIMARY KEY,
-        updated_at INTEGER,
-        raw_signal TEXT
-      )
-    `).run();
     const result = await env.DB.prepare(
-      `SELECT raw_signal, updated_at FROM snapshots ORDER BY updated_at DESC LIMIT 20`
+      `SELECT raw_signal, updated_at, timeframe FROM snapshots ORDER BY updated_at DESC LIMIT 60`
     ).all();
-    return (result.results || []).map(row => {
-      const s = JSON.parse(row.raw_signal);
-      s._updated_at = row.updated_at;
-      return s;
-    });
+    // Nur 5min Snapshots fürs Dashboard (1H/4H separat)
+    return (result.results || [])
+      .filter(row => {
+        const tf = row.timeframe || "5";
+        return tf === "5" || tf === "5m" || tf === "1" || !["60","240","1H","4H"].includes(tf);
+      })
+      .map(row => {
+        const s = JSON.parse(row.raw_signal);
+        s._updated_at = row.updated_at;
+        return s;
+      });
   } catch {
     return [];
   }
