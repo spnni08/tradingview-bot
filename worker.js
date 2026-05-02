@@ -952,18 +952,15 @@ Winrate: ${stats.winrate}%`);
         await sendTelegramTo(env, chatId, "📋 Keine offenen empfohlenen Trades.");
         return;
       }
-      const lines = ["📋 Offene Trades (empfohlen)
-"];
+      const lines = ["📋 Offene Trades (empfohlen)\n"];
       for (const r of rows) {
         const ago = Math.floor((Date.now() - r.created_at) / 60000);
         lines.push(`${r.ai_direction === 'LONG' ? '🟢' : '🔴'} ${r.symbol} (${r.ai_direction})`);
         lines.push(`Score: ${r.ai_score} | Entry: ${Number(r.ai_entry).toFixed(2)}`);
         lines.push(`TP: ${Number(r.ai_take_profit).toFixed(2)} | SL: ${Number(r.ai_stop_loss).toFixed(2)}`);
-        lines.push(`vor ${ago}min
-`);
+        lines.push(`vor ${ago}min\n`);
       }
-      await sendTelegramTo(env, chatId, lines.join("
-"));
+      await sendTelegramTo(env, chatId, lines.join("\n"));
     } catch(e) {
       await sendTelegramTo(env, chatId, "Fehler: " + e.message);
     }
@@ -984,15 +981,12 @@ Winrate: ${stats.winrate}%`);
         await sendTelegramTo(env, chatId, "📈 Heute noch keine empfohlenen Signale.");
         return;
       }
-      const lines = ["🏆 Top Signale (letzte 24h)
-"];
+      const lines = ["🏆 Top Signale (letzte 24h)\n"];
       for (const r of rows) {
         lines.push(`${r.ai_direction === 'LONG' ? '🟢' : '🔴'} ${r.symbol} — Score ${r.ai_score}/100`);
-        lines.push(`Risiko: ${r.ai_risk}
-`);
+        lines.push(`Risiko: ${r.ai_risk}\n`);
       }
-      await sendTelegramTo(env, chatId, lines.join("
-"));
+      await sendTelegramTo(env, chatId, lines.join("\n"));
     } catch(e) {
       await sendTelegramTo(env, chatId, "Fehler: " + e.message);
     }
@@ -1050,15 +1044,11 @@ R/R: 1:${(reward / risk).toFixed(2)}`;
     }
 
     const mtfLine = snap4h
-      ? `
-4H: ${Number(snap4h.price) > Number(snap4h.ema200) ? '🟢 LONG-BIAS' : '🔴 SHORT-BIAS'} | Trend: ${snap4h.trend}`
-      : "
-4H: kein Snapshot";
+      ? `\n4H: ${Number(snap4h.price) > Number(snap4h.ema200) ? '🟢 LONG-BIAS' : '🔴 SHORT-BIAS'} | Trend: ${snap4h.trend}`
+      : "\n4H: kein Snapshot";
     const mtf1h = snap1h
-      ? `
-1H: Trend ${snap1h.trend} | RSI ${Number(snap1h.rsi).toFixed(0)}`
-      : "
-1H: kein Snapshot";
+      ? `\n1H: Trend ${snap1h.trend} | RSI ${Number(snap1h.rsi).toFixed(0)}`
+      : "\n1H: kein Snapshot";
 
     const reply = `${priority}
 
