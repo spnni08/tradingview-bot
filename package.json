@@ -1,17 +1,1 @@
-{
-  "name": "tradingview-webhook-analyzer",
-  "version": "1.0.0",
-  "type": "module",
-  "description": "TradingView webhook receiver with Claude AI analysis",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "latest",
-    "express": "latest"
-  },
-  "engines": {
-    "node": ">=18"
-  }
-}
+
