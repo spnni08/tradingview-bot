@@ -1601,4 +1601,714 @@ loadHistory();
 </script>
 </body>
 </html>`;
+}// ─── Dashboard HTML ───────────────────────────────────────────────────────────
+
+function dashboardHtml() {
+  return `<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>WAVESCOUT</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #05080d;
+      --surface: #0a1018;
+      --surface2: #0f1822;
+      --surface3: #141e2c;
+      --border: #1a2838;
+      --border2: #243548;
+      --accent: #00c8f0;
+      --accent2: #00e896;
+      --warn: #f0b800;
+      --danger: #f04444;
+      --purple: #a855f7;
+      --text: #c8dcea;
+      --text2: #8aa0b4;
+      --muted: #3d5468;
+      --font-display: 'Syne', sans-serif;
+      --font-mono: 'Space Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font-display);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding-bottom: 60px;
+    }
+
+    /* ── Header ── */
+    .header {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(5,8,13,0.95);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 16px;
+      height: 56px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+    .header-logo {
+      font-size: 1.1rem; font-weight: 800; letter-spacing: 0.1em;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .header-version {
+      font-family: var(--font-mono); font-size: 0.6rem;
+      color: var(--muted); border: 1px solid var(--border2);
+      padding: 2px 6px; border-radius: 4px;
+    }
+    .header-right { display: flex; align-items: center; gap: 8px; }
+    .header-time {
+      font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted);
+    }
+    .header-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--accent2);
+      box-shadow: 0 0 6px var(--accent2);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    /* ── Stats Bar ── */
+    .stats-bar {
+      display: grid; grid-template-columns: repeat(5,1fr);
+      border-bottom: 1px solid var(--border);
+    }
+    .stat-cell {
+      padding: 12px 8px; text-align: center;
+      border-right: 1px solid var(--border);
+      position: relative; overflow: hidden;
+    }
+    .stat-cell:last-child { border-right: none; }
+    .stat-val {
+      font-family: var(--font-mono); font-size: 1.25rem;
+      font-weight: 700; color: var(--accent); line-height: 1;
+    }
+    .stat-val.g { color: var(--accent2); }
+    .stat-val.r { color: var(--danger); }
+    .stat-val.y { color: var(--warn); }
+    .stat-lbl { font-size: 0.58rem; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.1em; }
+
+    /* ── Nav Tabs ── */
+    .tabs {
+      display: flex; overflow-x: auto; scrollbar-width: none;
+      border-bottom: 1px solid var(--border);
+      padding: 0 12px; gap: 0;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab {
+      padding: 12px 16px; font-size: 0.72rem; font-weight: 700;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--muted); cursor: pointer; white-space: nowrap;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab:active { opacity: 0.7; }
+
+    /* ── Tab Panels ── */
+    .panel { display: none; padding: 14px 12px; }
+    .panel.active { display: block; }
+
+    /* ── Section header ── */
+    .section-hdr {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .section-title {
+      font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.12em; color: var(--muted);
+    }
+
+    /* ── Cards ── */
+    .card-list { display: flex; flex-direction: column; gap: 8px; }
+
+    .snapshot-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .snapshot-info { flex: 1; min-width: 0; }
+    .snapshot-symbol { font-size: 1rem; font-weight: 800; color: #fff; }
+    .snapshot-meta { font-family: var(--font-mono); font-size: 0.62rem; color: var(--muted); margin-top: 3px; }
+    .snapshot-price { font-family: var(--font-mono); font-size: 0.9rem; color: var(--accent); font-weight: 700; white-space: nowrap; }
+
+    .signal-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 14px;
+    }
+    .signal-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .signal-symbol { font-weight: 800; font-size: 0.95rem; }
+    .signal-time { font-family: var(--font-mono); font-size: 0.6rem; color: var(--muted); }
+    .signal-row { display: flex; justify-content: space-between; align-items: center; }
+    .signal-trigger { font-size: 0.68rem; color: var(--muted); font-family: var(--font-mono); }
+    .signal-score { font-family: var(--font-mono); font-size: 0.78rem; font-weight: 700; }
+    .signal-prices { font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted); display: flex; gap: 10px; margin-top: 5px; }
+    .signal-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+    /* ── Badges ── */
+    .badges { display: flex; gap: 5px; flex-wrap: wrap; }
+    .badge { font-size: 0.62rem; font-weight: 700; padding: 3px 7px; border-radius: 4px; letter-spacing: 0.04em; }
+    .b-win  { background: rgba(0,232,150,0.12); color: var(--accent2); border: 1px solid rgba(0,232,150,0.2); }
+    .b-open { background: rgba(0,200,240,0.1);  color: var(--accent);  border: 1px solid rgba(0,200,240,0.2); }
+    .b-loss { background: rgba(240,68,68,0.12); color: var(--danger);  border: 1px solid rgba(240,68,68,0.2); }
+    .b-rec  { background: rgba(0,232,150,0.08); color: var(--accent2); border: 1px solid rgba(0,232,150,0.15); }
+    .b-norec{ background: rgba(240,68,68,0.08); color: var(--danger);  border: 1px solid rgba(240,68,68,0.15); }
+    .b-low  { background: rgba(0,232,150,0.08); color: var(--accent2); }
+    .b-med  { background: rgba(240,184,0,0.08); color: var(--warn); }
+    .b-high { background: rgba(240,68,68,0.08); color: var(--danger); }
+
+    /* ── Buttons ── */
+    .btn {
+      font-family: var(--font-display); font-weight: 700; font-size: 0.72rem;
+      letter-spacing: 0.05em; border: none; border-radius: 8px;
+      padding: 9px 14px; cursor: pointer; white-space: nowrap;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.95); opacity: 0.8; }
+    .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+    .btn-primary { background: linear-gradient(135deg, var(--accent), #0090b0); color: #000; }
+    .btn-ghost { background: none; border: 1px solid var(--border2); color: var(--muted); font-size: 0.65rem; padding: 5px 10px; border-radius: 6px; }
+    .btn-ghost:active { border-color: var(--accent); color: var(--accent); }
+    .btn-win  { background: rgba(0,232,150,0.12); color: var(--accent2); border: 1px solid rgba(0,232,150,0.25); font-size: 0.68rem; padding: 6px 10px; }
+    .btn-loss { background: rgba(240,68,68,0.12);  color: var(--danger);  border: 1px solid rgba(240,68,68,0.25);  font-size: 0.68rem; padding: 6px 10px; }
+
+    /* ── Result card ── */
+    .result-card {
+      margin-top: 8px; background: var(--surface2);
+      border: 1px solid var(--border2); border-radius: 12px;
+      overflow: hidden; animation: slideIn 0.2s ease;
+    }
+    @keyframes slideIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:none} }
+    .result-header { padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
+    .result-badge { font-size: 0.72rem; font-weight: 800; padding: 4px 10px; border-radius: 6px; }
+    .result-badge.rec  { background: rgba(0,232,150,0.15); color: var(--accent2); }
+    .result-badge.norec{ background: rgba(240,68,68,0.15);  color: var(--danger); }
+    .result-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+    .result-row  { display: flex; justify-content: space-between; align-items: center; }
+    .result-key  { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    .result-val  { font-family: var(--font-mono); font-size: 0.78rem; }
+    .result-reason { font-size: 0.76rem; line-height: 1.5; padding-top: 8px; border-top: 1px solid var(--border); color: var(--text2); }
+    .result-plan { background: rgba(0,200,240,0.04); border: 1px solid rgba(0,200,240,0.12); border-radius: 8px; padding: 10px 12px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; text-align: center; }
+    .plan-lbl { font-size: 0.58rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    .plan-val { font-family: var(--font-mono); font-size: 0.8rem; font-weight: 700; margin-top: 2px; color: var(--accent); }
+
+    /* ── Score bar ── */
+    .score-bar-bg { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+    .score-bar-fill { height: 100%; border-radius: 2px; transition: width 0.5s ease; }
+
+    /* ── Tools panel ── */
+    .tools-grid { display: flex; flex-direction: column; gap: 8px; }
+    .tool-group { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+    .tool-group-title { padding: 10px 14px; font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); border-bottom: 1px solid var(--border); background: var(--surface2); }
+    .tool-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 13px 14px; border-bottom: 1px solid var(--border);
+      cursor: pointer; transition: background 0.1s;
+    }
+    .tool-item:last-child { border-bottom: none; }
+    .tool-item:active { background: var(--surface2); }
+    .tool-item-left { display: flex; align-items: center; gap: 10px; }
+    .tool-icon { font-size: 1.1rem; width: 28px; text-align: center; }
+    .tool-label { font-size: 0.82rem; font-weight: 700; }
+    .tool-desc { font-size: 0.65rem; color: var(--muted); margin-top: 2px; }
+    .tool-arrow { color: var(--muted); font-size: 0.8rem; }
+    .tool-item a { text-decoration: none; color: inherit; display: flex; align-items: center; justify-content: space-between; width: 100%; }
+
+    /* ── Waveboard link ── */
+    .waveboard-banner {
+      background: linear-gradient(135deg, rgba(168,85,247,0.15), rgba(0,200,240,0.1));
+      border: 1px solid rgba(168,85,247,0.3);
+      border-radius: 14px; padding: 18px 16px;
+      display: flex; align-items: center; gap: 14px;
+      cursor: pointer; text-decoration: none; color: inherit;
+      transition: border-color 0.15s, transform 0.1s;
+      margin-bottom: 12px;
+    }
+    .waveboard-banner:active { transform: scale(0.98); border-color: var(--purple); }
+    .waveboard-icon { font-size: 2rem; flex-shrink: 0; }
+    .waveboard-text {}
+    .waveboard-title { font-size: 1rem; font-weight: 800; color: #fff; }
+    .waveboard-sub { font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
+    .waveboard-badge { margin-left: auto; flex-shrink: 0; background: rgba(168,85,247,0.2); color: var(--purple); font-size: 0.62rem; font-weight: 700; padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(168,85,247,0.3); }
+
+    /* ── Telegram commands ── */
+    .cmd-list { display: flex; flex-direction: column; gap: 6px; }
+    .cmd-item {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 12px;
+      display: flex; align-items: center; justify-content: space-between;
+      cursor: pointer; transition: background 0.1s;
+    }
+    .cmd-item:active { background: var(--surface2); }
+    .cmd-code { font-family: var(--font-mono); font-size: 0.78rem; color: var(--accent); }
+    .cmd-desc { font-size: 0.68rem; color: var(--muted); }
+    .cmd-copy { font-size: 0.65rem; color: var(--muted); }
+
+    /* ── Empty ── */
+    .empty { text-align: center; padding: 32px 16px; color: var(--muted); font-size: 0.82rem; line-height: 1.6; }
+
+    /* ── Toast ── */
+    .toast {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: var(--surface3); border: 1px solid var(--border2);
+      color: var(--text); font-size: 0.78rem; padding: 10px 18px;
+      border-radius: 20px; z-index: 999; pointer-events: none;
+      opacity: 0; transition: opacity 0.2s; white-space: nowrap; max-width: 90vw; text-align: center;
+    }
+    .toast.show { opacity: 1; }
+
+    /* ── Divider ── */
+    .divider { height: 1px; background: var(--border); margin: 12px 0; }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-left">
+    <div class="header-logo">◈ WAVESCOUT</div>
+    <div class="header-version">v3 MTF</div>
+  </div>
+  <div class="header-right">
+    <div class="header-time" id="clock">–</div>
+    <div class="header-dot"></div>
+  </div>
+</div>
+
+<!-- Stats Bar -->
+<div class="stats-bar" id="stats-bar">
+  <div class="stat-cell"><div class="stat-val">–</div><div class="stat-lbl">Total</div></div>
+  <div class="stat-cell"><div class="stat-val g">–</div><div class="stat-lbl">Wins</div></div>
+  <div class="stat-cell"><div class="stat-val r">–</div><div class="stat-lbl">Losses</div></div>
+  <div class="stat-cell"><div class="stat-val">–</div><div class="stat-lbl">Open</div></div>
+  <div class="stat-cell"><div class="stat-val y">–</div><div class="stat-lbl">Win%</div></div>
+</div>
+
+<!-- Tabs -->
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('check')">⚡ Prüfen</div>
+  <div class="tab" onclick="switchTab('signals')">📋 Signale</div>
+  <div class="tab" onclick="switchTab('tools')">🔧 Tools</div>
+  <div class="tab" onclick="switchTab('commands')">💬 Telegram</div>
+</div>
+
+<!-- Panel: Jetzt prüfen -->
+<div class="panel active" id="panel-check">
+  <div class="section-hdr">
+    <div class="section-title">Aktuelle Snapshots</div>
+    <button class="btn btn-ghost" onclick="loadSnapshots()">↻ Refresh</button>
+  </div>
+  <div class="card-list" id="snapshots-list">
+    <div class="empty">Lade Snapshots…</div>
+  </div>
+</div>
+
+<!-- Panel: Signale -->
+<div class="panel" id="panel-signals">
+  <div class="section-hdr">
+    <div class="section-title">Letzte 50 Signale</div>
+    <button class="btn btn-ghost" onclick="loadHistory()">↻ Refresh</button>
+  </div>
+  <div class="card-list" id="signals-list">
+    <div class="empty">Lade Signale…</div>
+  </div>
+</div>
+
+<!-- Panel: Tools -->
+<div class="panel" id="panel-tools">
+
+  <!-- Waveboard Banner -->
+  <a class="waveboard-banner" href="https://waveboard-e54ed.web.app/waveboard/dashboard" target="_blank">
+    <div class="waveboard-icon">🌊</div>
+    <div class="waveboard-text">
+      <div class="waveboard-title">Waveboard</div>
+      <div class="waveboard-sub">Öffnet dein externes Trading Dashboard</div>
+    </div>
+    <div class="waveboard-badge">↗ Öffnen</div>
+  </a>
+
+  <div class="tools-grid">
+
+    <!-- System -->
+    <div class="tool-group">
+      <div class="tool-group-title">⚙️ System</div>
+      <div class="tool-item" onclick="toolAction('health')">
+        <div class="tool-item-left">
+          <div class="tool-icon">💚</div>
+          <div><div class="tool-label">Health Check</div><div class="tool-desc">Worker Status prüfen</div></div>
+        </div>
+        <div class="tool-arrow">›</div>
+      </div>
+      <div class="tool-item" onclick="toolAction('telegram')">
+        <div class="tool-item-left">
+          <div class="tool-icon">📨</div>
+          <div><div class="tool-label">Telegram testen</div><div class="tool-desc">Test-Nachricht senden</div></div>
+        </div>
+        <div class="tool-arrow">›</div>
+      </div>
+      <div class="tool-item" onclick="toolAction('morning')">
+        <div class="tool-item-left">
+          <div class="tool-icon">🌅</div>
+          <div><div class="tool-label">Morning Brief senden</div><div class="tool-desc">Tages-Bias jetzt abrufen</div></div>
+        </div>
+        <div class="tool-arrow">›</div>
+      </div>
+    </div>
+
+    <!-- Analyse -->
+    <div class="tool-group">
+      <div class="tool-group-title">🧠 Analyse</div>
+      <div class="tool-item" onclick="toolAction('outcomes')">
+        <div class="tool-item-left">
+          <div class="tool-icon">🔄</div>
+          <div><div class="tool-label">Outcome Tracking</div><div class="tool-desc">WIN/LOSS jetzt prüfen (Binance)</div></div>
+        </div>
+        <div class="tool-arrow">›</div>
+      </div>
+      <div class="tool-item" onclick="switchTab('check')">
+        <div class="tool-item-left">
+          <div class="tool-icon">🔍</div>
+          <div><div class="tool-label">Symbol analysieren</div><div class="tool-desc">Claude-Analyse per Tap</div></div>
+        </div>
+        <div class="tool-arrow">›</div>
+      </div>
+    </div>
+
+    <!-- Links -->
+    <div class="tool-group">
+      <div class="tool-group-title">🔗 Links</div>
+      <div class="tool-item">
+        <div class="tool-item-left" style="width:100%">
+          <a href="https://waveboard-e54ed.web.app/waveboard/dashboard" target="_blank" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;width:100%">
+            <div class="tool-icon">🌊</div>
+            <div><div class="tool-label">Waveboard Dashboard</div><div class="tool-desc">waveboard-e54ed.web.app</div></div>
+            <div class="tool-arrow" style="margin-left:auto">↗</div>
+          </a>
+        </div>
+      </div>
+      <div class="tool-item">
+        <div class="tool-item-left" style="width:100%">
+          <a href="https://tradingview.com" target="_blank" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;width:100%">
+            <div class="tool-icon">📊</div>
+            <div><div class="tool-label">TradingView</div><div class="tool-desc">Charts & Alerts verwalten</div></div>
+            <div class="tool-arrow" style="margin-left:auto">↗</div>
+          </a>
+        </div>
+      </div>
+      <div class="tool-item">
+        <div class="tool-item-left" style="width:100%">
+          <a href="https://dash.cloudflare.com" target="_blank" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;width:100%">
+            <div class="tool-icon">☁️</div>
+            <div><div class="tool-label">Cloudflare Dashboard</div><div class="tool-desc">Worker & Logs verwalten</div></div>
+            <div class="tool-arrow" style="margin-left:auto">↗</div>
+          </a>
+        </div>
+      </div>
+      <div class="tool-item">
+        <div class="tool-item-left" style="width:100%">
+          <a href="https://github.com/spnni08/tradingview-bot" target="_blank" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;width:100%">
+            <div class="tool-icon">🐙</div>
+            <div><div class="tool-label">GitHub Repository</div><div class="tool-desc">spnni08/tradingview-bot</div></div>
+            <div class="tool-arrow" style="margin-left:auto">↗</div>
+          </a>
+        </div>
+      </div>
+      <div class="tool-item">
+        <div class="tool-item-left" style="width:100%">
+          <a href="https://console.anthropic.com" target="_blank" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;width:100%">
+            <div class="tool-icon">🤖</div>
+            <div><div class="tool-label">Anthropic Console</div><div class="tool-desc">Claude API Keys & Usage</div></div>
+            <div class="tool-arrow" style="margin-left:auto">↗</div>
+          </a>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Panel: Telegram Commands -->
+<div class="panel" id="panel-commands">
+  <div class="section-hdr">
+    <div class="section-title">Telegram Kommandos</div>
+    <div style="font-size:0.65rem;color:var(--muted)">Tippe zum Kopieren</div>
+  </div>
+  <div class="cmd-list">
+    <div class="cmd-item" onclick="copyCmd('/btc')">
+      <div><div class="cmd-code">/btc</div><div class="cmd-desc">Bitcoin sofort analysieren</div></div>
+      <div class="cmd-copy">📋</div>
+    </div>
+    <div class="cmd-item" onclick="copyCmd('/eth')">
+      <div><div class="cmd-code">/eth</div><div class="cmd-desc">Ethereum analysieren</div></div>
+      <div class="cmd-copy">📋</div>
+    </div>
+    <div class="cmd-item" onclick="copyCmd('/sol')">
+      <div><div class="cmd-code">/sol</div><div class="cmd-desc">Solana analysieren</div></div>
+      <div class="cmd-copy">📋</div>
+    </div>
+    <div class="cmd-item" onclick="copyCmd('/check RENDERUSDT')">
+      <div><div class="cmd-code">/check SYMBOL</div><div class="cmd-desc">Beliebiges Symbol analysieren</div></div>
+      <div class="cmd-copy">📋</div>
+    </div>
+    <div class="cmd-item" onclick="copyCmd('/status')">
+      <div><div class="cmd-code">/status</div><div class="cmd-desc">Winrate & Stats abrufen</div></div>
+      <div class="cmd-copy">📋</div>
+    </div>
+    <div class="cmd-item" onclick="copyCmd('/brief')">
+      <div><div class="cmd-code">/brief</div><div class="cmd-desc">Morning Brief jetzt senden</div></div>
+      <div class="cmd-copy">📋</div>
+    </div>
+    <div class="cmd-item" onclick="copyCmd('/open')">
+      <div><div class="cmd-code">/open</div><div class="cmd-desc">Alle offenen Trades anzeigen</div></div>
+      <div class="cmd-copy">📋</div>
+    </div>
+    <div class="cmd-item" onclick="copyCmd('/top')">
+      <div><div class="cmd-code">/top</div><div class="cmd-desc">Beste Signale der letzten 24h</div></div>
+      <div class="cmd-copy">📋</div>
+    </div>
+    <div class="cmd-item" onclick="copyCmd('/hilfe')">
+      <div><div class="cmd-code">/hilfe</div><div class="cmd-desc">Alle Kommandos anzeigen</div></div>
+      <div class="cmd-copy">📋</div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="tool-group">
+    <div class="tool-group-title">⚙️ Webhook URL</div>
+    <div style="padding:12px 14px">
+      <div style="font-family:var(--font-mono);font-size:0.62rem;color:var(--accent);word-break:break-all;line-height:1.6">
+        /webhook?secret=••••••
+      </div>
+      <div style="font-size:0.65rem;color:var(--muted);margin-top:6px">TradingView Alert Webhook (mit deinem Secret)</div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const SECRET = new URLSearchParams(location.search).get('secret') || '';
+const BASE = '';
+
+function fmt(n, d=2) {
+  if (!n && n !== 0) return '–';
+  return Number(n).toLocaleString('de-DE', {minimumFractionDigits:d, maximumFractionDigits:d});
+}
+function timeAgo(ts) {
+  const d = Date.now() - ts;
+  if (d < 60000) return 'jetzt';
+  if (d < 3600000) return Math.floor(d/60000) + 'm';
+  if (d < 86400000) return Math.floor(d/3600000) + 'h';
+  return Math.floor(d/86400000) + 'd';
+}
+function scoreColor(s) {
+  if (s >= 70) return 'var(--accent2)';
+  if (s >= 50) return 'var(--warn)';
+  return 'var(--danger)';
+}
+function showToast(msg, dur=2500) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), dur);
+}
+
+// ── Clock ──
+setInterval(() => {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('de-DE', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}, 1000);
+
+// ── Tabs ──
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => {
+    const panels = ['check','signals','tools','commands'];
+    t.classList.toggle('active', panels[i] === name);
+  });
+  document.querySelectorAll('.panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'panel-' + name);
+  });
+  if (name === 'check') loadSnapshots();
+  if (name === 'signals') loadHistory();
+}
+
+// ── Stats ──
+async function loadStats() {
+  const s = await fetch('/stats').then(r=>r.json()).catch(()=>({}));
+  document.getElementById('stats-bar').innerHTML = \`
+    <div class="stat-cell"><div class="stat-val">\${s.total||0}</div><div class="stat-lbl">Total</div></div>
+    <div class="stat-cell"><div class="stat-val g">\${s.wins||0}</div><div class="stat-lbl">Wins</div></div>
+    <div class="stat-cell"><div class="stat-val r">\${s.losses||0}</div><div class="stat-lbl">Losses</div></div>
+    <div class="stat-cell"><div class="stat-val">\${s.open||0}</div><div class="stat-lbl">Open</div></div>
+    <div class="stat-cell"><div class="stat-val y">\${s.winrate||0}%</div><div class="stat-lbl">Win%</div></div>
+  \`;
+}
+
+// ── Snapshots ──
+async function loadSnapshots() {
+  const el = document.getElementById('snapshots-list');
+  el.innerHTML = '<div class="empty">Lade…</div>';
+  const snaps = await fetch('/snapshots').then(r=>r.json()).catch(()=>[]);
+  if (!snaps.length) {
+    el.innerHTML = '<div class="empty">Noch keine Snapshots.<br>TradingView muss erst Daten senden.</div>';
+    return;
+  }
+  el.innerHTML = snaps.map(s => \`
+    <div>
+      <div class="snapshot-card">
+        <div class="snapshot-info">
+          <div class="snapshot-symbol">\${s.symbol}</div>
+          <div class="snapshot-meta">RSI \${fmt(s.rsi,1)} · EMA50 \${fmt(s.ema50,0)} · \${s.trend||'–'}</div>
+        </div>
+        <div class="snapshot-price">\${fmt(s.price)}</div>
+        <button class="btn btn-primary" onclick="checkNow('\${s.symbol}',this)" \${SECRET?'':'disabled'} style="font-size:0.68rem;padding:8px 12px">
+          \${SECRET?'🔍 Prüfen':'🔒'}
+        </button>
+      </div>
+      <div class="result-card" id="result-\${s.symbol}" style="display:none"></div>
+    </div>
+  \`).join('');
+}
+
+// ── Analyse ──
+async function checkNow(symbol, btn) {
+  btn.disabled = true; btn.textContent = '⏳';
+  const el = document.getElementById('result-' + symbol);
+  try {
+    const data = await fetch('/ask?symbol='+encodeURIComponent(symbol)+'&secret='+encodeURIComponent(SECRET)).then(r=>r.json());
+    if (data.error) throw new Error(data.error);
+    const ai = data.ai||{}, sc = Number(ai.score)||0;
+    const isRec = ai.recommendation==='RECOMMENDED';
+    const rr = ai.entry&&ai.take_profit&&ai.stop_loss
+      ? (Math.abs(ai.take_profit-ai.entry)/Math.abs(ai.entry-ai.stop_loss)).toFixed(2) : null;
+    el.style.display='block';
+    el.innerHTML = \`
+      <div class="result-header">
+        <span class="result-badge \${isRec?'rec':'norec'}">\${isRec?'✓ EMPFOHLEN':'✗ NICHT EMPFOHLEN'}</span>
+        <span style="font-family:var(--font-mono);font-size:0.82rem;color:\${scoreColor(sc)}">\${sc}/100</span>
+      </div>
+      <div class="result-body">
+        <div class="result-row"><span class="result-key">Richtung</span><span class="result-val">\${ai.direction||'–'}</span></div>
+        <div class="result-row"><span class="result-key">Risiko</span><span class="result-val">\${ai.risk||'–'}</span></div>
+        <div class="result-row"><span class="result-key">Confidence</span><span class="result-val">\${ai.confidence||0}%</span></div>
+        <div class="score-bar-bg"><div class="score-bar-fill" style="width:\${sc}%;background:\${scoreColor(sc)}"></div></div>
+        <div class="result-plan">
+          <div><div class="plan-lbl">Entry</div><div class="plan-val">\${fmt(ai.entry)}</div></div>
+          <div><div class="plan-lbl">Take Profit</div><div class="plan-val" style="color:var(--accent2)">\${fmt(ai.take_profit)}</div></div>
+          <div><div class="plan-lbl">Stop Loss</div><div class="plan-val" style="color:var(--danger)">\${fmt(ai.stop_loss)}</div></div>
+        </div>
+        \${rr?'<div class="result-row"><span class="result-key">R/R</span><span class="result-val">1:'+rr+'</span></div>':''}
+        <div class="result-reason">\${ai.reason||''}</div>
+      </div>
+    \`;
+    showToast(isRec?'✅ Empfohlen!':'⛔ Nicht empfohlen');
+  } catch(e) {
+    el.style.display='block';
+    el.innerHTML='<div style="padding:12px 14px;color:var(--danger);font-size:0.78rem">Fehler: '+e.message+'</div>';
+    showToast('❌ Fehler');
+  }
+  btn.disabled=false; btn.textContent=SECRET?'🔍 Prüfen':'🔒';
+}
+
+// ── Outcome ──
+async function setOutcome(id, outcome, btn) {
+  const all = btn.parentElement.querySelectorAll('button');
+  all.forEach(b=>b.disabled=true);
+  try {
+    const r = await fetch('/outcome?id='+id+'&outcome='+outcome+'&secret='+encodeURIComponent(SECRET),{method:'POST'}).then(r=>r.json());
+    if (r.status==='ok') {
+      const badge = document.getElementById('out-'+id);
+      if (badge) { badge.className='badge '+(outcome==='WIN'?'b-win':'b-loss'); badge.textContent=outcome; }
+      btn.parentElement.style.display='none';
+      loadStats();
+      showToast(outcome==='WIN'?'✅ WIN gespeichert!':'❌ LOSS gespeichert!');
+    }
+  } catch(e) { all.forEach(b=>b.disabled=false); showToast('Fehler: '+e.message); }
+}
+
+// ── History ──
+async function loadHistory() {
+  const el = document.getElementById('signals-list');
+  el.innerHTML = '<div class="empty">Lade…</div>';
+  const hist = await fetch('/history').then(r=>r.json()).catch(()=>[]);
+  if (!hist.length) { el.innerHTML='<div class="empty">Noch keine Signale.</div>'; return; }
+  el.innerHTML = hist.map(x => {
+    const sc = Number(x.ai_score)||0;
+    const outCls = x.outcome==='WIN'?'b-win':x.outcome==='LOSS'?'b-loss':'b-open';
+    const recCls = x.ai_recommendation==='RECOMMENDED'?'b-rec':'b-norec';
+    const riskCls = x.ai_risk==='HIGH'?'b-high':x.ai_risk==='MEDIUM'?'b-med':'b-low';
+    const isOpen = x.outcome==='OPEN';
+    return \`
+    <div class="signal-card">
+      <div class="signal-top">
+        <span class="signal-symbol">\${x.symbol||'–'}</span>
+        <span class="signal-time">\${timeAgo(x.created_at)}</span>
+      </div>
+      <div class="signal-row">
+        <span class="signal-trigger">\${x.trigger||'–'}</span>
+        <span class="signal-score" style="color:\${scoreColor(sc)}">\${sc}/100</span>
+      </div>
+      <div class="signal-prices">
+        <span>E: \${fmt(x.ai_entry)}</span>
+        <span style="color:var(--accent2)">TP: \${fmt(x.ai_take_profit)}</span>
+        <span style="color:var(--danger)">SL: \${fmt(x.ai_stop_loss)}</span>
+      </div>
+      <div class="score-bar-bg"><div class="score-bar-fill" style="width:\${sc}%;background:\${scoreColor(sc)}"></div></div>
+      <div class="signal-footer">
+        <div class="badges">
+          <span class="badge \${recCls}">\${x.ai_recommendation==='RECOMMENDED'?'✓':'✗'}</span>
+          <span class="badge \${riskCls}">\${x.ai_risk||'–'}</span>
+          <span class="badge \${outCls}" id="out-\${x.id}">\${x.outcome||'–'}</span>
+        </div>
+        \${isOpen&&SECRET?\`<div style="display:flex;gap:6px">
+          <button class="btn btn-win" onclick="setOutcome('\${x.id}','WIN',this)">✅ WIN</button>
+          <button class="btn btn-loss" onclick="setOutcome('\${x.id}','LOSS',this)">❌ LOSS</button>
+        </div>\`:''}
+      </div>
+    </div>\`;
+  }).join('');
+}
+
+// ── Tools ──
+async function toolAction(action) {
+  if (!SECRET && action !== 'health') { showToast('⚠️ Secret in URL benötigt'); return; }
+  showToast('⏳ Wird ausgeführt…');
+  try {
+    if (action === 'health') {
+      const d = await fetch('/health').then(r=>r.json());
+      showToast('✅ Worker OK · ' + new Date(d.time).toLocaleTimeString('de-DE'), 3000);
+    } else if (action === 'telegram') {
+      await fetch('/test-telegram?secret='+encodeURIComponent(SECRET));
+      showToast('📨 Telegram Testnachricht gesendet!');
+    } else if (action === 'morning') {
+      await fetch('/morning-brief?secret='+encodeURIComponent(SECRET));
+      showToast('🌅 Morning Brief gesendet!');
+    } else if (action === 'outcomes') {
+      const d = await fetch('/check-outcomes?secret='+encodeURIComponent(SECRET)).then(r=>r.json());
+      showToast('🔄 ' + (d.result?.closed||0) + ' Trades geschlossen', 3000);
+    }
+  } catch(e) { showToast('❌ Fehler: ' + e.message); }
+}
+
+// ── Copy command ──
+function copyCmd(cmd) {
+  navigator.clipboard.writeText(cmd).then(() => showToast('📋 Kopiert: ' + cmd));
+}
+
+// Init
+loadStats();
+loadSnapshots();
+</script>
+</body>
+</html>`;
 }
