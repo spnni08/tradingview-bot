@@ -6,6 +6,29 @@ export default {
       return Response.json({ status: "ok", time: new Date().toISOString() });
     }
 
+    // Telegram Bot Webhook — empfängt Nachrichten/Commands von Telegram
+    if (request.method === "POST" && url.pathname === "/telegram") {
+      const update = await request.json();
+      ctx.waitUntil(handleTelegramUpdate(env, update));
+      return Response.json({ ok: true });
+    }
+
+    // Telegram Webhook registrieren (einmalig aufrufen)
+    if (request.method === "GET" && url.pathname === "/setup-telegram") {
+      if (!checkSecret(url, env)) return unauthorized();
+      const workerUrl = `https://${url.hostname}/telegram`;
+      const res = await fetch(
+        `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/setWebhook`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: workerUrl })
+        }
+      );
+      const data = await res.json();
+      return Response.json({ status: "ok", workerUrl, telegram: data });
+    }
+
     if (request.method === "GET" && url.pathname === "/test-telegram") {
       return Response.json(await sendTelegram(env, "✅ WAVESCOUT Telegram Test funktioniert."));
     }
@@ -861,6 +884,219 @@ async function dailySummary(env) {
   await checkOutcomes(env);
   // Dann Morning Brief senden
   await morningBrief(env);
+}
+
+// ─── Telegram Command Handler ────────────────────────────────────────────────
+
+async function handleTelegramUpdate(env, update) {
+  const msg = update.message || update.edited_message;
+  if (!msg || !msg.text) return;
+
+  const chatId = String(msg.chat.id);
+  const allowedChatId = String(env.TELEGRAM_CHAT_ID);
+
+  // Nur aus dem erlaubten Chat antworten (Sicherheit)
+  if (chatId !== allowedChatId) {
+    await sendTelegramTo(env, chatId, "⛔ Nicht autorisiert.");
+    return;
+  }
+
+  const text = msg.text.trim().toLowerCase();
+
+  // ── /start oder /hilfe ──
+  if (text === "/start" || text === "/hilfe" || text === "/help") {
+    await sendTelegramTo(env, chatId, `🌊 WAVESCOUT Bot — Kommandos
+
+/btc — BTC analysieren
+/eth — ETH analysieren  
+/sol — SOL analysieren
+/check SYMBOL — beliebiges Symbol (z.B. /check RENDERUSDT)
+/status — Stats & Winrate
+/brief — Morning Brief jetzt senden
+/open — alle offenen Trades
+/top — beste Signale heute
+
+⚡ Beispiel: /check BTCUSDT`);
+    return;
+  }
+
+  // ── /status ──
+  if (text === "/status") {
+    const stats = await getStats(env);
+    await sendTelegramTo(env, chatId, `📊 WAVESCOUT Status
+
+Total Signale: ${stats.total}
+Wins: ${stats.wins} | Losses: ${stats.losses}
+Open: ${stats.open}
+Winrate: ${stats.winrate}%`);
+    return;
+  }
+
+  // ── /brief ──
+  if (text === "/brief") {
+    await sendTelegramTo(env, chatId, "⏳ Morning Brief wird erstellt...");
+    await morningBrief(env);
+    return;
+  }
+
+  // ── /open ──
+  if (text === "/open") {
+    try {
+      const result = await env.DB.prepare(`
+        SELECT symbol, ai_direction, ai_score, ai_entry, ai_take_profit, ai_stop_loss, created_at
+        FROM signals WHERE outcome = 'OPEN' AND ai_recommendation = 'RECOMMENDED'
+        ORDER BY created_at DESC LIMIT 10
+      `).all();
+      const rows = result.results || [];
+      if (!rows.length) {
+        await sendTelegramTo(env, chatId, "📋 Keine offenen empfohlenen Trades.");
+        return;
+      }
+      const lines = ["📋 Offene Trades (empfohlen)
+"];
+      for (const r of rows) {
+        const ago = Math.floor((Date.now() - r.created_at) / 60000);
+        lines.push(`${r.ai_direction === 'LONG' ? '🟢' : '🔴'} ${r.symbol} (${r.ai_direction})`);
+        lines.push(`Score: ${r.ai_score} | Entry: ${Number(r.ai_entry).toFixed(2)}`);
+        lines.push(`TP: ${Number(r.ai_take_profit).toFixed(2)} | SL: ${Number(r.ai_stop_loss).toFixed(2)}`);
+        lines.push(`vor ${ago}min
+`);
+      }
+      await sendTelegramTo(env, chatId, lines.join("
+"));
+    } catch(e) {
+      await sendTelegramTo(env, chatId, "Fehler: " + e.message);
+    }
+    return;
+  }
+
+  // ── /top ──
+  if (text === "/top") {
+    try {
+      const since = Date.now() - 24 * 60 * 60 * 1000;
+      const result = await env.DB.prepare(`
+        SELECT symbol, ai_direction, ai_score, ai_risk, ai_recommendation, created_at
+        FROM signals WHERE created_at > ? AND ai_recommendation = 'RECOMMENDED'
+        ORDER BY ai_score DESC LIMIT 5
+      `).bind(since).all();
+      const rows = result.results || [];
+      if (!rows.length) {
+        await sendTelegramTo(env, chatId, "📈 Heute noch keine empfohlenen Signale.");
+        return;
+      }
+      const lines = ["🏆 Top Signale (letzte 24h)
+"];
+      for (const r of rows) {
+        lines.push(`${r.ai_direction === 'LONG' ? '🟢' : '🔴'} ${r.symbol} — Score ${r.ai_score}/100`);
+        lines.push(`Risiko: ${r.ai_risk}
+`);
+      }
+      await sendTelegramTo(env, chatId, lines.join("
+"));
+    } catch(e) {
+      await sendTelegramTo(env, chatId, "Fehler: " + e.message);
+    }
+    return;
+  }
+
+  // ── /btc /eth /sol — Shortcuts ──
+  const shortcuts = {
+    "/btc": "BTCUSDT",
+    "/eth": "ETHUSDT",
+    "/sol": "SOLUSDT",
+    "/bnb": "BNBUSDT",
+    "/render": "RENDERUSDT",
+    "/virtual": "VIRTUALUSDT",
+  };
+
+  let symbol = null;
+
+  if (shortcuts[text]) {
+    symbol = shortcuts[text];
+  } else if (text.startsWith("/check ")) {
+    symbol = text.replace("/check ", "").toUpperCase().trim();
+  }
+
+  if (symbol) {
+    await sendTelegramTo(env, chatId, `⏳ Analysiere ${symbol}...`);
+
+    const snapshot = await getSnapshot(env, symbol, "5");
+    if (!snapshot) {
+      await sendTelegramTo(env, chatId, `❌ Kein Snapshot für ${symbol} gefunden.
+
+Stelle sicher dass TradingView Daten sendet.`);
+      return;
+    }
+
+    const snap1h = await getSnapshot(env, symbol, "1H");
+    const snap4h = await getSnapshot(env, symbol, "4H");
+    const ruleScore = calculateRuleScore(snapshot, snap1h, snap4h);
+    const ai = await analyzeWithClaude(env, snapshot, ruleScore, snap1h, snap4h);
+
+    const finalScore = clamp(Math.round((Number(ai.score || 0) * 0.75) + (ruleScore.score * 0.25)));
+    ai.score = finalScore;
+    const priority = getPriority(ai.score, ai.recommendation, ai.risk);
+
+    const tp = ai.take_profit ? Number(ai.take_profit).toFixed(2) : "–";
+    const sl = ai.stop_loss   ? Number(ai.stop_loss).toFixed(2)   : "–";
+    const entry = ai.entry    ? Number(ai.entry).toFixed(2)        : "–";
+
+    let rr = "";
+    if (ai.entry && ai.take_profit && ai.stop_loss) {
+      const reward = Math.abs(ai.take_profit - ai.entry);
+      const risk   = Math.abs(ai.entry - ai.stop_loss);
+      if (risk > 0) rr = `
+R/R: 1:${(reward / risk).toFixed(2)}`;
+    }
+
+    const mtfLine = snap4h
+      ? `
+4H: ${Number(snap4h.price) > Number(snap4h.ema200) ? '🟢 LONG-BIAS' : '🔴 SHORT-BIAS'} | Trend: ${snap4h.trend}`
+      : "
+4H: kein Snapshot";
+    const mtf1h = snap1h
+      ? `
+1H: Trend ${snap1h.trend} | RSI ${Number(snap1h.rsi).toFixed(0)}`
+      : "
+1H: kein Snapshot";
+
+    const reply = `${priority}
+
+📊 ${snapshot.name || symbol} (5min)
+💰 Preis: ${snapshot.price}
+${mtfLine}${mtf1h}
+
+🧮 Regel-Score: ${ruleScore.score}/100
+${ruleScore.reason}
+
+🧠 Claude: ${ai.recommendation}
+Richtung: ${ai.direction} | Score: ${ai.score}/100
+Risiko: ${ai.risk} | Confidence: ${ai.confidence}%
+
+🎯 Plan
+Entry: ${entry} | TP: ${tp} | SL: ${sl}${rr}
+
+📝 ${ai.reason}
+
+⚠️ Keine Finanzberatung.`;
+
+    await sendTelegramTo(env, chatId, reply);
+    return;
+  }
+
+  // Unbekannter Command
+  if (text.startsWith("/")) {
+    await sendTelegramTo(env, chatId,
+      "❓ Unbekannter Befehl. Tippe /hilfe für alle Kommandos.");
+  }
+}
+
+async function sendTelegramTo(env, chatId, text) {
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text })
+  });
 }
 
 // ─── Dashboard HTML ──────────────────────────────────────────────────────────
