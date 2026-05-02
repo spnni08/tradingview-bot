@@ -40,6 +40,17 @@ export default {
       return Response.json(await getSnapshots(env));
     }
 
+    if (request.method === "POST" && url.pathname === "/outcome") {
+      if (!checkSecret(url, env)) return unauthorized();
+      const id = url.searchParams.get("id");
+      const outcome = url.searchParams.get("outcome");
+      if (!id || !["WIN","LOSS","OPEN"].includes(outcome)) {
+        return Response.json({ error: "Missing or invalid id/outcome" }, { status: 400 });
+      }
+      await setOutcome(env, id, outcome);
+      return Response.json({ status: "ok", id, outcome });
+    }
+
     if (request.method === "POST" && url.pathname === "/snapshot") {
       if (!checkSecret(url, env)) return unauthorized();
       const signal = await request.json();
@@ -476,6 +487,12 @@ async function getHistory(env) {
   } catch {
     return [];
   }
+}
+
+async function setOutcome(env, id, outcome) {
+  await env.DB.prepare(
+    `UPDATE signals SET outcome = ? WHERE id = ?`
+  ).bind(outcome, id).run();
 }
 
 // ─── Telegram ────────────────────────────────────────────────────────────────
@@ -986,6 +1003,20 @@ function dashboardHtml() {
     }
     .btn-refresh:active { border-color: var(--accent); color: var(--accent); }
 
+    /* ── Outcome Buttons ── */
+    .btn-outcome {
+      font-family: var(--font-display);
+      font-size: 0.7rem; font-weight: 700;
+      border: none; border-radius: 6px;
+      padding: 6px 12px; cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      letter-spacing: 0.04em;
+    }
+    .btn-outcome:active { transform: scale(0.95); }
+    .btn-outcome:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-win  { background: rgba(0,255,157,0.15); color: var(--accent2); border: 1px solid rgba(0,255,157,0.3); }
+    .btn-loss { background: rgba(255,68,68,0.15);  color: var(--danger);  border: 1px solid rgba(255,68,68,0.3); }
+
     /* ── Score bar ── */
     .score-bar-wrap { margin-top: 6px; }
     .score-bar-bg { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
@@ -1067,6 +1098,38 @@ function scoreColor(s) {
   if (s >= 70) return 'var(--accent2)';
   if (s >= 50) return 'var(--warn)';
   return 'var(--danger)';
+}
+
+// ── Outcome setzen ──
+async function setOutcome(id, outcome, btn) {
+  const allBtns = btn.parentElement.querySelectorAll('.btn-outcome');
+  allBtns.forEach(b => b.disabled = true);
+
+  try {
+    const res = await fetch('/outcome?id=' + id + '&outcome=' + outcome + '&secret=' + encodeURIComponent(SECRET), {
+      method: 'POST'
+    });
+    const data = await res.json();
+
+    if (data.status === 'ok') {
+      // Badge updaten
+      const badge = document.getElementById('out-' + id);
+      if (badge) {
+        badge.className = 'badge ' + (outcome === 'WIN' ? 'b-win' : 'b-loss');
+        badge.textContent = outcome;
+      }
+      // Buttons ausblenden
+      btn.parentElement.style.display = 'none';
+      // Stats neu laden
+      loadStats();
+      showToast(outcome === 'WIN' ? '✅ WIN gespeichert!' : '❌ LOSS gespeichert!');
+    } else {
+      throw new Error(data.error || 'Fehler');
+    }
+  } catch(e) {
+    allBtns.forEach(b => b.disabled = false);
+    showToast('Fehler: ' + e.message);
+  }
 }
 
 // ── Clock ──
