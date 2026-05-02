@@ -1099,559 +1099,795 @@ function dashboardHtml() {
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>WAVESCOUT</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #05080d;
-      --surface: #0a1018;
-      --surface2: #0f1822;
-      --surface3: #141e2c;
-      --border: #1a2838;
-      --border2: #243548;
-      --accent: #00c8f0;
-      --accent2: #00e896;
-      --warn: #f0b800;
-      --danger: #f04444;
+      --bg: #0d0d0f;
+      --surface: #141416;
+      --surface2: #1a1a1e;
+      --surface3: #202026;
+      --border: #2a2a32;
+      --border2: #34343e;
+      --pink: #e91e8c;
+      --pink2: #ff4db8;
+      --pink-dim: rgba(233,30,140,0.12);
+      --pink-glow: rgba(233,30,140,0.25);
+      --blue: #4f8ef7;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #f59e0b;
       --purple: #a855f7;
-      --text: #c8dcea;
-      --text2: #8aa0b4;
-      --muted: #3d5468;
-      --font-display: 'Syne', sans-serif;
-      --font-mono: 'Space Mono', monospace;
+      --text: #e8e8f0;
+      --text2: #9090a8;
+      --text3: #60607a;
+      --font: 'Inter', sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+      --radius: 12px;
+      --sidebar: 200px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-    html { scroll-behavior: smooth; }
+    html { scroll-behavior: smooth; height: 100%; }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; }
 
-    body {
-      font-family: var(--font-display);
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      padding-bottom: 60px;
+    /* ── Sidebar ── */
+    .sidebar {
+      width: var(--sidebar); flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      position: fixed; top: 0; left: 0; bottom: 0; z-index: 50;
     }
-
-    /* ── Header ── */
-    .header {
-      position: sticky; top: 0; z-index: 100;
-      background: rgba(5,8,13,0.95);
-      backdrop-filter: blur(16px);
+    .sidebar-logo {
+      padding: 20px 16px 16px;
       border-bottom: 1px solid var(--border);
-      padding: 0 16px;
-      height: 56px;
-      display: flex; align-items: center; justify-content: space-between;
     }
-    .header-left { display: flex; align-items: center; gap: 10px; }
-    .header-logo {
-      font-size: 1.1rem; font-weight: 800; letter-spacing: 0.1em;
-      background: linear-gradient(90deg, var(--accent), var(--accent2));
+    .sidebar-logo-text {
+      font-size: 1.1rem; font-weight: 700; letter-spacing: 0.02em;
+      background: linear-gradient(135deg, var(--pink), var(--pink2));
       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     }
-    .header-version {
-      font-family: var(--font-mono); font-size: 0.6rem;
-      color: var(--muted); border: 1px solid var(--border2);
-      padding: 2px 6px; border-radius: 4px;
+    .sidebar-logo-sub { font-size: 0.62rem; color: var(--text3); margin-top: 2px; }
+    .sidebar-nav { padding: 12px 8px; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 10px; border-radius: 8px; cursor: pointer;
+      font-size: 0.82rem; font-weight: 500; color: var(--text2);
+      transition: background 0.1s, color 0.1s; text-decoration: none;
+      border: none; background: none; width: 100%; text-align: left;
     }
-    .header-right { display: flex; align-items: center; gap: 8px; }
-    .header-time {
-      font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted);
+    .nav-item:hover { background: var(--surface2); color: var(--text); }
+    .nav-item.active { background: var(--pink-dim); color: var(--pink2); }
+    .nav-item .nav-icon { font-size: 1rem; width: 20px; text-align: center; flex-shrink: 0; }
+    .sidebar-bottom {
+      padding: 12px 8px;
+      border-top: 1px solid var(--border);
     }
-    .header-dot {
-      width: 7px; height: 7px; border-radius: 50%;
-      background: var(--accent2);
-      box-shadow: 0 0 6px var(--accent2);
-      animation: pulse 2s infinite;
+    .sidebar-user {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px; border-radius: 8px;
     }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .sidebar-avatar {
+      width: 28px; height: 28px; border-radius: 50%;
+      background: var(--pink-dim); border: 1px solid var(--pink-glow);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; font-weight: 700; color: var(--pink2);
+      flex-shrink: 0;
+    }
+    .sidebar-username { font-size: 0.75rem; font-weight: 600; color: var(--text2); }
+    .sidebar-status { font-size: 0.6rem; color: var(--green); display: flex; align-items: center; gap: 4px; }
+    .status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); animation: blink 2s infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
-    /* ── Stats Bar ── */
-    .stats-bar {
-      display: grid; grid-template-columns: repeat(5,1fr);
-      border-bottom: 1px solid var(--border);
+    /* ── Main ── */
+    .main {
+      margin-left: var(--sidebar);
+      flex: 1; min-width: 0;
+      display: flex; flex-direction: column;
     }
-    .stat-cell {
-      padding: 12px 8px; text-align: center;
-      border-right: 1px solid var(--border);
+
+    /* ── Topbar ── */
+    .topbar {
+      position: sticky; top: 0; z-index: 40;
+      background: rgba(13,13,15,0.9); backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px; height: 56px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .topbar-title { font-size: 1rem; font-weight: 600; color: var(--text); }
+    .topbar-right { display: flex; align-items: center; gap: 12px; }
+    .topbar-time { font-family: var(--mono); font-size: 0.72rem; color: var(--text3); }
+    .topbar-live {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.68rem; color: var(--green); font-weight: 600;
+    }
+
+    /* ── Pages ── */
+    .page { display: none; padding: 24px; }
+    .page.active { display: block; }
+
+    /* ── Home page ── */
+    .greeting { margin-bottom: 24px; }
+    .greeting-day { font-size: 0.78rem; color: var(--text3); margin-bottom: 4px; }
+    .greeting-title { font-size: 1.5rem; font-weight: 700; }
+    .greeting-title span { color: var(--pink2); }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px; margin-bottom: 20px;
+    }
+    .kpi-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px;
       position: relative; overflow: hidden;
     }
-    .stat-cell:last-child { border-right: none; }
-    .stat-val {
-      font-family: var(--font-mono); font-size: 1.25rem;
-      font-weight: 700; color: var(--accent); line-height: 1;
+    .kpi-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
     }
-    .stat-val.g { color: var(--accent2); }
-    .stat-val.r { color: var(--danger); }
-    .stat-val.y { color: var(--warn); }
-    .stat-lbl { font-size: 0.58rem; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.1em; }
+    .kpi-card.pink::before { background: linear-gradient(90deg, var(--pink), var(--pink2)); }
+    .kpi-card.green::before { background: var(--green); }
+    .kpi-card.red::before { background: var(--red); }
+    .kpi-card.blue::before { background: var(--blue); }
+    .kpi-label { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text3); margin-bottom: 8px; }
+    .kpi-value { font-size: 1.8rem; font-weight: 700; line-height: 1; font-family: var(--mono); }
+    .kpi-value.pink { color: var(--pink2); }
+    .kpi-value.green { color: var(--green); }
+    .kpi-value.red { color: var(--red); }
+    .kpi-value.blue { color: var(--blue); }
+    .kpi-sub { font-size: 0.65rem; color: var(--text3); margin-top: 4px; }
 
-    /* ── Nav Tabs ── */
-    .tabs {
-      display: flex; overflow-x: auto; scrollbar-width: none;
-      border-bottom: 1px solid var(--border);
-      padding: 0 12px; gap: 0;
+    .home-grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+
+    .section-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden;
     }
-    .tabs::-webkit-scrollbar { display: none; }
-    .tab {
-      padding: 12px 16px; font-size: 0.72rem; font-weight: 700;
-      letter-spacing: 0.08em; text-transform: uppercase;
-      color: var(--muted); cursor: pointer; white-space: nowrap;
-      border-bottom: 2px solid transparent;
-      transition: color 0.15s, border-color 0.15s;
-    }
-    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-    .tab:active { opacity: 0.7; }
-
-    /* ── Tab Panels ── */
-    .panel { display: none; padding: 14px 12px; }
-    .panel.active { display: block; }
-
-    /* ── Section header ── */
-    .section-hdr {
+    .section-card-header {
+      padding: 14px 16px; border-bottom: 1px solid var(--border);
       display: flex; align-items: center; justify-content: space-between;
-      margin-bottom: 10px;
     }
-    .section-title {
-      font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.12em; color: var(--muted);
+    .section-card-title { font-size: 0.82rem; font-weight: 600; }
+    .section-card-body { padding: 14px 16px; }
+
+    /* ── Quick Actions ── */
+    .quick-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .quick-btn {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px; cursor: pointer;
+      display: flex; align-items: center; gap: 10px;
+      transition: border-color 0.15s, background 0.15s;
+      font-family: var(--font);
     }
+    .quick-btn:active { background: var(--surface3); }
+    .quick-btn:hover { border-color: var(--border2); }
+    .quick-btn-icon { font-size: 1.2rem; flex-shrink: 0; }
+    .quick-btn-label { font-size: 0.78rem; font-weight: 600; color: var(--text); }
+    .quick-btn-desc { font-size: 0.62rem; color: var(--text3); margin-top: 1px; }
 
-    /* ── Cards ── */
-    .card-list { display: flex; flex-direction: column; gap: 8px; }
+    /* ── Recent signals on home ── */
+    .mini-signal {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 0; border-bottom: 1px solid var(--border);
+    }
+    .mini-signal:last-child { border-bottom: none; padding-bottom: 0; }
+    .mini-signal-left { display: flex; align-items: center; gap: 10px; }
+    .mini-signal-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .mini-signal-symbol { font-size: 0.82rem; font-weight: 700; }
+    .mini-signal-trigger { font-size: 0.65rem; color: var(--text3); font-family: var(--mono); }
+    .mini-signal-right { text-align: right; }
+    .mini-signal-score { font-family: var(--mono); font-size: 0.78rem; font-weight: 700; }
+    .mini-signal-time { font-size: 0.62rem; color: var(--text3); }
 
+    /* ── Analyse page ── */
     .snapshot-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px; padding: 14px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 14px 16px;
       display: flex; align-items: center; gap: 12px;
+      margin-bottom: 8px;
     }
     .snapshot-info { flex: 1; min-width: 0; }
-    .snapshot-symbol { font-size: 1rem; font-weight: 800; color: #fff; }
-    .snapshot-meta { font-family: var(--font-mono); font-size: 0.62rem; color: var(--muted); margin-top: 3px; }
-    .snapshot-price { font-family: var(--font-mono); font-size: 0.9rem; color: var(--accent); font-weight: 700; white-space: nowrap; }
+    .snapshot-symbol { font-size: 0.95rem; font-weight: 700; }
+    .snapshot-meta { font-family: var(--mono); font-size: 0.62rem; color: var(--text3); margin-top: 3px; }
+    .snapshot-price { font-family: var(--mono); font-size: 0.88rem; font-weight: 700; color: var(--blue); white-space: nowrap; }
+
+    /* ── Signals page ── */
+    .filter-bar {
+      display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center;
+    }
+    .filter-select {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); font-family: var(--font); font-size: 0.75rem;
+      padding: 7px 10px; border-radius: 8px; cursor: pointer; flex: 1; min-width: 100px;
+    }
+    .filter-select:focus { outline: none; border-color: var(--pink); }
+    .sort-btn {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text2); font-family: var(--font); font-size: 0.72rem;
+      padding: 7px 12px; border-radius: 8px; cursor: pointer; white-space: nowrap;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .sort-btn.active { border-color: var(--pink); color: var(--pink2); }
 
     .signal-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px; padding: 12px 14px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 14px 16px; margin-bottom: 8px;
+      transition: border-color 0.15s;
     }
-    .signal-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-    .signal-symbol { font-weight: 800; font-size: 0.95rem; }
-    .signal-time { font-family: var(--font-mono); font-size: 0.6rem; color: var(--muted); }
-    .signal-row { display: flex; justify-content: space-between; align-items: center; }
-    .signal-trigger { font-size: 0.68rem; color: var(--muted); font-family: var(--font-mono); }
-    .signal-score { font-family: var(--font-mono); font-size: 0.78rem; font-weight: 700; }
-    .signal-prices { font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted); display: flex; gap: 10px; margin-top: 5px; }
-    .signal-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .signal-card:hover { border-color: var(--border2); }
+    .signal-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .signal-symbol { font-weight: 700; font-size: 0.92rem; }
+    .signal-time { font-family: var(--mono); font-size: 0.6rem; color: var(--text3); }
+    .signal-mid { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .signal-trigger { font-family: var(--mono); font-size: 0.65rem; color: var(--text3); }
+    .signal-score { font-family: var(--mono); font-size: 0.8rem; font-weight: 700; }
+    .signal-prices { font-family: var(--mono); font-size: 0.65rem; color: var(--text3); display: flex; gap: 12px; margin-bottom: 8px; }
+    .signal-bar-bg { height: 3px; background: var(--surface3); border-radius: 2px; margin-bottom: 10px; overflow: hidden; }
+    .signal-bar-fill { height: 100%; border-radius: 2px; }
+    .signal-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+
+    /* ── Result card ── */
+    .result-wrap { margin-top: 8px; margin-bottom: 8px; }
+    .result-card {
+      background: var(--surface2); border: 1px solid var(--border2);
+      border-radius: var(--radius); overflow: hidden;
+      animation: slideIn 0.2s ease;
+    }
+    @keyframes slideIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:none} }
+    .result-header {
+      padding: 12px 16px; display: flex; align-items: center;
+      justify-content: space-between; border-bottom: 1px solid var(--border);
+    }
+    .result-badge { font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 6px; }
+    .result-badge.rec { background: rgba(34,197,94,0.15); color: var(--green); }
+    .result-badge.norec { background: rgba(239,68,68,0.15); color: var(--red); }
+    .result-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+    .result-row { display: flex; justify-content: space-between; }
+    .result-key { font-size: 0.65rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; }
+    .result-val { font-family: var(--mono); font-size: 0.78rem; }
+    .result-plan { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .plan-cell { background: var(--surface3); border-radius: 8px; padding: 10px; text-align: center; }
+    .plan-lbl { font-size: 0.58rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; }
+    .plan-val { font-family: var(--mono); font-size: 0.8rem; font-weight: 700; margin-top: 4px; }
+    .result-reason { font-size: 0.75rem; color: var(--text2); line-height: 1.6; padding-top: 10px; border-top: 1px solid var(--border); }
+
+    /* ── Tools page ── */
+    .waveboard-card {
+      background: linear-gradient(135deg, rgba(233,30,140,0.15), rgba(79,142,247,0.1));
+      border: 1px solid rgba(233,30,140,0.3); border-radius: var(--radius);
+      padding: 18px; display: flex; align-items: center; gap: 14px;
+      text-decoration: none; color: inherit; margin-bottom: 16px;
+      transition: border-color 0.15s, transform 0.1s;
+    }
+    .waveboard-card:hover { border-color: var(--pink); transform: translateY(-1px); }
+    .waveboard-card:active { transform: scale(0.99); }
+    .wb-icon { font-size: 2.2rem; flex-shrink: 0; }
+    .wb-title { font-size: 1rem; font-weight: 700; }
+    .wb-sub { font-size: 0.68rem; color: var(--text3); margin-top: 2px; }
+    .wb-arrow { margin-left: auto; background: rgba(233,30,140,0.15); color: var(--pink2); font-size: 0.65rem; font-weight: 700; padding: 5px 10px; border-radius: 6px; flex-shrink: 0; }
+
+    .tool-section { margin-bottom: 16px; }
+    .tool-section-title { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text3); margin-bottom: 8px; padding: 0 4px; }
+    .tool-list { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .tool-row {
+      display: flex; align-items: center; padding: 13px 16px;
+      border-bottom: 1px solid var(--border); cursor: pointer;
+      transition: background 0.1s; text-decoration: none; color: inherit;
+    }
+    .tool-row:last-child { border-bottom: none; }
+    .tool-row:hover { background: var(--surface2); }
+    .tool-row:active { background: var(--surface3); }
+    .tool-row-icon { font-size: 1.1rem; width: 28px; flex-shrink: 0; }
+    .tool-row-text { flex: 1; }
+    .tool-row-label { font-size: 0.82rem; font-weight: 600; }
+    .tool-row-desc { font-size: 0.65rem; color: var(--text3); margin-top: 2px; }
+    .tool-row-arrow { color: var(--text3); font-size: 0.8rem; }
+
+    /* ── Telegram page ── */
+    .cmd-grid { display: flex; flex-direction: column; gap: 6px; }
+    .cmd-row {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 14px;
+      display: flex; align-items: center; justify-content: space-between;
+      cursor: pointer; transition: background 0.1s;
+    }
+    .cmd-row:hover { background: var(--surface2); }
+    .cmd-code { font-family: var(--mono); font-size: 0.8rem; color: var(--pink2); font-weight: 700; }
+    .cmd-desc { font-size: 0.65rem; color: var(--text3); margin-top: 2px; }
+    .cmd-copy-icon { color: var(--text3); font-size: 0.75rem; }
 
     /* ── Badges ── */
     .badges { display: flex; gap: 5px; flex-wrap: wrap; }
-    .badge { font-size: 0.62rem; font-weight: 700; padding: 3px 7px; border-radius: 4px; letter-spacing: 0.04em; }
-    .b-win  { background: rgba(0,232,150,0.12); color: var(--accent2); border: 1px solid rgba(0,232,150,0.2); }
-    .b-open { background: rgba(0,200,240,0.1);  color: var(--accent);  border: 1px solid rgba(0,200,240,0.2); }
-    .b-loss { background: rgba(240,68,68,0.12); color: var(--danger);  border: 1px solid rgba(240,68,68,0.2); }
-    .b-rec  { background: rgba(0,232,150,0.08); color: var(--accent2); border: 1px solid rgba(0,232,150,0.15); }
-    .b-norec{ background: rgba(240,68,68,0.08); color: var(--danger);  border: 1px solid rgba(240,68,68,0.15); }
-    .b-low  { background: rgba(0,232,150,0.08); color: var(--accent2); }
-    .b-med  { background: rgba(240,184,0,0.08); color: var(--warn); }
-    .b-high { background: rgba(240,68,68,0.08); color: var(--danger); }
+    .badge { font-size: 0.62rem; font-weight: 600; padding: 3px 8px; border-radius: 5px; }
+    .b-win  { background: rgba(34,197,94,0.12);  color: var(--green);  border: 1px solid rgba(34,197,94,0.2); }
+    .b-open { background: rgba(79,142,247,0.12); color: var(--blue);   border: 1px solid rgba(79,142,247,0.2); }
+    .b-loss { background: rgba(239,68,68,0.12);  color: var(--red);    border: 1px solid rgba(239,68,68,0.2); }
+    .b-rec  { background: rgba(34,197,94,0.1);   color: var(--green); }
+    .b-norec{ background: rgba(239,68,68,0.1);   color: var(--red); }
+    .b-low  { background: rgba(34,197,94,0.1);   color: var(--green); }
+    .b-med  { background: rgba(245,158,11,0.1);  color: var(--yellow); }
+    .b-high { background: rgba(239,68,68,0.1);   color: var(--red); }
 
     /* ── Buttons ── */
     .btn {
-      font-family: var(--font-display); font-weight: 700; font-size: 0.72rem;
-      letter-spacing: 0.05em; border: none; border-radius: 8px;
-      padding: 9px 14px; cursor: pointer; white-space: nowrap;
-      transition: opacity 0.15s, transform 0.1s;
+      font-family: var(--font); font-weight: 600; font-size: 0.75rem;
+      border: none; border-radius: 8px; padding: 8px 14px;
+      cursor: pointer; transition: opacity 0.15s, transform 0.1s;
+      display: inline-flex; align-items: center; gap: 6px;
     }
-    .btn:active { transform: scale(0.95); opacity: 0.8; }
+    .btn:active { transform: scale(0.96); }
     .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
-    .btn-primary { background: linear-gradient(135deg, var(--accent), #0090b0); color: #000; }
-    .btn-ghost { background: none; border: 1px solid var(--border2); color: var(--muted); font-size: 0.65rem; padding: 5px 10px; border-radius: 6px; }
-    .btn-ghost:active { border-color: var(--accent); color: var(--accent); }
-    .btn-win  { background: rgba(0,232,150,0.12); color: var(--accent2); border: 1px solid rgba(0,232,150,0.25); font-size: 0.68rem; padding: 6px 10px; }
-    .btn-loss { background: rgba(240,68,68,0.12);  color: var(--danger);  border: 1px solid rgba(240,68,68,0.25);  font-size: 0.68rem; padding: 6px 10px; }
-
-    /* ── Result card ── */
-    .result-card {
-      margin-top: 8px; background: var(--surface2);
-      border: 1px solid var(--border2); border-radius: 12px;
-      overflow: hidden; animation: slideIn 0.2s ease;
-    }
-    @keyframes slideIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:none} }
-    .result-header { padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
-    .result-badge { font-size: 0.72rem; font-weight: 800; padding: 4px 10px; border-radius: 6px; }
-    .result-badge.rec  { background: rgba(0,232,150,0.15); color: var(--accent2); }
-    .result-badge.norec{ background: rgba(240,68,68,0.15);  color: var(--danger); }
-    .result-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
-    .result-row  { display: flex; justify-content: space-between; align-items: center; }
-    .result-key  { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
-    .result-val  { font-family: var(--font-mono); font-size: 0.78rem; }
-    .result-reason { font-size: 0.76rem; line-height: 1.5; padding-top: 8px; border-top: 1px solid var(--border); color: var(--text2); }
-    .result-plan { background: rgba(0,200,240,0.04); border: 1px solid rgba(0,200,240,0.12); border-radius: 8px; padding: 10px 12px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; text-align: center; }
-    .plan-lbl { font-size: 0.58rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
-    .plan-val { font-family: var(--font-mono); font-size: 0.8rem; font-weight: 700; margin-top: 2px; color: var(--accent); }
-
-    /* ── Score bar ── */
-    .score-bar-bg { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 6px; }
-    .score-bar-fill { height: 100%; border-radius: 2px; transition: width 0.5s ease; }
-
-    /* ── Tools panel ── */
-    .tools-grid { display: flex; flex-direction: column; gap: 8px; }
-    .tool-group { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
-    .tool-group-title { padding: 10px 14px; font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); border-bottom: 1px solid var(--border); background: var(--surface2); }
-    .tool-item {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 13px 14px; border-bottom: 1px solid var(--border);
-      cursor: pointer; transition: background 0.1s;
-    }
-    .tool-item:last-child { border-bottom: none; }
-    .tool-item:active { background: var(--surface2); }
-    .tool-item-left { display: flex; align-items: center; gap: 10px; }
-    .tool-icon { font-size: 1.1rem; width: 28px; text-align: center; }
-    .tool-label { font-size: 0.82rem; font-weight: 700; }
-    .tool-desc { font-size: 0.65rem; color: var(--muted); margin-top: 2px; }
-    .tool-arrow { color: var(--muted); font-size: 0.8rem; }
-    .tool-item a { text-decoration: none; color: inherit; display: flex; align-items: center; justify-content: space-between; width: 100%; }
-
-    /* ── Waveboard link ── */
-    .waveboard-banner {
-      background: linear-gradient(135deg, rgba(168,85,247,0.15), rgba(0,200,240,0.1));
-      border: 1px solid rgba(168,85,247,0.3);
-      border-radius: 14px; padding: 18px 16px;
-      display: flex; align-items: center; gap: 14px;
-      cursor: pointer; text-decoration: none; color: inherit;
-      transition: border-color 0.15s, transform 0.1s;
-      margin-bottom: 12px;
-    }
-    .waveboard-banner:active { transform: scale(0.98); border-color: var(--purple); }
-    .waveboard-icon { font-size: 2rem; flex-shrink: 0; }
-    .waveboard-text {}
-    .waveboard-title { font-size: 1rem; font-weight: 800; color: #fff; }
-    .waveboard-sub { font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
-    .waveboard-badge { margin-left: auto; flex-shrink: 0; background: rgba(168,85,247,0.2); color: var(--purple); font-size: 0.62rem; font-weight: 700; padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(168,85,247,0.3); }
-
-    /* ── Telegram commands ── */
-    .cmd-list { display: flex; flex-direction: column; gap: 6px; }
-    .cmd-item {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 8px; padding: 10px 12px;
-      display: flex; align-items: center; justify-content: space-between;
-      cursor: pointer; transition: background 0.1s;
-    }
-    .cmd-item:active { background: var(--surface2); }
-    .cmd-code { font-family: var(--font-mono); font-size: 0.78rem; color: var(--accent); }
-    .cmd-desc { font-size: 0.68rem; color: var(--muted); }
-    .cmd-copy { font-size: 0.65rem; color: var(--muted); }
+    .btn-primary { background: linear-gradient(135deg, var(--pink), var(--pink2)); color: #fff; }
+    .btn-ghost { background: var(--surface2); border: 1px solid var(--border); color: var(--text2); font-size: 0.7rem; padding: 6px 12px; }
+    .btn-ghost:hover { border-color: var(--border2); color: var(--text); }
+    .btn-win  { background: rgba(34,197,94,0.12);  color: var(--green); border: 1px solid rgba(34,197,94,0.25);  font-size: 0.68rem; padding: 5px 10px; }
+    .btn-loss { background: rgba(239,68,68,0.12);   color: var(--red);   border: 1px solid rgba(239,68,68,0.25);   font-size: 0.68rem; padding: 5px 10px; }
 
     /* ── Empty ── */
-    .empty { text-align: center; padding: 32px 16px; color: var(--muted); font-size: 0.82rem; line-height: 1.6; }
+    .empty { text-align: center; padding: 32px; color: var(--text3); font-size: 0.82rem; line-height: 1.7; }
 
     /* ── Toast ── */
     .toast {
-      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-      background: var(--surface3); border: 1px solid var(--border2);
-      color: var(--text); font-size: 0.78rem; padding: 10px 18px;
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: var(--surface2); border: 1px solid var(--border2);
+      color: var(--text); font-size: 0.78rem; padding: 10px 20px;
       border-radius: 20px; z-index: 999; pointer-events: none;
-      opacity: 0; transition: opacity 0.2s; white-space: nowrap; max-width: 90vw; text-align: center;
+      opacity: 0; transition: opacity 0.2s; white-space: nowrap; max-width: 90vw;
     }
     .toast.show { opacity: 1; }
 
-    /* ── Divider ── */
-    .divider { height: 1px; background: var(--border); margin: 12px 0; }
+    /* ── Mobile ── */
+    @media (max-width: 600px) {
+      :root { --sidebar: 0px; }
+      .sidebar { display: none; }
+      .main { margin-left: 0; }
+      .page { padding: 16px; }
+      .bottom-nav {
+        display: flex !important;
+        position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+        background: var(--surface); border-top: 1px solid var(--border);
+        padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+      }
+      body { padding-bottom: 70px; }
+      .kpi-grid { grid-template-columns: repeat(2,1fr); }
+      .topbar { padding: 0 16px; }
+      .topbar-time { display: none; }
+    }
+    .bottom-nav { display: none; }
+    .bottom-nav-item {
+      flex: 1; display: flex; flex-direction: column; align-items: center;
+      gap: 3px; cursor: pointer; padding: 4px 0;
+      font-size: 0.58rem; font-weight: 600; color: var(--text3);
+      transition: color 0.15s; border: none; background: none;
+    }
+    .bottom-nav-item.active { color: var(--pink2); }
+    .bottom-nav-item .bn-icon { font-size: 1.2rem; }
   </style>
 </head>
 <body>
 
-<!-- Header -->
-<div class="header">
-  <div class="header-left">
-    <div class="header-logo">◈ WAVESCOUT</div>
-    <div class="header-version">v3 MTF</div>
+<!-- Sidebar (Desktop) -->
+<div class="sidebar">
+  <div class="sidebar-logo">
+    <div class="sidebar-logo-text">WaveScout</div>
+    <div class="sidebar-logo-sub">Trading Signal Bot</div>
   </div>
-  <div class="header-right">
-    <div class="header-time" id="clock">–</div>
-    <div class="header-dot"></div>
-  </div>
-</div>
-
-<!-- Stats Bar -->
-<div class="stats-bar" id="stats-bar">
-  <div class="stat-cell"><div class="stat-val">–</div><div class="stat-lbl">Total</div></div>
-  <div class="stat-cell"><div class="stat-val g">–</div><div class="stat-lbl">Wins</div></div>
-  <div class="stat-cell"><div class="stat-val r">–</div><div class="stat-lbl">Losses</div></div>
-  <div class="stat-cell"><div class="stat-val">–</div><div class="stat-lbl">Open</div></div>
-  <div class="stat-cell"><div class="stat-val y">–</div><div class="stat-lbl">Win%</div></div>
-</div>
-
-<!-- Tabs -->
-<div class="tabs">
-  <div class="tab active" onclick="switchTab('check')">⚡ Prüfen</div>
-  <div class="tab" onclick="switchTab('signals')">📋 Signale</div>
-  <div class="tab" onclick="switchTab('tools')">🔧 Tools</div>
-  <div class="tab" onclick="switchTab('commands')">💬 Telegram</div>
-</div>
-
-<!-- Panel: Jetzt prüfen -->
-<div class="panel active" id="panel-check">
-  <div class="section-hdr">
-    <div class="section-title">Aktuelle Snapshots</div>
-    <button class="btn btn-ghost" onclick="loadSnapshots()">↻ Refresh</button>
-  </div>
-  <div class="card-list" id="snapshots-list">
-    <div class="empty">Lade Snapshots…</div>
+  <nav class="sidebar-nav">
+    <button class="nav-item active" onclick="goTo('home')">
+      <span class="nav-icon">🏠</span> Dashboard
+    </button>
+    <button class="nav-item" onclick="goTo('analyse')">
+      <span class="nav-icon">🔍</span> Analyse
+    </button>
+    <button class="nav-item" onclick="goTo('signals')">
+      <span class="nav-icon">📋</span> Signale
+    </button>
+    <button class="nav-item" onclick="goTo('tools')">
+      <span class="nav-icon">🔧</span> Tools
+    </button>
+    <button class="nav-item" onclick="goTo('telegram')">
+      <span class="nav-icon">💬</span> Telegram
+    </button>
+  </nav>
+  <div class="sidebar-bottom">
+    <div class="sidebar-user">
+      <div class="sidebar-avatar">M</div>
+      <div>
+        <div class="sidebar-username">Marvin</div>
+        <div class="sidebar-status"><div class="status-dot"></div>Live</div>
+      </div>
+    </div>
   </div>
 </div>
 
-<!-- Panel: Signale -->
-<div class="panel" id="panel-signals">
-  <div class="section-hdr">
-    <div class="section-title">Letzte 50 Signale</div>
-    <button class="btn btn-ghost" onclick="loadHistory()">↻ Refresh</button>
-  </div>
-  <div class="card-list" id="signals-list">
-    <div class="empty">Lade Signale…</div>
-  </div>
-</div>
+<!-- Main Content -->
+<div class="main">
 
-<!-- Panel: Tools -->
-<div class="panel" id="panel-tools">
-
-  <!-- Waveboard Banner -->
-  <a class="waveboard-banner" href="https://waveboard-e54ed.web.app/waveboard/dashboard" target="_blank">
-    <div class="waveboard-icon">🌊</div>
-    <div class="waveboard-text">
-      <div class="waveboard-title">Waveboard</div>
-      <div class="waveboard-sub">Öffnet dein externes Trading Dashboard</div>
-    </div>
-    <div class="waveboard-badge">↗ Öffnen</div>
-  </a>
-
-  <div class="tools-grid">
-
-    <!-- System -->
-    <div class="tool-group">
-      <div class="tool-group-title">⚙️ System</div>
-      <div class="tool-item" onclick="toolAction('health')">
-        <div class="tool-item-left">
-          <div class="tool-icon">💚</div>
-          <div><div class="tool-label">Health Check</div><div class="tool-desc">Worker Status prüfen</div></div>
-        </div>
-        <div class="tool-arrow">›</div>
-      </div>
-      <div class="tool-item" onclick="toolAction('telegram')">
-        <div class="tool-item-left">
-          <div class="tool-icon">📨</div>
-          <div><div class="tool-label">Telegram testen</div><div class="tool-desc">Test-Nachricht senden</div></div>
-        </div>
-        <div class="tool-arrow">›</div>
-      </div>
-      <div class="tool-item" onclick="toolAction('morning')">
-        <div class="tool-item-left">
-          <div class="tool-icon">🌅</div>
-          <div><div class="tool-label">Morning Brief senden</div><div class="tool-desc">Tages-Bias jetzt abrufen</div></div>
-        </div>
-        <div class="tool-arrow">›</div>
-      </div>
-    </div>
-
-    <!-- Analyse -->
-    <div class="tool-group">
-      <div class="tool-group-title">🧠 Analyse</div>
-      <div class="tool-item" onclick="toolAction('outcomes')">
-        <div class="tool-item-left">
-          <div class="tool-icon">🔄</div>
-          <div><div class="tool-label">Outcome Tracking</div><div class="tool-desc">WIN/LOSS jetzt prüfen (Binance)</div></div>
-        </div>
-        <div class="tool-arrow">›</div>
-      </div>
-      <div class="tool-item" onclick="switchTab('check')">
-        <div class="tool-item-left">
-          <div class="tool-icon">🔍</div>
-          <div><div class="tool-label">Symbol analysieren</div><div class="tool-desc">Claude-Analyse per Tap</div></div>
-        </div>
-        <div class="tool-arrow">›</div>
-      </div>
-    </div>
-
-    <!-- Links -->
-    <div class="tool-group">
-      <div class="tool-group-title">🔗 Links</div>
-      <div class="tool-item">
-        <div class="tool-item-left" style="width:100%">
-          <a href="https://waveboard-e54ed.web.app/waveboard/dashboard" target="_blank" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;width:100%">
-            <div class="tool-icon">🌊</div>
-            <div><div class="tool-label">Waveboard Dashboard</div><div class="tool-desc">waveboard-e54ed.web.app</div></div>
-            <div class="tool-arrow" style="margin-left:auto">↗</div>
-          </a>
-        </div>
-      </div>
-      <div class="tool-item">
-        <div class="tool-item-left" style="width:100%">
-          <a href="https://tradingview.com" target="_blank" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;width:100%">
-            <div class="tool-icon">📊</div>
-            <div><div class="tool-label">TradingView</div><div class="tool-desc">Charts & Alerts verwalten</div></div>
-            <div class="tool-arrow" style="margin-left:auto">↗</div>
-          </a>
-        </div>
-      </div>
-      <div class="tool-item">
-        <div class="tool-item-left" style="width:100%">
-          <a href="https://dash.cloudflare.com" target="_blank" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;width:100%">
-            <div class="tool-icon">☁️</div>
-            <div><div class="tool-label">Cloudflare Dashboard</div><div class="tool-desc">Worker & Logs verwalten</div></div>
-            <div class="tool-arrow" style="margin-left:auto">↗</div>
-          </a>
-        </div>
-      </div>
-      <div class="tool-item">
-        <div class="tool-item-left" style="width:100%">
-          <a href="https://github.com/spnni08/tradingview-bot" target="_blank" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;width:100%">
-            <div class="tool-icon">🐙</div>
-            <div><div class="tool-label">GitHub Repository</div><div class="tool-desc">spnni08/tradingview-bot</div></div>
-            <div class="tool-arrow" style="margin-left:auto">↗</div>
-          </a>
-        </div>
-      </div>
-      <div class="tool-item">
-        <div class="tool-item-left" style="width:100%">
-          <a href="https://console.anthropic.com" target="_blank" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;width:100%">
-            <div class="tool-icon">🤖</div>
-            <div><div class="tool-label">Anthropic Console</div><div class="tool-desc">Claude API Keys & Usage</div></div>
-            <div class="tool-arrow" style="margin-left:auto">↗</div>
-          </a>
-        </div>
-      </div>
-    </div>
-
-  </div>
-</div>
-
-<!-- Panel: Telegram Commands -->
-<div class="panel" id="panel-commands">
-  <div class="section-hdr">
-    <div class="section-title">Telegram Kommandos</div>
-    <div style="font-size:0.65rem;color:var(--muted)">Tippe zum Kopieren</div>
-  </div>
-  <div class="cmd-list">
-    <div class="cmd-item" onclick="copyCmd('/btc')">
-      <div><div class="cmd-code">/btc</div><div class="cmd-desc">Bitcoin sofort analysieren</div></div>
-      <div class="cmd-copy">📋</div>
-    </div>
-    <div class="cmd-item" onclick="copyCmd('/eth')">
-      <div><div class="cmd-code">/eth</div><div class="cmd-desc">Ethereum analysieren</div></div>
-      <div class="cmd-copy">📋</div>
-    </div>
-    <div class="cmd-item" onclick="copyCmd('/sol')">
-      <div><div class="cmd-code">/sol</div><div class="cmd-desc">Solana analysieren</div></div>
-      <div class="cmd-copy">📋</div>
-    </div>
-    <div class="cmd-item" onclick="copyCmd('/check RENDERUSDT')">
-      <div><div class="cmd-code">/check SYMBOL</div><div class="cmd-desc">Beliebiges Symbol analysieren</div></div>
-      <div class="cmd-copy">📋</div>
-    </div>
-    <div class="cmd-item" onclick="copyCmd('/status')">
-      <div><div class="cmd-code">/status</div><div class="cmd-desc">Winrate & Stats abrufen</div></div>
-      <div class="cmd-copy">📋</div>
-    </div>
-    <div class="cmd-item" onclick="copyCmd('/brief')">
-      <div><div class="cmd-code">/brief</div><div class="cmd-desc">Morning Brief jetzt senden</div></div>
-      <div class="cmd-copy">📋</div>
-    </div>
-    <div class="cmd-item" onclick="copyCmd('/open')">
-      <div><div class="cmd-code">/open</div><div class="cmd-desc">Alle offenen Trades anzeigen</div></div>
-      <div class="cmd-copy">📋</div>
-    </div>
-    <div class="cmd-item" onclick="copyCmd('/top')">
-      <div><div class="cmd-code">/top</div><div class="cmd-desc">Beste Signale der letzten 24h</div></div>
-      <div class="cmd-copy">📋</div>
-    </div>
-    <div class="cmd-item" onclick="copyCmd('/hilfe')">
-      <div><div class="cmd-code">/hilfe</div><div class="cmd-desc">Alle Kommandos anzeigen</div></div>
-      <div class="cmd-copy">📋</div>
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="topbar-title" id="topbar-title">Dashboard</div>
+    <div class="topbar-right">
+      <div class="topbar-time" id="clock">–</div>
+      <div class="topbar-live"><div class="status-dot"></div>Live</div>
     </div>
   </div>
 
-  <div class="divider"></div>
+  <!-- Page: Home -->
+  <div class="page active" id="page-home">
+    <div class="greeting">
+      <div class="greeting-day" id="greeting-day">–</div>
+      <div class="greeting-title">Guten Morgen, <span>Marvin</span> 👋</div>
+    </div>
 
-  <div class="tool-group">
-    <div class="tool-group-title">⚙️ Webhook URL</div>
-    <div style="padding:12px 14px">
-      <div style="font-family:var(--font-mono);font-size:0.62rem;color:var(--accent);word-break:break-all;line-height:1.6">
-        /webhook?secret=••••••
+    <div class="kpi-grid" id="kpi-grid">
+      <div class="kpi-card pink">
+        <div class="kpi-label">Offene Signale</div>
+        <div class="kpi-value pink" id="kpi-open">–</div>
+        <div class="kpi-sub">aktive Trades</div>
       </div>
-      <div style="font-size:0.65rem;color:var(--muted);margin-top:6px">TradingView Alert Webhook (mit deinem Secret)</div>
+      <div class="kpi-card green">
+        <div class="kpi-label">Wins</div>
+        <div class="kpi-value green" id="kpi-wins">–</div>
+        <div class="kpi-sub">gesamt</div>
+      </div>
+      <div class="kpi-card red">
+        <div class="kpi-label">Losses</div>
+        <div class="kpi-value red" id="kpi-losses">–</div>
+        <div class="kpi-sub">gesamt</div>
+      </div>
+      <div class="kpi-card blue">
+        <div class="kpi-label">Winrate</div>
+        <div class="kpi-value blue" id="kpi-winrate">–</div>
+        <div class="kpi-sub">Trefferquote</div>
+      </div>
+    </div>
+
+    <div class="home-grid">
+      <!-- Quick Actions -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <div class="section-card-title">Schnell-Aktionen</div>
+        </div>
+        <div class="section-card-body">
+          <div class="quick-actions">
+            <div class="quick-btn" onclick="goTo('analyse')">
+              <div class="quick-btn-icon">🔍</div>
+              <div>
+                <div class="quick-btn-label">Analyse</div>
+                <div class="quick-btn-desc">Symbol prüfen</div>
+              </div>
+            </div>
+            <div class="quick-btn" onclick="toolAction('morning')">
+              <div class="quick-btn-icon">🌅</div>
+              <div>
+                <div class="quick-btn-label">Morning Brief</div>
+                <div class="quick-btn-desc">Jetzt senden</div>
+              </div>
+            </div>
+            <div class="quick-btn" onclick="toolAction('outcomes')">
+              <div class="quick-btn-icon">🔄</div>
+              <div>
+                <div class="quick-btn-label">Outcomes</div>
+                <div class="quick-btn-desc">WIN/LOSS prüfen</div>
+              </div>
+            </div>
+            <div class="quick-btn" onclick="goTo('signals')">
+              <div class="quick-btn-icon">📋</div>
+              <div>
+                <div class="quick-btn-label">Signale</div>
+                <div class="quick-btn-desc">Alle ansehen</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent Signals -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <div class="section-card-title">Letzte Signale</div>
+          <button class="btn btn-ghost" onclick="goTo('signals')">Alle →</button>
+        </div>
+        <div class="section-card-body" id="home-signals">
+          <div class="empty">Lade...</div>
+        </div>
+      </div>
+
+      <!-- Waveboard -->
+      <a class="waveboard-card" href="https://waveboard-e54ed.web.app/waveboard/dashboard" target="_blank">
+        <div class="wb-icon">🌊</div>
+        <div>
+          <div class="wb-title">WaveBoard</div>
+          <div class="wb-sub">Externes Trading Dashboard öffnen</div>
+        </div>
+        <div class="wb-arrow">↗ Öffnen</div>
+      </a>
     </div>
   </div>
+
+  <!-- Page: Analyse -->
+  <div class="page" id="page-analyse">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div style="font-size:0.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:0.1em">Aktuelle Snapshots</div>
+      <button class="btn btn-ghost" onclick="loadSnapshots()">↻ Refresh</button>
+    </div>
+    <div id="snapshots-list"><div class="empty">Lade Snapshots...</div></div>
+  </div>
+
+  <!-- Page: Signale -->
+  <div class="page" id="page-signals">
+    <div class="filter-bar">
+      <select class="filter-select" id="filter-symbol" onchange="applyFilters()">
+        <option value="">Alle Symbole</option>
+      </select>
+      <select class="filter-select" id="filter-outcome" onchange="applyFilters()" style="flex:0.7">
+        <option value="">Alle</option>
+        <option value="OPEN">Open</option>
+        <option value="WIN">Win</option>
+        <option value="LOSS">Loss</option>
+      </select>
+      <button class="sort-btn active" id="sort-score" onclick="toggleSort('score')">Score ↓</button>
+      <button class="sort-btn" id="sort-time" onclick="toggleSort('time')">Zeit</button>
+    </div>
+    <div id="signals-list"><div class="empty">Lade Signale...</div></div>
+  </div>
+
+  <!-- Page: Tools -->
+  <div class="page" id="page-tools">
+    <a class="waveboard-card" href="https://waveboard-e54ed.web.app/waveboard/dashboard" target="_blank">
+      <div class="wb-icon">🌊</div>
+      <div>
+        <div class="wb-title">WaveBoard Dashboard</div>
+        <div class="wb-sub">waveboard-e54ed.web.app</div>
+      </div>
+      <div class="wb-arrow">↗ Öffnen</div>
+    </a>
+
+    <div class="tool-section">
+      <div class="tool-section-title">System</div>
+      <div class="tool-list">
+        <div class="tool-row" onclick="toolAction('health')">
+          <div class="tool-row-icon">💚</div>
+          <div class="tool-row-text">
+            <div class="tool-row-label">Health Check</div>
+            <div class="tool-row-desc">Worker Status prüfen</div>
+          </div>
+          <div class="tool-row-arrow">›</div>
+        </div>
+        <div class="tool-row" onclick="toolAction('telegram')">
+          <div class="tool-row-icon">📨</div>
+          <div class="tool-row-text">
+            <div class="tool-row-label">Telegram testen</div>
+            <div class="tool-row-desc">Test-Nachricht senden</div>
+          </div>
+          <div class="tool-row-arrow">›</div>
+        </div>
+        <div class="tool-row" onclick="toolAction('morning')">
+          <div class="tool-row-icon">🌅</div>
+          <div class="tool-row-text">
+            <div class="tool-row-label">Morning Brief</div>
+            <div class="tool-row-desc">Tages-Bias jetzt abrufen</div>
+          </div>
+          <div class="tool-row-arrow">›</div>
+        </div>
+        <div class="tool-row" onclick="toolAction('outcomes')">
+          <div class="tool-row-icon">🔄</div>
+          <div class="tool-row-text">
+            <div class="tool-row-label">Outcome Tracking</div>
+            <div class="tool-row-desc">WIN/LOSS via Binance prüfen</div>
+          </div>
+          <div class="tool-row-arrow">›</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tool-section">
+      <div class="tool-section-title">Links</div>
+      <div class="tool-list">
+        <a class="tool-row" href="https://tradingview.com" target="_blank">
+          <div class="tool-row-icon">📊</div>
+          <div class="tool-row-text">
+            <div class="tool-row-label">TradingView</div>
+            <div class="tool-row-desc">Charts & Alerts verwalten</div>
+          </div>
+          <div class="tool-row-arrow">↗</div>
+        </a>
+        <a class="tool-row" href="https://dash.cloudflare.com" target="_blank">
+          <div class="tool-row-icon">☁️</div>
+          <div class="tool-row-text">
+            <div class="tool-row-label">Cloudflare</div>
+            <div class="tool-row-desc">Worker & Logs verwalten</div>
+          </div>
+          <div class="tool-row-arrow">↗</div>
+        </a>
+        <a class="tool-row" href="https://github.com/spnni08/tradingview-bot" target="_blank">
+          <div class="tool-row-icon">🐙</div>
+          <div class="tool-row-text">
+            <div class="tool-row-label">GitHub Repository</div>
+            <div class="tool-row-desc">spnni08/tradingview-bot</div>
+          </div>
+          <div class="tool-row-arrow">↗</div>
+        </a>
+        <a class="tool-row" href="https://console.anthropic.com" target="_blank">
+          <div class="tool-row-icon">🤖</div>
+          <div class="tool-row-text">
+            <div class="tool-row-label">Anthropic Console</div>
+            <div class="tool-row-desc">Claude API Keys & Usage</div>
+          </div>
+          <div class="tool-row-arrow">↗</div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Page: Telegram -->
+  <div class="page" id="page-telegram">
+    <div style="margin-bottom:16px">
+      <div style="font-size:0.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:12px">Kommandos — tippe zum Kopieren</div>
+      <div class="cmd-grid">
+        <div class="cmd-row" onclick="copyCmd('/btc')">
+          <div><div class="cmd-code">/btc</div><div class="cmd-desc">Bitcoin analysieren</div></div>
+          <div class="cmd-copy-icon">📋</div>
+        </div>
+        <div class="cmd-row" onclick="copyCmd('/eth')">
+          <div><div class="cmd-code">/eth</div><div class="cmd-desc">Ethereum analysieren</div></div>
+          <div class="cmd-copy-icon">📋</div>
+        </div>
+        <div class="cmd-row" onclick="copyCmd('/sol')">
+          <div><div class="cmd-code">/sol</div><div class="cmd-desc">Solana analysieren</div></div>
+          <div class="cmd-copy-icon">📋</div>
+        </div>
+        <div class="cmd-row" onclick="copyCmd('/check RENDERUSDT')">
+          <div><div class="cmd-code">/check SYMBOL</div><div class="cmd-desc">Beliebiges Symbol analysieren</div></div>
+          <div class="cmd-copy-icon">📋</div>
+        </div>
+        <div class="cmd-row" onclick="copyCmd('/status')">
+          <div><div class="cmd-code">/status</div><div class="cmd-desc">Winrate & Stats</div></div>
+          <div class="cmd-copy-icon">📋</div>
+        </div>
+        <div class="cmd-row" onclick="copyCmd('/brief')">
+          <div><div class="cmd-code">/brief</div><div class="cmd-desc">Morning Brief senden</div></div>
+          <div class="cmd-copy-icon">📋</div>
+        </div>
+        <div class="cmd-row" onclick="copyCmd('/open')">
+          <div><div class="cmd-code">/open</div><div class="cmd-desc">Offene Trades anzeigen</div></div>
+          <div class="cmd-copy-icon">📋</div>
+        </div>
+        <div class="cmd-row" onclick="copyCmd('/top')">
+          <div><div class="cmd-code">/top</div><div class="cmd-desc">Beste Signale heute</div></div>
+          <div class="cmd-copy-icon">📋</div>
+        </div>
+        <div class="cmd-row" onclick="copyCmd('/hilfe')">
+          <div><div class="cmd-code">/hilfe</div><div class="cmd-desc">Alle Kommandos</div></div>
+          <div class="cmd-copy-icon">📋</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<!-- Bottom Nav (Mobile) -->
+<div class="bottom-nav" id="bottom-nav">
+  <button class="bottom-nav-item active" onclick="goTo('home')"><span class="bn-icon">🏠</span>Home</button>
+  <button class="bottom-nav-item" onclick="goTo('analyse')"><span class="bn-icon">🔍</span>Analyse</button>
+  <button class="bottom-nav-item" onclick="goTo('signals')"><span class="bn-icon">📋</span>Signale</button>
+  <button class="bottom-nav-item" onclick="goTo('tools')"><span class="bn-icon">🔧</span>Tools</button>
+  <button class="bottom-nav-item" onclick="goTo('telegram')"><span class="bn-icon">💬</span>Telegram</button>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script>
 const SECRET = new URLSearchParams(location.search).get('secret') || '';
-const BASE = '';
+let allSignals = [];
+let sortMode = 'score';
 
-function fmt(n, d=2) {
-  if (!n && n !== 0) return '–';
-  return Number(n).toLocaleString('de-DE', {minimumFractionDigits:d, maximumFractionDigits:d});
+// ── Utils ──
+function fmt(n,d=2) {
+  if (!n && n!==0) return '–';
+  return Number(n).toLocaleString('de-DE',{minimumFractionDigits:d,maximumFractionDigits:d});
 }
 function timeAgo(ts) {
-  const d = Date.now() - ts;
-  if (d < 60000) return 'jetzt';
-  if (d < 3600000) return Math.floor(d/60000) + 'm';
-  if (d < 86400000) return Math.floor(d/3600000) + 'h';
-  return Math.floor(d/86400000) + 'd';
+  const d = Date.now()-ts;
+  if(d<60000) return 'jetzt';
+  if(d<3600000) return Math.floor(d/60000)+'m';
+  if(d<86400000) return Math.floor(d/3600000)+'h';
+  return Math.floor(d/86400000)+'d';
 }
 function scoreColor(s) {
-  if (s >= 70) return 'var(--accent2)';
-  if (s >= 50) return 'var(--warn)';
-  return 'var(--danger)';
+  if(s>=70) return 'var(--green)';
+  if(s>=50) return 'var(--yellow)';
+  return 'var(--red)';
 }
-function showToast(msg, dur=2500) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), dur);
+function showToast(msg,dur=2500) {
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),dur);
+}
+function greeting() {
+  const h=new Date().getHours();
+  if(h<12) return 'Guten Morgen,';
+  if(h<18) return 'Guten Tag,';
+  return 'Guten Abend,';
 }
 
-// ── Clock ──
-setInterval(() => {
+// ── Clock & Greeting ──
+function updateClock() {
   document.getElementById('clock').textContent =
-    new Date().toLocaleTimeString('de-DE', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-}, 1000);
+    new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const days=['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
+  const months=['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+  const now=new Date();
+  document.getElementById('greeting-day').textContent =
+    days[now.getDay()]+', '+now.getDate()+'. '+months[now.getMonth()]+' '+now.getFullYear();
+  const greetEl = document.querySelector('.greeting-title');
+  if(greetEl) greetEl.innerHTML = greeting()+' <span>Marvin</span> 👋';
+}
+updateClock();
+setInterval(updateClock,1000);
 
-// ── Tabs ──
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach((t,i) => {
-    const panels = ['check','signals','tools','commands'];
-    t.classList.toggle('active', panels[i] === name);
+// ── Navigation ──
+const pageNames = {home:'Dashboard',analyse:'Analyse',signals:'Signale',tools:'Tools',telegram:'Telegram'};
+function goTo(name) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.querySelectorAll('.bottom-nav-item').forEach((b,i)=>{
+    const pages=['home','analyse','signals','tools','telegram'];
+    b.classList.toggle('active',pages[i]===name);
   });
-  document.querySelectorAll('.panel').forEach(p => {
-    p.classList.toggle('active', p.id === 'panel-' + name);
-  });
-  if (name === 'check') loadSnapshots();
-  if (name === 'signals') loadHistory();
+  document.getElementById('page-'+name).classList.add('active');
+  document.getElementById('topbar-title').textContent = pageNames[name]||name;
+  const idx=['home','analyse','signals','tools','telegram'].indexOf(name);
+  if(idx>=0) document.querySelectorAll('.nav-item')[idx]?.classList.add('active');
+  if(name==='analyse') loadSnapshots();
+  if(name==='signals') loadHistory();
+  if(name==='home') loadHome();
 }
 
 // ── Stats ──
 async function loadStats() {
-  const s = await fetch('/stats').then(r=>r.json()).catch(()=>({}));
-  document.getElementById('stats-bar').innerHTML = \`
-    <div class="stat-cell"><div class="stat-val">\${s.total||0}</div><div class="stat-lbl">Total</div></div>
-    <div class="stat-cell"><div class="stat-val g">\${s.wins||0}</div><div class="stat-lbl">Wins</div></div>
-    <div class="stat-cell"><div class="stat-val r">\${s.losses||0}</div><div class="stat-lbl">Losses</div></div>
-    <div class="stat-cell"><div class="stat-val">\${s.open||0}</div><div class="stat-lbl">Open</div></div>
-    <div class="stat-cell"><div class="stat-val y">\${s.winrate||0}%</div><div class="stat-lbl">Win%</div></div>
-  \`;
+  const s=await fetch('/stats').then(r=>r.json()).catch(()=>({}));
+  document.getElementById('kpi-open').textContent=s.open||0;
+  document.getElementById('kpi-wins').textContent=s.wins||0;
+  document.getElementById('kpi-losses').textContent=s.losses||0;
+  document.getElementById('kpi-winrate').textContent=(s.winrate||0)+'%';
+  return s;
+}
+
+// ── Home ──
+async function loadHome() {
+  await loadStats();
+  const hist=await fetch('/history').then(r=>r.json()).catch(()=>[]);
+  const recent=hist.slice(0,5);
+  const el=document.getElementById('home-signals');
+  if(!recent.length){el.innerHTML='<div class="empty">Noch keine Signale.</div>';return;}
+  el.innerHTML=recent.map(x=>{
+    const sc=Number(x.ai_score)||0;
+    const col=scoreColor(sc);
+    const isLong=x.ai_direction==='LONG';
+    return \`<div class="mini-signal">
+      <div class="mini-signal-left">
+        <div class="mini-signal-dot" style="background:\${isLong?'var(--green)':'var(--red)'}"></div>
+        <div>
+          <div class="mini-signal-symbol">\${x.symbol||'–'}</div>
+          <div class="mini-signal-trigger">\${x.trigger||'–'}</div>
+        </div>
+      </div>
+      <div class="mini-signal-right">
+        <div class="mini-signal-score" style="color:\${col}">\${sc}/100</div>
+        <div class="mini-signal-time">\${timeAgo(x.created_at)}</div>
+      </div>
+    </div>\`;
+  }).join('');
 }
 
 // ── Snapshots ──
 async function loadSnapshots() {
-  const el = document.getElementById('snapshots-list');
-  el.innerHTML = '<div class="empty">Lade…</div>';
-  const snaps = await fetch('/snapshots').then(r=>r.json()).catch(()=>[]);
-  if (!snaps.length) {
-    el.innerHTML = '<div class="empty">Noch keine Snapshots.<br>TradingView muss erst Daten senden.</div>';
-    return;
-  }
-  el.innerHTML = snaps.map(s => \`
+  const el=document.getElementById('snapshots-list');
+  el.innerHTML='<div class="empty">Lade...</div>';
+  const snaps=await fetch('/snapshots').then(r=>r.json()).catch(()=>[]);
+  if(!snaps.length){el.innerHTML='<div class="empty">Noch keine Snapshots.<br>TradingView muss erst Daten senden.</div>';return;}
+  el.innerHTML=snaps.map(s=>\`
     <div>
       <div class="snapshot-card">
         <div class="snapshot-info">
@@ -1659,143 +1895,171 @@ async function loadSnapshots() {
           <div class="snapshot-meta">RSI \${fmt(s.rsi,1)} · EMA50 \${fmt(s.ema50,0)} · \${s.trend||'–'}</div>
         </div>
         <div class="snapshot-price">\${fmt(s.price)}</div>
-        <button class="btn btn-primary" onclick="checkNow('\${s.symbol}',this)" \${SECRET?'':'disabled'} style="font-size:0.68rem;padding:8px 12px">
-          \${SECRET?'🔍 Prüfen':'🔒'}
+        <button class="btn btn-primary" onclick="checkNow('\${s.symbol}',this)" \${SECRET?'':'disabled'} style="font-size:0.68rem;padding:7px 12px">
+          \${SECRET?'Prüfen':'🔒'}
         </button>
       </div>
-      <div class="result-card" id="result-\${s.symbol}" style="display:none"></div>
+      <div class="result-wrap" id="result-\${s.symbol}" style="display:none"></div>
     </div>
   \`).join('');
 }
 
 // ── Analyse ──
-async function checkNow(symbol, btn) {
-  btn.disabled = true; btn.textContent = '⏳';
-  const el = document.getElementById('result-' + symbol);
+async function checkNow(symbol,btn) {
+  btn.disabled=true; btn.textContent='...';
+  const el=document.getElementById('result-'+symbol);
   try {
-    const data = await fetch('/ask?symbol='+encodeURIComponent(symbol)+'&secret='+encodeURIComponent(SECRET)).then(r=>r.json());
-    if (data.error) throw new Error(data.error);
-    const ai = data.ai||{}, sc = Number(ai.score)||0;
-    const isRec = ai.recommendation==='RECOMMENDED';
-    const rr = ai.entry&&ai.take_profit&&ai.stop_loss
-      ? (Math.abs(ai.take_profit-ai.entry)/Math.abs(ai.entry-ai.stop_loss)).toFixed(2) : null;
+    const data=await fetch('/ask?symbol='+encodeURIComponent(symbol)+'&secret='+encodeURIComponent(SECRET)).then(r=>r.json());
+    if(data.error) throw new Error(data.error);
+    const ai=data.ai||{},sc=Number(ai.score)||0;
+    const isRec=ai.recommendation==='RECOMMENDED';
+    const rr=(ai.entry&&ai.take_profit&&ai.stop_loss)
+      ?(Math.abs(ai.take_profit-ai.entry)/Math.abs(ai.entry-ai.stop_loss)).toFixed(2):null;
     el.style.display='block';
-    el.innerHTML = \`
+    el.innerHTML=\`<div class="result-card">
       <div class="result-header">
-        <span class="result-badge \${isRec?'rec':'norec'}">\${isRec?'✓ EMPFOHLEN':'✗ NICHT EMPFOHLEN'}</span>
-        <span style="font-family:var(--font-mono);font-size:0.82rem;color:\${scoreColor(sc)}">\${sc}/100</span>
+        <span class="result-badge \${isRec?'rec':'norec'}">\${isRec?'✓ Empfohlen':'✗ Nicht empfohlen'}</span>
+        <span style="font-family:var(--mono);font-size:0.85rem;font-weight:700;color:\${scoreColor(sc)}">\${sc}/100</span>
       </div>
       <div class="result-body">
-        <div class="result-row"><span class="result-key">Richtung</span><span class="result-val">\${ai.direction||'–'}</span></div>
-        <div class="result-row"><span class="result-key">Risiko</span><span class="result-val">\${ai.risk||'–'}</span></div>
-        <div class="result-row"><span class="result-key">Confidence</span><span class="result-val">\${ai.confidence||0}%</span></div>
-        <div class="score-bar-bg"><div class="score-bar-fill" style="width:\${sc}%;background:\${scoreColor(sc)}"></div></div>
-        <div class="result-plan">
-          <div><div class="plan-lbl">Entry</div><div class="plan-val">\${fmt(ai.entry)}</div></div>
-          <div><div class="plan-lbl">Take Profit</div><div class="plan-val" style="color:var(--accent2)">\${fmt(ai.take_profit)}</div></div>
-          <div><div class="plan-lbl">Stop Loss</div><div class="plan-val" style="color:var(--danger)">\${fmt(ai.stop_loss)}</div></div>
+        <div class="result-row">
+          <span class="result-key">Richtung</span><span class="result-val">\${ai.direction||'–'}</span>
+        </div>
+        <div class="result-row">
+          <span class="result-key">Risiko</span><span class="result-val">\${ai.risk||'–'}</span>
+        </div>
+        <div class="result-row">
+          <span class="result-key">Confidence</span><span class="result-val">\${ai.confidence||0}%</span>
         </div>
         \${rr?'<div class="result-row"><span class="result-key">R/R</span><span class="result-val">1:'+rr+'</span></div>':''}
+        <div class="signal-bar-bg"><div class="signal-bar-fill" style="width:\${sc}%;background:\${scoreColor(sc)}"></div></div>
+        <div class="result-plan">
+          <div class="plan-cell"><div class="plan-lbl">Entry</div><div class="plan-val" style="color:var(--blue)">\${fmt(ai.entry)}</div></div>
+          <div class="plan-cell"><div class="plan-lbl">Take Profit</div><div class="plan-val" style="color:var(--green)">\${fmt(ai.take_profit)}</div></div>
+          <div class="plan-cell"><div class="plan-lbl">Stop Loss</div><div class="plan-val" style="color:var(--red)">\${fmt(ai.stop_loss)}</div></div>
+        </div>
         <div class="result-reason">\${ai.reason||''}</div>
       </div>
-    \`;
-    showToast(isRec?'✅ Empfohlen!':'⛔ Nicht empfohlen');
+    </div>\`;
+    showToast(isRec?'Empfohlen!':'Nicht empfohlen');
   } catch(e) {
     el.style.display='block';
-    el.innerHTML='<div style="padding:12px 14px;color:var(--danger);font-size:0.78rem">Fehler: '+e.message+'</div>';
-    showToast('❌ Fehler');
+    el.innerHTML='<div style="padding:14px 16px;color:var(--red);font-size:0.78rem">Fehler: '+e.message+'</div>';
   }
-  btn.disabled=false; btn.textContent=SECRET?'🔍 Prüfen':'🔒';
+  btn.disabled=false; btn.textContent=SECRET?'Prüfen':'🔒';
 }
 
-// ── Outcome ──
-async function setOutcome(id, outcome, btn) {
-  const all = btn.parentElement.querySelectorAll('button');
-  all.forEach(b=>b.disabled=true);
-  try {
-    const r = await fetch('/outcome?id='+id+'&outcome='+outcome+'&secret='+encodeURIComponent(SECRET),{method:'POST'}).then(r=>r.json());
-    if (r.status==='ok') {
-      const badge = document.getElementById('out-'+id);
-      if (badge) { badge.className='badge '+(outcome==='WIN'?'b-win':'b-loss'); badge.textContent=outcome; }
-      btn.parentElement.style.display='none';
-      loadStats();
-      showToast(outcome==='WIN'?'✅ WIN gespeichert!':'❌ LOSS gespeichert!');
-    }
-  } catch(e) { all.forEach(b=>b.disabled=false); showToast('Fehler: '+e.message); }
-}
-
-// ── History ──
+// ── History & Filter ──
+let currentSort = 'score';
 async function loadHistory() {
-  const el = document.getElementById('signals-list');
-  el.innerHTML = '<div class="empty">Lade…</div>';
-  const hist = await fetch('/history').then(r=>r.json()).catch(()=>[]);
-  if (!hist.length) { el.innerHTML='<div class="empty">Noch keine Signale.</div>'; return; }
-  el.innerHTML = hist.map(x => {
-    const sc = Number(x.ai_score)||0;
-    const outCls = x.outcome==='WIN'?'b-win':x.outcome==='LOSS'?'b-loss':'b-open';
-    const recCls = x.ai_recommendation==='RECOMMENDED'?'b-rec':'b-norec';
-    const riskCls = x.ai_risk==='HIGH'?'b-high':x.ai_risk==='MEDIUM'?'b-med':'b-low';
-    const isOpen = x.outcome==='OPEN';
-    return \`
-    <div class="signal-card">
+  const el=document.getElementById('signals-list');
+  el.innerHTML='<div class="empty">Lade...</div>';
+  allSignals=await fetch('/history').then(r=>r.json()).catch(()=>[]);
+  // Populate symbol filter
+  const symbols=[...new Set(allSignals.map(x=>x.symbol).filter(Boolean))];
+  const sel=document.getElementById('filter-symbol');
+  sel.innerHTML='<option value="">Alle Symbole</option>'+symbols.map(s=>'<option value="'+s+'">'+s+'</option>').join('');
+  applyFilters();
+}
+function toggleSort(mode) {
+  currentSort=mode;
+  document.getElementById('sort-score').classList.toggle('active',mode==='score');
+  document.getElementById('sort-time').classList.toggle('active',mode==='time');
+  applyFilters();
+}
+function applyFilters() {
+  const sym=document.getElementById('filter-symbol').value;
+  const out=document.getElementById('filter-outcome').value;
+  let filtered=[...allSignals];
+  if(sym) filtered=filtered.filter(x=>x.symbol===sym);
+  if(out) filtered=filtered.filter(x=>x.outcome===out);
+  if(currentSort==='score') filtered.sort((a,b)=>(b.ai_score||0)-(a.ai_score||0));
+  else filtered.sort((a,b)=>b.created_at-a.created_at);
+  renderSignals(filtered);
+}
+function renderSignals(list) {
+  const el=document.getElementById('signals-list');
+  if(!list.length){el.innerHTML='<div class="empty">Keine Signale gefunden.</div>';return;}
+  el.innerHTML=list.map(x=>{
+    const sc=Number(x.ai_score)||0;
+    const outCls=x.outcome==='WIN'?'b-win':x.outcome==='LOSS'?'b-loss':'b-open';
+    const recCls=x.ai_recommendation==='RECOMMENDED'?'b-rec':'b-norec';
+    const riskCls=x.ai_risk==='HIGH'?'b-high':x.ai_risk==='MEDIUM'?'b-med':'b-low';
+    const isOpen=x.outcome==='OPEN';
+    return \`<div class="signal-card">
       <div class="signal-top">
         <span class="signal-symbol">\${x.symbol||'–'}</span>
         <span class="signal-time">\${timeAgo(x.created_at)}</span>
       </div>
-      <div class="signal-row">
+      <div class="signal-mid">
         <span class="signal-trigger">\${x.trigger||'–'}</span>
         <span class="signal-score" style="color:\${scoreColor(sc)}">\${sc}/100</span>
       </div>
       <div class="signal-prices">
         <span>E: \${fmt(x.ai_entry)}</span>
-        <span style="color:var(--accent2)">TP: \${fmt(x.ai_take_profit)}</span>
-        <span style="color:var(--danger)">SL: \${fmt(x.ai_stop_loss)}</span>
+        <span style="color:var(--green)">TP: \${fmt(x.ai_take_profit)}</span>
+        <span style="color:var(--red)">SL: \${fmt(x.ai_stop_loss)}</span>
       </div>
-      <div class="score-bar-bg"><div class="score-bar-fill" style="width:\${sc}%;background:\${scoreColor(sc)}"></div></div>
+      <div class="signal-bar-bg"><div class="signal-bar-fill" style="width:\${sc}%;background:\${scoreColor(sc)}"></div></div>
       <div class="signal-footer">
         <div class="badges">
-          <span class="badge \${recCls}">\${x.ai_recommendation==='RECOMMENDED'?'✓':'✗'}</span>
+          <span class="badge \${recCls}">\${x.ai_recommendation==='RECOMMENDED'?'Empf.':'Nein'}</span>
           <span class="badge \${riskCls}">\${x.ai_risk||'–'}</span>
           <span class="badge \${outCls}" id="out-\${x.id}">\${x.outcome||'–'}</span>
         </div>
         \${isOpen&&SECRET?\`<div style="display:flex;gap:6px">
-          <button class="btn btn-win" onclick="setOutcome('\${x.id}','WIN',this)">✅ WIN</button>
-          <button class="btn btn-loss" onclick="setOutcome('\${x.id}','LOSS',this)">❌ LOSS</button>
+          <button class="btn btn-win" onclick="setOutcome('\${x.id}','WIN',this)">WIN</button>
+          <button class="btn btn-loss" onclick="setOutcome('\${x.id}','LOSS',this)">LOSS</button>
         </div>\`:''}
       </div>
     </div>\`;
   }).join('');
 }
 
-// ── Tools ──
-async function toolAction(action) {
-  if (!SECRET && action !== 'health') { showToast('⚠️ Secret in URL benötigt'); return; }
-  showToast('⏳ Wird ausgeführt…');
+// ── Outcome ──
+async function setOutcome(id,outcome,btn) {
+  const all=btn.parentElement.querySelectorAll('button');
+  all.forEach(b=>b.disabled=true);
   try {
-    if (action === 'health') {
-      const d = await fetch('/health').then(r=>r.json());
-      showToast('✅ Worker OK · ' + new Date(d.time).toLocaleTimeString('de-DE'), 3000);
-    } else if (action === 'telegram') {
-      await fetch('/test-telegram?secret='+encodeURIComponent(SECRET));
-      showToast('📨 Telegram Testnachricht gesendet!');
-    } else if (action === 'morning') {
-      await fetch('/morning-brief?secret='+encodeURIComponent(SECRET));
-      showToast('🌅 Morning Brief gesendet!');
-    } else if (action === 'outcomes') {
-      const d = await fetch('/check-outcomes?secret='+encodeURIComponent(SECRET)).then(r=>r.json());
-      showToast('🔄 ' + (d.result?.closed||0) + ' Trades geschlossen', 3000);
+    const r=await fetch('/outcome?id='+id+'&outcome='+outcome+'&secret='+encodeURIComponent(SECRET),{method:'POST'}).then(r=>r.json());
+    if(r.status==='ok'){
+      const badge=document.getElementById('out-'+id);
+      if(badge){badge.className='badge '+(outcome==='WIN'?'b-win':'b-loss');badge.textContent=outcome;}
+      btn.parentElement.style.display='none';
+      loadStats();
+      showToast(outcome==='WIN'?'WIN gespeichert!':'LOSS gespeichert!');
     }
-  } catch(e) { showToast('❌ Fehler: ' + e.message); }
+  } catch(e){all.forEach(b=>b.disabled=false);showToast('Fehler: '+e.message);}
 }
 
-// ── Copy command ──
+// ── Tools ──
+async function toolAction(action) {
+  if(!SECRET&&action!=='health'){showToast('Secret in URL benoetigt');return;}
+  showToast('Wird ausgefuehrt...');
+  try {
+    if(action==='health'){
+      const d=await fetch('/health').then(r=>r.json());
+      showToast('Worker OK: '+new Date(d.time).toLocaleTimeString('de-DE'),3000);
+    } else if(action==='telegram'){
+      await fetch('/test-telegram?secret='+encodeURIComponent(SECRET));
+      showToast('Telegram Testnachricht gesendet!');
+    } else if(action==='morning'){
+      await fetch('/morning-brief?secret='+encodeURIComponent(SECRET));
+      showToast('Morning Brief gesendet!');
+    } else if(action==='outcomes'){
+      const d=await fetch('/check-outcomes?secret='+encodeURIComponent(SECRET)).then(r=>r.json());
+      showToast((d.result?.closed||0)+' Trades geschlossen',3000);
+    }
+  } catch(e){showToast('Fehler: '+e.message);}
+}
+
+// ── Copy ──
 function copyCmd(cmd) {
-  navigator.clipboard.writeText(cmd).then(() => showToast('📋 Kopiert: ' + cmd));
+  navigator.clipboard.writeText(cmd).then(()=>showToast('Kopiert: '+cmd));
 }
 
 // Init
-loadStats();
-loadSnapshots();
+loadHome();
 </script>
 </body>
 </html>`;
