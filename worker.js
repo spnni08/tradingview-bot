@@ -16,6 +16,12 @@ export default {
       return Response.json({ status: "ok", result });
     }
 
+    if (request.method === "GET" && url.pathname === "/morning-brief") {
+      if (!checkSecret(url, env)) return unauthorized();
+      await morningBrief(env);
+      return Response.json({ status: "ok", message: "Morning Brief gesendet" });
+    }
+
     if (request.method === "GET" && url.pathname === "/stats") {
       return Response.json(await getStats(env));
     }
@@ -656,19 +662,104 @@ Ergebnis: ${outcome === 'WIN' ? '🏆 WIN' : '💔 LOSS'}`);
   return { checked, closed, notifications: notifications.length };
 }
 
+// ─── Morning Brief ───────────────────────────────────────────────────────────
+
+function getBiasFromSnapshot(snap) {
+  const price = Number(snap.price);
+  const ema200 = Number(snap.ema200);
+  const ema50 = Number(snap.ema50);
+  const rsi = Number(snap.rsi);
+  const trend = snap.trend || "";
+
+  if (!price || !ema200) return { bias: "NEUTRAL", emoji: "⚪", reason: "Keine EMA200 Daten" };
+
+  // Hauptregel: Preis vs EMA200
+  const overEma200 = price > ema200;
+  const underEma200 = price < ema200;
+
+  // EMA200 flach? (EMA50 und EMA200 sehr nah beieinander)
+  const emaSpreadPct = Math.abs(ema50 - ema200) / ema200 * 100;
+  const emaFlat = emaSpreadPct < 0.3;
+
+  if (emaFlat) {
+    return { bias: "NEUTRAL", emoji: "⚪", reason: "EMA200 flach — kein Trade heute" };
+  }
+
+  if (overEma200 && trend === "bullish") {
+    return { bias: "LONG", emoji: "🟢", reason: `Preis über EMA200 · RSI ${rsi.toFixed(0)} · Trend bullish` };
+  }
+  if (underEma200 && trend === "bearish") {
+    return { bias: "SHORT", emoji: "🔴", reason: `Preis unter EMA200 · RSI ${rsi.toFixed(0)} · Trend bearish` };
+  }
+  if (overEma200) {
+    return { bias: "LONG", emoji: "🟡", reason: `Preis über EMA200 · RSI ${rsi.toFixed(0)} · Trend gemischt` };
+  }
+  if (underEma200) {
+    return { bias: "SHORT", emoji: "🟡", reason: `Preis unter EMA200 · RSI ${rsi.toFixed(0)} · Trend gemischt` };
+  }
+
+  return { bias: "NEUTRAL", emoji: "⚪", reason: "Kein klarer Bias" };
+}
+
+async function morningBrief(env) {
+  const snapshots = await getSnapshots(env);
+
+  if (!snapshots.length) {
+    await sendTelegram(env, "🌅 WAVESCOUT Morning Brief\n\nNoch keine Snapshot-Daten vorhanden.");
+    return;
+  }
+
+  const now = new Date();
+  const dayNames = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
+  const monthNames = ["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"];
+  const dateStr = `${dayNames[now.getDay()]}, ${now.getDate()}. ${monthNames[now.getMonth()]} ${now.getFullYear()}`;
+
+  const stats = await getStats(env);
+
+  let lines = [];
+  lines.push(`🌅 WAVESCOUT Morning Brief`);
+  lines.push(`📅 ${dateStr}`);
+  lines.push(``);
+  lines.push(`📈 Stats: ${stats.wins}W / ${stats.losses}L · Winrate ${stats.winrate}%`);
+  lines.push(``);
+  lines.push(`─────────────────`);
+
+  // Nur relevante Symbole (keine Duplikate, keine leeren)
+  const seen = new Set();
+  for (const snap of snapshots) {
+    const symbol = snap.symbol;
+    if (!symbol || seen.has(symbol)) continue;
+    seen.add(symbol);
+
+    const { bias, emoji, reason } = getBiasFromSnapshot(snap);
+    const price = Number(snap.price);
+    const support = Number(snap.support);
+    const resistance = Number(snap.resistance);
+
+    lines.push(``);
+    lines.push(`${emoji} ${snap.name || symbol}`);
+    lines.push(`Bias: ${bias}`);
+    lines.push(`Preis: ${price ? price.toLocaleString('de-DE', {minimumFractionDigits: 2, maximumFractionDigits: 4}) : '–'}`);
+    lines.push(`${reason}`);
+    if (support && resistance) {
+      lines.push(`Zonen: S ${support.toFixed(2)} | R ${resistance.toFixed(2)}`);
+    }
+  }
+
+  lines.push(``);
+  lines.push(`─────────────────`);
+  lines.push(`⚠️ Nur in Bias-Richtung traden. Eigene Prüfung erforderlich.`);
+
+  await sendTelegram(env, lines.join("\n"));
+}
+
 // ─── Daily Summary ───────────────────────────────────────────────────────────
 
 async function dailySummary(env) {
-  const stats = await getStats(env);
-  const text = `📊 WAVESCOUT Daily Summary
-
-Signale heute: ${stats.total} gesamt
-Open: ${stats.open} | Wins: ${stats.wins} | Losses: ${stats.losses}
-Winrate: ${stats.winrate}%
-
-⏰ Nächste Analyse: morgen 07:00 Uhr`;
-
-  await sendTelegram(env, text);
+  // Erst Outcome Tracking laufen lassen
+  await checkOutcomes(env);
+  // Dann Morning Brief senden
+  await morningBrief(env);
 }
 
 // ─── Dashboard HTML ──────────────────────────────────────────────────────────
