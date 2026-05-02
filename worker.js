@@ -10,6 +10,12 @@ export default {
       return Response.json(await sendTelegram(env, "✅ WAVESCOUT Telegram Test funktioniert."));
     }
 
+    if (request.method === "GET" && url.pathname === "/check-outcomes") {
+      if (!checkSecret(url, env)) return unauthorized();
+      const result = await checkOutcomes(env);
+      return Response.json({ status: "ok", result });
+    }
+
     if (request.method === "GET" && url.pathname === "/stats") {
       return Response.json(await getStats(env));
     }
@@ -105,7 +111,14 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(dailySummary(env));
+    const cron = controller.cron;
+    if (cron === "0 7 * * *") {
+      // 07:00 Uhr → Daily Summary
+      ctx.waitUntil(dailySummary(env));
+    } else {
+      // Jede andere Stunde → Outcome Tracking
+      ctx.waitUntil(checkOutcomes(env));
+    }
   }
 };
 
@@ -514,6 +527,133 @@ async function sendTelegram(env, text) {
     }
   );
   return response.json();
+}
+
+// ─── Outcome Tracking ───────────────────────────────────────────────────────
+
+async function getCurrentPrice(symbol) {
+  // Binance symbol cleaning: remove .P suffix (perpetuals), keep base format
+  const cleaned = symbol.replace(/\.P$/, '').replace(/USDT\.P$/, 'USDT');
+  
+  try {
+    const res = await fetch(
+      `https://api.binance.com/api/v3/ticker/price?symbol=${cleaned}`,
+      { headers: { 'Accept': 'application/json' } }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return Number(data.price) || null;
+  } catch {
+    // Fallback: try futures price
+    try {
+      const res2 = await fetch(
+        `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${cleaned}`
+      );
+      const data2 = await res2.json();
+      return Number(data2.price) || null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function checkOutcomes(env) {
+  let checked = 0;
+  let closed = 0;
+  const notifications = [];
+
+  try {
+    // Alle offenen Signale laden die TP und SL haben
+    const result = await env.DB.prepare(`
+      SELECT id, symbol, ai_direction, ai_entry, ai_take_profit, ai_stop_loss,
+             created_at, name, ai_score
+      FROM signals
+      WHERE outcome = 'OPEN'
+        AND ai_take_profit IS NOT NULL AND ai_take_profit > 0
+        AND ai_stop_loss IS NOT NULL AND ai_stop_loss > 0
+      ORDER BY created_at DESC
+      LIMIT 100
+    `).all();
+
+    const signals = result.results || [];
+    checked = signals.length;
+
+    // Preise cachen um nicht zu viele API calls zu machen
+    const priceCache = {};
+
+    for (const sig of signals) {
+      const symbol = sig.symbol;
+
+      // Preis aus Cache oder neu holen
+      if (!priceCache[symbol]) {
+        priceCache[symbol] = await getCurrentPrice(symbol);
+        // Kurz warten um Rate Limits zu vermeiden
+        await new Promise(r => setTimeout(r, 150));
+      }
+
+      const price = priceCache[symbol];
+      if (!price) continue;
+
+      const tp = Number(sig.ai_take_profit);
+      const sl = Number(sig.ai_stop_loss);
+      const entry = Number(sig.ai_entry);
+      const direction = sig.ai_direction;
+
+      let outcome = null;
+
+      if (direction === 'LONG') {
+        if (price >= tp) outcome = 'WIN';
+        else if (price <= sl) outcome = 'LOSS';
+      } else if (direction === 'SHORT') {
+        if (price <= tp) outcome = 'WIN';
+        else if (price >= sl) outcome = 'LOSS';
+      }
+
+      if (outcome) {
+        // In DB updaten
+        await env.DB.prepare(
+          `UPDATE signals SET outcome = ? WHERE id = ?`
+        ).bind(outcome, sig.id).run();
+
+        closed++;
+
+        // Telegram Benachrichtigung vorbereiten
+        const pnlPct = direction === 'LONG'
+          ? (((price - entry) / entry) * 100).toFixed(2)
+          : (((entry - price) / entry) * 100).toFixed(2);
+
+        const emoji = outcome === 'WIN' ? '✅' : '❌';
+        const rr = entry > 0
+          ? (Math.abs(tp - entry) / Math.abs(entry - sl)).toFixed(2)
+          : '–';
+
+        notifications.push(`${emoji} TRADE GESCHLOSSEN
+
+📊 ${sig.name || symbol} (${direction})
+Score war: ${sig.ai_score}/100
+
+Entry: ${entry.toFixed(2)}
+Exit: ${price.toFixed(2)}
+${outcome === 'WIN' ? 'TP' : 'SL'} getroffen
+
+P&L: ${outcome === 'WIN' ? '+' : ''}${pnlPct}%
+R/R war: 1:${rr}
+
+Ergebnis: ${outcome === 'WIN' ? '🏆 WIN' : '💔 LOSS'}`);
+      }
+    }
+
+    // Telegram Nachrichten senden
+    for (const msg of notifications) {
+      await sendTelegram(env, msg);
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+  } catch (err) {
+    console.error('checkOutcomes Fehler:', err);
+  }
+
+  return { checked, closed, notifications: notifications.length };
 }
 
 // ─── Daily Summary ───────────────────────────────────────────────────────────
