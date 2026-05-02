@@ -24,6 +24,10 @@ export default {
       });
     }
 
+    if (request.method === "GET" && url.pathname === "/snapshots") {
+      return Response.json(await getSnapshots(env));
+    }
+
     if (request.method === "POST" && url.pathname === "/snapshot") {
       if (!checkSecret(url, env)) return unauthorized();
       const signal = await request.json();
@@ -398,6 +402,27 @@ async function getSnapshot(env, symbol) {
   ).bind(symbol).first();
   return row ? JSON.parse(row.raw_signal) : null;
 }
+async function getSnapshots(env) {
+  try {
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS snapshots (
+        symbol TEXT PRIMARY KEY,
+        updated_at INTEGER,
+        raw_signal TEXT
+      )
+    `).run();
+    const result = await env.DB.prepare(
+      `SELECT raw_signal, updated_at FROM snapshots ORDER BY updated_at DESC LIMIT 20`
+    ).all();
+    return (result.results || []).map(row => {
+      const s = JSON.parse(row.raw_signal);
+      s._updated_at = row.updated_at;
+      return s;
+    });
+  } catch {
+    return [];
+  }
+}
 
 async function getStats(env) {
   try {
@@ -513,72 +538,462 @@ function dashboardHtml() {
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WAVESCOUT Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>WAVESCOUT</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: #0b0f14; color: #e8eef5; padding: 24px; }
-    h1 { font-size: 1.5rem; margin-bottom: 20px; }
-    h2 { font-size: 1.1rem; margin-bottom: 12px; color: #a0b4c8; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }
-    .stat { background: #141b24; border-radius: 12px; padding: 16px; text-align: center; }
-    .stat-value { font-size: 2rem; font-weight: bold; color: #4fc3f7; }
-    .stat-label { font-size: 0.8rem; color: #607d8b; margin-top: 4px; }
-    .card { background: #141b24; border-radius: 14px; padding: 20px; margin-bottom: 16px; overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    th { border-bottom: 2px solid #263241; padding: 10px 8px; text-align: left; color: #607d8b; }
-    td { border-bottom: 1px solid #1a2332; padding: 8px; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
-    .badge-win { background: #1b4332; color: #4ade80; }
-    .badge-open { background: #1a2c3d; color: #4fc3f7; }
-    .badge-loss { background: #3b1010; color: #f87171; }
-    .badge-rec { background: #1b3a1b; color: #4ade80; }
-    .badge-norec { background: #3b1010; color: #f87171; }
+    :root {
+      --bg: #080c10;
+      --surface: #0e1520;
+      --surface2: #141e2c;
+      --border: #1e2d40;
+      --accent: #00d4ff;
+      --accent2: #00ff9d;
+      --warn: #ffb800;
+      --danger: #ff4444;
+      --text: #cfe0f0;
+      --muted: #4a6070;
+      --font-display: 'Syne', sans-serif;
+      --font-mono: 'Space Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font-display);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding-bottom: 40px;
+    }
+
+    /* ── Header ── */
+    .header {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(8,12,16,0.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 16px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .header-title {
+      font-size: 1.2rem; font-weight: 800; letter-spacing: 0.08em;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .header-time {
+      font-family: var(--font-mono); font-size: 0.7rem; color: var(--muted);
+    }
+
+    /* ── Stats grid ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .stat-cell {
+      background: var(--surface);
+      padding: 14px 8px;
+      text-align: center;
+    }
+    .stat-val {
+      font-family: var(--font-mono);
+      font-size: 1.3rem; font-weight: 700;
+      color: var(--accent);
+      line-height: 1;
+    }
+    .stat-val.green { color: var(--accent2); }
+    .stat-val.red { color: var(--danger); }
+    .stat-val.yellow { color: var(--warn); }
+    .stat-lbl {
+      font-size: 0.6rem; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.08em;
+      margin-top: 4px;
+    }
+
+    /* ── Section header ── */
+    .section-header {
+      padding: 18px 16px 10px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .section-title {
+      font-size: 0.7rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--muted);
+    }
+
+    /* ── Snapshots (Jetzt prüfen) ── */
+    .snapshots-list { padding: 0 12px; display: flex; flex-direction: column; gap: 8px; }
+
+    .snapshot-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px;
+    }
+    .snapshot-info { flex: 1; min-width: 0; }
+    .snapshot-symbol {
+      font-size: 1rem; font-weight: 800; letter-spacing: 0.04em;
+      color: #fff;
+    }
+    .snapshot-meta {
+      font-family: var(--font-mono); font-size: 0.65rem; color: var(--muted);
+      margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .snapshot-price {
+      font-family: var(--font-mono); font-size: 0.9rem;
+      color: var(--accent); font-weight: 700;
+      white-space: nowrap;
+    }
+    .btn-check {
+      background: linear-gradient(135deg, var(--accent), #0099bb);
+      color: #000; font-family: var(--font-display);
+      font-size: 0.72rem; font-weight: 700;
+      border: none; border-radius: 8px;
+      padding: 9px 14px; cursor: pointer;
+      white-space: nowrap; letter-spacing: 0.04em;
+      transition: opacity 0.15s, transform 0.1s;
+      flex-shrink: 0;
+    }
+    .btn-check:active { transform: scale(0.96); opacity: 0.85; }
+    .btn-check:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .btn-check.loading { opacity: 0.6; }
+
+    /* ── Result card (nach Prüfung) ── */
+    .result-card {
+      margin: 8px 12px 0;
+      background: var(--surface2);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      animation: slideIn 0.25s ease;
+    }
+    @keyframes slideIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:none; } }
+
+    .result-header {
+      padding: 12px 14px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+    .result-badge {
+      font-size: 0.75rem; font-weight: 800; letter-spacing: 0.06em;
+      padding: 4px 10px; border-radius: 6px;
+    }
+    .result-badge.rec { background: rgba(0,255,157,0.15); color: var(--accent2); }
+    .result-badge.norec { background: rgba(255,68,68,0.15); color: var(--danger); }
+    .result-score {
+      font-family: var(--font-mono); font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .result-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+    .result-row { display: flex; justify-content: space-between; align-items: center; }
+    .result-key { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    .result-val { font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); }
+    .result-reason {
+      font-size: 0.78rem; color: var(--text); line-height: 1.5;
+      padding-top: 6px; border-top: 1px solid var(--border);
+    }
+    .result-plan {
+      background: rgba(0,212,255,0.05);
+      border: 1px solid rgba(0,212,255,0.15);
+      border-radius: 8px; padding: 10px 12px;
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
+      text-align: center;
+    }
+    .plan-item-lbl { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    .plan-item-val { font-family: var(--font-mono); font-size: 0.82rem; color: var(--accent); margin-top: 2px; font-weight: 700; }
+
+    /* ── Signal history ── */
+    .signals-list { padding: 0 12px; display: flex; flex-direction: column; gap: 8px; }
+
+    .signal-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+    }
+    .signal-top {
+      display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;
+    }
+    .signal-symbol { font-weight: 800; font-size: 0.95rem; }
+    .signal-time { font-family: var(--font-mono); font-size: 0.62rem; color: var(--muted); }
+    .signal-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
+    .signal-trigger { font-size: 0.7rem; color: var(--muted); font-family: var(--font-mono); }
+    .badges { display: flex; gap: 6px; flex-wrap: wrap; }
+    .badge {
+      font-size: 0.65rem; font-weight: 700; padding: 3px 8px; border-radius: 5px;
+      letter-spacing: 0.04em;
+    }
+    .b-win { background: rgba(0,255,157,0.15); color: var(--accent2); }
+    .b-open { background: rgba(0,212,255,0.12); color: var(--accent); }
+    .b-loss { background: rgba(255,68,68,0.15); color: var(--danger); }
+    .b-rec { background: rgba(0,255,157,0.1); color: var(--accent2); }
+    .b-norec { background: rgba(255,68,68,0.1); color: var(--danger); }
+    .b-low { background: rgba(0,255,157,0.08); color: var(--accent2); }
+    .b-med { background: rgba(255,184,0,0.1); color: var(--warn); }
+    .b-high { background: rgba(255,68,68,0.1); color: var(--danger); }
+    .signal-score {
+      font-family: var(--font-mono); font-size: 0.78rem; font-weight: 700;
+      color: var(--text);
+    }
+
+    /* ── Empty state ── */
+    .empty { text-align: center; padding: 32px 16px; color: var(--muted); font-size: 0.85rem; }
+
+    /* ── Refresh btn ── */
+    .btn-refresh {
+      background: none; border: 1px solid var(--border);
+      color: var(--muted); font-family: var(--font-display);
+      font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em;
+      padding: 6px 12px; border-radius: 6px; cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .btn-refresh:active { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Score bar ── */
+    .score-bar-wrap { margin-top: 6px; }
+    .score-bar-bg { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+    .score-bar-fill { height: 100%; border-radius: 2px; transition: width 0.5s ease; }
+
+    /* ── Divider ── */
+    .divider { height: 1px; background: var(--border); margin: 16px 12px 0; }
+
+    /* ── Toast ── */
+    .toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); font-size: 0.8rem; padding: 10px 20px;
+      border-radius: 20px; z-index: 999; pointer-events: none;
+      opacity: 0; transition: opacity 0.2s;
+      white-space: nowrap; max-width: 90vw; text-align: center;
+    }
+    .toast.show { opacity: 1; }
   </style>
 </head>
 <body>
-  <h1>🌊 WAVESCOUT Dashboard</h1>
-  <div class="grid" id="stats">
-    <div class="stat"><div class="stat-value">–</div><div class="stat-label">Total</div></div>
-  </div>
-  <div class="card">
-    <h2>Letzte Signale</h2>
-    <table id="history"><tr><td>Lade...</td></tr></table>
-  </div>
-<script>
-async function load() {
-  const stats = await fetch('/stats').then(r => r.json());
-  document.getElementById('stats').innerHTML = \`
-    <div class="stat"><div class="stat-value">\${stats.total}</div><div class="stat-label">Total</div></div>
-    <div class="stat"><div class="stat-value" style="color:#4ade80">\${stats.wins}</div><div class="stat-label">Wins</div></div>
-    <div class="stat"><div class="stat-value" style="color:#f87171">\${stats.losses}</div><div class="stat-label">Losses</div></div>
-    <div class="stat"><div class="stat-value" style="color:#4fc3f7">\${stats.open}</div><div class="stat-label">Open</div></div>
-    <div class="stat"><div class="stat-value" style="color:#fbbf24">\${stats.winrate}%</div><div class="stat-label">Winrate</div></div>
-  \`;
 
-  const hist = await fetch('/history').then(r => r.json());
-  document.getElementById('history').innerHTML =
-    '<tr><th>Zeit</th><th>Symbol</th><th>Signal</th><th>Score</th><th>Risiko</th><th>Empfehlung</th><th>Outcome</th></tr>' +
-    hist.map(x => {
-      const t = new Date(x.created_at).toLocaleString('de-DE');
-      const rec = x.ai_recommendation === 'RECOMMENDED'
-        ? '<span class="badge badge-rec">✓ Empfohlen</span>'
-        : '<span class="badge badge-norec">✗ Nein</span>';
-      const out = x.outcome === 'WIN' ? '<span class="badge badge-win">WIN</span>'
-                : x.outcome === 'LOSS' ? '<span class="badge badge-loss">LOSS</span>'
-                : '<span class="badge badge-open">OPEN</span>';
-      return \`<tr>
-        <td>\${t}</td>
-        <td><b>\${x.symbol}</b></td>
-        <td>\${x.trigger || '–'}</td>
-        <td>\${x.ai_score}/100</td>
-        <td>\${x.ai_risk}</td>
-        <td>\${rec}</td>
-        <td>\${out}</td>
-      </tr>\`;
-    }).join('');
+<div class="header">
+  <div class="header-title">◈ WAVESCOUT</div>
+  <div class="header-time" id="clock">–</div>
+</div>
+
+<div class="stats-grid" id="stats-grid">
+  <div class="stat-cell"><div class="stat-val">–</div><div class="stat-lbl">Total</div></div>
+  <div class="stat-cell"><div class="stat-val green">–</div><div class="stat-lbl">Wins</div></div>
+  <div class="stat-cell"><div class="stat-val red">–</div><div class="stat-lbl">Losses</div></div>
+  <div class="stat-cell"><div class="stat-val">–</div><div class="stat-lbl">Open</div></div>
+  <div class="stat-cell"><div class="stat-val yellow">–</div><div class="stat-lbl">Win%</div></div>
+</div>
+
+<!-- Snapshots / Jetzt prüfen -->
+<div class="section-header">
+  <div class="section-title">⚡ Jetzt prüfen</div>
+  <button class="btn-refresh" onclick="loadSnapshots()">↻ Refresh</button>
+</div>
+<div class="snapshots-list" id="snapshots-list">
+  <div class="empty">Lade Snapshots…</div>
+</div>
+
+<div class="divider"></div>
+
+<!-- Signal History -->
+<div class="section-header">
+  <div class="section-title">📋 Letzte Signale</div>
+  <button class="btn-refresh" onclick="loadHistory()">↻ Refresh</button>
+</div>
+<div class="signals-list" id="signals-list">
+  <div class="empty">Lade Signale…</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const SECRET = new URLSearchParams(location.search).get('secret') || '';
+
+function fmt(n, d=2) {
+  if (!n && n !== 0) return '–';
+  return Number(n).toLocaleString('de-DE', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
-load();
+function timeAgo(ts) {
+  const diff = Date.now() - ts;
+  if (diff < 60000) return 'gerade eben';
+  if (diff < 3600000) return Math.floor(diff/60000) + 'm';
+  if (diff < 86400000) return Math.floor(diff/3600000) + 'h';
+  return Math.floor(diff/86400000) + 'd';
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+function scoreColor(s) {
+  if (s >= 70) return 'var(--accent2)';
+  if (s >= 50) return 'var(--warn)';
+  return 'var(--danger)';
+}
+
+// ── Clock ──
+function updateClock() {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('de-DE', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+// ── Stats ──
+async function loadStats() {
+  const s = await fetch('/stats').then(r => r.json()).catch(() => ({}));
+  document.getElementById('stats-grid').innerHTML = \`
+    <div class="stat-cell"><div class="stat-val">\${s.total||0}</div><div class="stat-lbl">Total</div></div>
+    <div class="stat-cell"><div class="stat-val green">\${s.wins||0}</div><div class="stat-lbl">Wins</div></div>
+    <div class="stat-cell"><div class="stat-val red">\${s.losses||0}</div><div class="stat-lbl">Losses</div></div>
+    <div class="stat-cell"><div class="stat-val">\${s.open||0}</div><div class="stat-lbl">Open</div></div>
+    <div class="stat-cell"><div class="stat-val yellow">\${s.winrate||0}%</div><div class="stat-lbl">Win%</div></div>
+  \`;
+}
+
+// ── Snapshots ──
+async function loadSnapshots() {
+  const el = document.getElementById('snapshots-list');
+  el.innerHTML = '<div class="empty">Lade…</div>';
+  const snaps = await fetch('/snapshots').then(r => r.json()).catch(() => []);
+  if (!snaps.length) {
+    el.innerHTML = '<div class="empty">Noch keine Snapshots.<br>TradingView muss erst Daten senden.</div>';
+    return;
+  }
+  el.innerHTML = snaps.map(s => \`
+    <div>
+      <div class="snapshot-card">
+        <div class="snapshot-info">
+          <div class="snapshot-symbol">\${s.symbol}</div>
+          <div class="snapshot-meta">RSI \${fmt(s.rsi,1)} · EMA50 \${fmt(s.ema50,0)} · Trend: \${s.trend||'–'}</div>
+        </div>
+        <div class="snapshot-price">\${fmt(s.price)}</div>
+        <button class="btn-check" onclick="checkNow('\${s.symbol}', this)" \${SECRET?'':'disabled'}>
+          \${SECRET ? '🔍 Prüfen' : '🔒 Secret'}
+        </button>
+      </div>
+      <div class="result-card" id="result-\${s.symbol}" style="display:none"></div>
+    </div>
+  \`).join('');
+}
+
+// ── Jetzt prüfen ──
+async function checkNow(symbol, btn) {
+  btn.disabled = true;
+  btn.textContent = '⏳ …';
+  btn.classList.add('loading');
+
+  const resultEl = document.getElementById('result-' + symbol);
+
+  try {
+    const url = '/ask?symbol=' + encodeURIComponent(symbol) + '&secret=' + encodeURIComponent(SECRET);
+    const data = await fetch(url).then(r => r.json());
+
+    if (data.error) throw new Error(data.error);
+
+    const ai = data.ai || {};
+    const snap = data.snapshot || {};
+    const isRec = ai.recommendation === 'RECOMMENDED';
+    const sc = Number(ai.score) || 0;
+    const rr = (ai.entry && ai.take_profit && ai.stop_loss)
+      ? (Math.abs(ai.take_profit - ai.entry) / Math.abs(ai.entry - ai.stop_loss)).toFixed(2)
+      : null;
+
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = \`
+      <div class="result-header">
+        <span class="result-badge \${isRec?'rec':'norec'}">\${isRec?'✓ EMPFOHLEN':'✗ NICHT EMPFOHLEN'}</span>
+        <span class="result-score" style="color:\${scoreColor(sc)}">\${sc}/100</span>
+      </div>
+      <div class="result-body">
+        <div class="result-row">
+          <span class="result-key">Richtung</span>
+          <span class="result-val">\${ai.direction||'–'}</span>
+        </div>
+        <div class="result-row">
+          <span class="result-key">Risiko</span>
+          <span class="result-val">\${ai.risk||'–'}</span>
+        </div>
+        <div class="result-row">
+          <span class="result-key">Confidence</span>
+          <span class="result-val">\${ai.confidence||0}%</span>
+        </div>
+        <div class="score-bar-wrap">
+          <div class="score-bar-bg">
+            <div class="score-bar-fill" style="width:\${sc}%;background:\${scoreColor(sc)}"></div>
+          </div>
+        </div>
+        <div class="result-plan">
+          <div><div class="plan-item-lbl">Entry</div><div class="plan-item-val">\${fmt(ai.entry)}</div></div>
+          <div><div class="plan-item-lbl">Take Profit</div><div class="plan-item-val" style="color:var(--accent2)">\${fmt(ai.take_profit)}</div></div>
+          <div><div class="plan-item-lbl">Stop Loss</div><div class="plan-item-val" style="color:var(--danger)">\${fmt(ai.stop_loss)}</div></div>
+        </div>
+        \${rr ? \`<div class="result-row"><span class="result-key">R/R</span><span class="result-val">1:\${rr}</span></div>\` : ''}
+        <div class="result-reason">\${ai.reason||''}</div>
+      </div>
+    \`;
+
+    showToast(isRec ? '✅ Signal empfohlen!' : '⛔ Nicht empfohlen');
+  } catch(e) {
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = \`<div style="padding:12px 14px;color:var(--danger);font-size:0.8rem">Fehler: \${e.message}</div>\`;
+    showToast('❌ Fehler bei Analyse');
+  }
+
+  btn.disabled = false;
+  btn.textContent = '🔍 Prüfen';
+  btn.classList.remove('loading');
+}
+
+// ── History ──
+async function loadHistory() {
+  const el = document.getElementById('signals-list');
+  el.innerHTML = '<div class="empty">Lade…</div>';
+  const hist = await fetch('/history').then(r => r.json()).catch(() => []);
+  if (!hist.length) {
+    el.innerHTML = '<div class="empty">Noch keine Signale vorhanden.</div>';
+    return;
+  }
+  el.innerHTML = hist.map(x => {
+    const sc = Number(x.ai_score)||0;
+    const outCls = x.outcome==='WIN'?'b-win':x.outcome==='LOSS'?'b-loss':'b-open';
+    const recCls = x.ai_recommendation==='RECOMMENDED'?'b-rec':'b-norec';
+    const riskCls = x.ai_risk==='HIGH'?'b-high':x.ai_risk==='MEDIUM'?'b-med':'b-low';
+    return \`
+      <div class="signal-card">
+        <div class="signal-top">
+          <span class="signal-symbol">\${x.symbol||'–'}</span>
+          <span class="signal-time">\${timeAgo(x.created_at)}</span>
+        </div>
+        <div class="signal-row">
+          <span class="signal-trigger">\${x.trigger||'–'}</span>
+          <span class="signal-score" style="color:\${scoreColor(sc)}">\${sc}/100</span>
+        </div>
+        <div style="margin-top:8px">
+          <div class="score-bar-bg">
+            <div class="score-bar-fill" style="width:\${sc}%;background:\${scoreColor(sc)}"></div>
+          </div>
+        </div>
+        <div class="badges" style="margin-top:8px">
+          <span class="badge \${recCls}">\${x.ai_recommendation==='RECOMMENDED'?'✓ Empf.':'✗ Nein'}</span>
+          <span class="badge \${riskCls}">\${x.ai_risk||'–'}</span>
+          <span class="badge \${outCls}">\${x.outcome||'–'}</span>
+        </div>
+      </div>
+    \`;
+  }).join('');
+}
+
+loadStats();
+loadSnapshots();
+loadHistory();
 </script>
 </body>
 </html>`;
