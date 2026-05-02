@@ -5,4 +5,4 @@ compatibility_date = "2024-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "wavescout_db"
-database_id = "DEINE_DATABASE_ID_HIER_EINTRAGEN"
+database_id = "550e7c98-5757-451d-b0ea-5c8f374c53b1"
