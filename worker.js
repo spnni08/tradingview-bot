@@ -57,6 +57,10 @@ export default {
       return Response.json(await getBacktesting(env));
     }
 
+    if (request.method === "GET" && url.pathname === "/analytics") {
+      return Response.json(await getAnalytics(env));
+    }
+
     if (request.method === "GET" && url.pathname === "/dashboard") {
       return new Response(dashboardHtml(), {
         headers: { "Content-Type": "text/html;charset=utf-8" }
@@ -71,10 +75,11 @@ export default {
       if (!checkSecret(url, env)) return unauthorized();
       const id = url.searchParams.get("id");
       const outcome = url.searchParams.get("outcome");
+      const exitPrice = url.searchParams.get("exit_price") ? Number(url.searchParams.get("exit_price")) : null;
       if (!id || !["WIN","LOSS","OPEN","SKIPPED"].includes(outcome)) {
         return Response.json({ error: "Missing or invalid id/outcome" }, { status: 400 });
       }
-      await setOutcome(env, id, outcome);
+      await setOutcome(env, id, outcome, exitPrice);
       return Response.json({ status: "ok", id, outcome });
     }
 
@@ -490,6 +495,9 @@ async function saveSignal(env, signal, ai, ruleScore) {
       ai_take_profit REAL,
       ai_stop_loss REAL,
       outcome TEXT,
+      exit_price REAL,
+      pnl_pct REAL,
+      closed_at INTEGER,
       raw_signal TEXT,
       raw_ai TEXT
     )
@@ -636,10 +644,28 @@ async function getHistory(env) {
   }
 }
 
-async function setOutcome(env, id, outcome) {
+async function setOutcome(env, id, outcome, exitPrice) {
+  if (exitPrice) {
+    // Calculate P&L
+    const sig = await env.DB.prepare(`SELECT ai_entry, ai_direction FROM signals WHERE id = ?`).bind(id).first();
+    if (sig) {
+      const entry = Number(sig.ai_entry) || 0;
+      const dir = sig.ai_direction;
+      let pnl = 0;
+      if (entry > 0 && exitPrice > 0) {
+        pnl = dir === 'LONG'
+          ? ((exitPrice - entry) / entry) * 100
+          : ((entry - exitPrice) / entry) * 100;
+      }
+      await env.DB.prepare(
+        `UPDATE signals SET outcome=?, exit_price=?, pnl_pct=?, closed_at=? WHERE id=?`
+      ).bind(outcome, exitPrice, Number(pnl.toFixed(4)), Date.now(), id).run();
+      return;
+    }
+  }
   await env.DB.prepare(
-    `UPDATE signals SET outcome = ? WHERE id = ?`
-  ).bind(outcome, id).run();
+    `UPDATE signals SET outcome=?, closed_at=? WHERE id=?`
+  ).bind(outcome, Date.now(), id).run();
 }
 
 async function getBacktesting(env) {
@@ -732,6 +758,154 @@ async function getBacktesting(env) {
       bySymbol: bySymbol.results||[],
       best: best.results||[],
       worst: worst.results||[]
+    };
+  } catch(e) {
+    return { error: e.message };
+  }
+}
+
+// ─── Analytics (P&L, Equity, Filter-Vergleich) ───────────────────────────────
+
+async function getAnalytics(env) {
+  try {
+    // Alle abgeschlossenen Trades mit P&L
+    const trades = await env.DB.prepare(`
+      SELECT id, created_at, closed_at, symbol, ai_direction, ai_score,
+             ai_recommendation, ai_entry, ai_take_profit, ai_stop_loss,
+             exit_price, pnl_pct, outcome, trend, rsi, ema50, ema200,
+             support, resistance, wave_bias, trigger
+      FROM signals
+      WHERE outcome IN ('WIN','LOSS')
+      ORDER BY created_at ASC
+    `).all();
+
+    const rows = trades.results || [];
+
+    // P&L pro Trade (mit Fallback wenn kein exit_price)
+    const tradeList = rows.map(r => {
+      let pnl = Number(r.pnl_pct) || 0;
+      // Fallback: TP/SL Preis als Exit schätzen
+      if (!pnl && r.ai_entry && r.ai_take_profit && r.ai_stop_loss) {
+        const entry = Number(r.ai_entry);
+        const exitEst = r.outcome === 'WIN'
+          ? Number(r.ai_take_profit)
+          : Number(r.ai_stop_loss);
+        pnl = r.ai_direction === 'LONG'
+          ? ((exitEst - entry) / entry) * 100
+          : ((entry - exitEst) / entry) * 100;
+      }
+      return { ...r, pnl_calc: Number(pnl.toFixed(3)) };
+    });
+
+    // Equity Kurve (10% pro Trade vom Kapital, kumulativ)
+    let equity = 10000;
+    const equityCurve = tradeList.map(t => {
+      const pnlPct = t.pnl_calc;
+      equity = equity * (1 + (pnlPct / 100));
+      return {
+        date: new Date(t.created_at).toISOString().slice(0,10),
+        equity: Number(equity.toFixed(2)),
+        symbol: t.symbol,
+        outcome: t.outcome,
+        pnl: t.pnl_calc
+      };
+    });
+
+    // Gesamt P&L Stats
+    const wins = tradeList.filter(t => t.outcome === 'WIN');
+    const losses = tradeList.filter(t => t.outcome === 'LOSS');
+    const avgWinPct = wins.length ? wins.reduce((s,t) => s + t.pnl_calc, 0) / wins.length : 0;
+    const avgLossPct = losses.length ? losses.reduce((s,t) => s + t.pnl_calc, 0) / losses.length : 0;
+    const totalPnl = tradeList.reduce((s,t) => s + t.pnl_calc, 0);
+    const profitFactor = losses.length && avgLossPct !== 0
+      ? Math.abs(avgWinPct * wins.length / (avgLossPct * losses.length))
+      : 0;
+
+    // Max Drawdown
+    let peak = 10000, maxDD = 0;
+    let runEq = 10000;
+    for (const t of tradeList) {
+      runEq = runEq * (1 + t.pnl_calc / 100);
+      if (runEq > peak) peak = runEq;
+      const dd = ((peak - runEq) / peak) * 100;
+      if (dd > maxDD) maxDD = dd;
+    }
+
+    // Filter-Vergleich: Claude empfohlen vs nicht
+    const recommended = tradeList.filter(t => t.ai_recommendation === 'RECOMMENDED');
+    const notRecommended = tradeList.filter(t => t.ai_recommendation === 'NOT_RECOMMENDED');
+    const recWins = recommended.filter(t => t.outcome === 'WIN');
+    const nrecWins = notRecommended.filter(t => t.outcome === 'WIN');
+
+    // EMA-Filter Analyse: Long über EMA200 vs darunter
+    const longTrades = tradeList.filter(t => t.ai_direction === 'LONG' && t.ai_entry && t.ema200);
+    const longWithBias = longTrades.filter(t => Number(t.ai_entry) > Number(t.ema200));
+    const longAgainstBias = longTrades.filter(t => Number(t.ai_entry) <= Number(t.ema200));
+    const shortTrades = tradeList.filter(t => t.ai_direction === 'SHORT' && t.ai_entry && t.ema200);
+    const shortWithBias = shortTrades.filter(t => Number(t.ai_entry) < Number(t.ema200));
+    const shortAgainstBias = shortTrades.filter(t => Number(t.ai_entry) >= Number(t.ema200));
+
+    const withBias = [...longWithBias, ...shortWithBias];
+    const againstBias = [...longAgainstBias, ...shortAgainstBias];
+
+    function wrOf(arr) {
+      const w = arr.filter(t => t.outcome === 'WIN').length;
+      return arr.length > 0 ? Number(((w / arr.length) * 100).toFixed(1)) : 0;
+    }
+    function avgPnlOf(arr) {
+      return arr.length > 0 ? Number((arr.reduce((s,t) => s + t.pnl_calc, 0) / arr.length).toFixed(2)) : 0;
+    }
+
+    // Score-Buckets: wie performt jede Score-Range
+    const buckets = [
+      { label: '0–49', min: 0, max: 49 },
+      { label: '50–64', min: 50, max: 64 },
+      { label: '65–74', min: 65, max: 74 },
+      { label: '75–100', min: 75, max: 100 },
+    ].map(b => {
+      const bTrades = tradeList.filter(t => t.ai_score >= b.min && t.ai_score <= b.max);
+      return {
+        label: b.label,
+        total: bTrades.length,
+        wr: wrOf(bTrades),
+        avgPnl: avgPnlOf(bTrades)
+      };
+    });
+
+    return {
+      summary: {
+        total: tradeList.length,
+        wins: wins.length,
+        losses: losses.length,
+        winrate: tradeList.length > 0 ? Number(((wins.length / tradeList.length) * 100).toFixed(1)) : 0,
+        total_pnl_pct: Number(totalPnl.toFixed(2)),
+        avg_win_pct: Number(avgWinPct.toFixed(2)),
+        avg_loss_pct: Number(avgLossPct.toFixed(2)),
+        profit_factor: Number(profitFactor.toFixed(2)),
+        max_drawdown_pct: Number(maxDD.toFixed(2)),
+        final_equity: Number(equity.toFixed(2))
+      },
+      equityCurve,
+      filters: {
+        claude: {
+          recommended: { total: recommended.length, wins: recWins.length, wr: wrOf(recommended), avgPnl: avgPnlOf(recommended) },
+          not_recommended: { total: notRecommended.length, wins: nrecWins.length, wr: wrOf(notRecommended), avgPnl: avgPnlOf(notRecommended) }
+        },
+        ema_bias: {
+          with_bias: { total: withBias.length, wr: wrOf(withBias), avgPnl: avgPnlOf(withBias) },
+          against_bias: { total: againstBias.length, wr: wrOf(againstBias), avgPnl: avgPnlOf(againstBias) }
+        },
+        score_buckets: buckets
+      },
+      recentTrades: tradeList.slice(-20).reverse().map(t => ({
+        date: new Date(t.created_at).toISOString().slice(0,10),
+        symbol: t.symbol,
+        direction: t.ai_direction,
+        score: t.ai_score,
+        outcome: t.outcome,
+        pnl: t.pnl_calc,
+        recommended: t.ai_recommendation === 'RECOMMENDED'
+      }))
     };
   } catch(e) {
     return { error: e.message };
@@ -876,10 +1050,15 @@ async function checkOutcomes(env) {
       }
 
       if (outcome) {
-        // In DB updaten
+        // P&L berechnen
+        const pnlPct2 = direction === 'LONG'
+          ? ((price - entry) / entry) * 100
+          : ((entry - price) / entry) * 100;
+
+        // In DB updaten mit Exit-Preis und P&L
         await env.DB.prepare(
-          `UPDATE signals SET outcome = ? WHERE id = ?`
-        ).bind(outcome, sig.id).run();
+          `UPDATE signals SET outcome=?, exit_price=?, pnl_pct=?, closed_at=? WHERE id=?`
+        ).bind(outcome, price, Number(pnlPct2.toFixed(4)), Date.now(), sig.id).run();
 
         closed++;
 
@@ -1767,9 +1946,8 @@ nav::-webkit-scrollbar{display:none}
     <div class="ps">Auswertung aller bisherigen Signale. Der Score-Vergleich zeigt ob höhere Scores wirklich besser performen.</div>
   </div>
   <div class="bt-tabs">
-    <button class="bttab on" onclick="btp('all',this)">Gesamt</button>
-    <button class="bttab" onclick="btp('month',this)">30 Tage</button>
-    <button class="bttab" onclick="btp('week',this)">7 Tage</button>
+    <button class="bttab on" onclick="btp('analytics',this)">📊 Auswertung</button>
+    <button class="bttab" onclick="btp('symbol',this)">💱 Pro Symbol</button>
   </div>
   <div id="bt-body"><div class="empty"><p>Lade…</p></div></div>
 </div>
@@ -1914,13 +2092,187 @@ function af(){const sym=document.getElementById('fsym').value;const out=document
 async function so(id,o,btn){const all=btn.parentElement.querySelectorAll('.ob');all.forEach(b=>b.disabled=true);try{const r=await fetch('/outcome?id='+id+'&outcome='+o+'&secret='+encodeURIComponent(SECRET),{method:'POST'}).then(r=>r.json());if(r.status==='ok'){const b=document.getElementById('out-'+id);if(b){b.className='tg '+(o==='WIN'?'tw':o==='LOSS'?'tl':'tsk');b.textContent=o;}btn.parentElement.style.display='none';lst();toast(o==='WIN'?'🏆 WIN!':o==='LOSS'?'❌ LOSS':'— Skip');}}catch(e){all.forEach(b=>b.disabled=false);toast('Fehler: '+e.message);}}
 
 /* BACKTESTING */
-async function lbt(){const el=document.getElementById('bt-body');el.innerHTML='<div class="empty"><p>Lade…</p></div>';bd=await fetch('/backtesting').then(r=>r.json()).catch(()=>null);if(!bd||bd.error){el.innerHTML='<div class="empty"><p>Fehler beim Laden.</p></div>';return;}rbT(bp);}
-function btp(p,btn){bp=p;document.querySelectorAll('.bttab').forEach(t=>t.classList.remove('on'));btn.classList.add('on');rbT(p);}
-function rbT(p){if(!bd)return;const el=document.getElementById('bt-body');const d=p==='week'?bd.week:p==='month'?bd.month:bd.overall;const cl=(d.wins||0)+(d.losses||0);const wr=cl>0?((d.wins/cl)*100).toFixed(1):0;const o=bd.overall;let h=\`<div class="bt-ks"><div class="btk"><div class="btkv" style="color:var(--green)">\${d.wins||0}</div><div class="btkl">Wins</div></div><div class="btk"><div class="btkv" style="color:var(--red)">\${d.losses||0}</div><div class="btkl">Losses</div></div><div class="btk"><div class="btkv" style="color:var(--blue3)">\${wr}%</div><div class="btkl">Winrate</div></div></div><div class="scmp"><div class="scmp-t">Score-Analyse</div><div class="scmp-s">Zeigt ob höhere Scores wirklich besser performen. Idealerweise sollte der WIN-Score deutlich höher sein als der LOSS-Score.</div><div class="scr"><div class="scrl" style="color:var(--green)">WIN</div><div class="scrb"><div class="scrf" style="width:\${o.avg_score_win||0}%;background:var(--green)"></div></div><div class="scrv" style="color:var(--green)">\${o.avg_score_win||0}</div></div><div class="scr"><div class="scrl" style="color:var(--red)">LOSS</div><div class="scrb"><div class="scrf" style="width:\${o.avg_score_loss||0}%;background:var(--red)"></div></div><div class="scrv" style="color:var(--red)">\${o.avg_score_loss||0}</div></div></div>\`;
-if(bd.bySymbol?.length)h+=\`<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">Winrate pro Symbol</div></div><div style="padding:0 4px"><table class="stbl"><tr><th>Symbol</th><th>Wins</th><th>Losses</th><th>Winrate</th><th>Ø Score</th></tr>\${bd.bySymbol.map(s=>{const c=(s.wins||0)+(s.losses||0);const w=c>0?((s.wins/c)*100).toFixed(0):0;return\`<tr><td><strong>\${s.symbol}</strong></td><td style="color:var(--green)">\${s.wins||0}</td><td style="color:var(--red)">\${s.losses||0}</td><td style="font-family:'DM Mono',monospace;font-weight:500;color:var(--blue3)">\${w}%</td><td style="font-family:'DM Mono',monospace">\${Number(s.avg_score||0).toFixed(0)}</td></tr>\`;}).join('')}</table></div></div>\`;
-if(bd.best?.length)h+=\`<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">🏆 Beste Signale (WIN)</div></div><div class="cb">\${bd.best.map(x=>\`<div class="bsr"><div><div class="bsr-sym">\${x.symbol} <span style="color:var(--green);font-size:.62rem">\${x.ai_direction}</span></div><div class="bsr-sub">E: \${fmt(x.ai_entry)} → TP: \${fmt(x.ai_take_profit)}</div></div><div class="bsr-sc" style="color:var(--green)">\${x.ai_score}/100</div></div>\`).join('')}</div></div>\`;
-if(bd.worst?.length)h+=\`<div class="card"><div class="ch"><div class="ct">📉 Schlechteste Signale (LOSS)</div></div><div class="cb">\${bd.worst.map(x=>\`<div class="bsr"><div><div class="bsr-sym">\${x.symbol} <span style="color:var(--red);font-size:.62rem">\${x.ai_direction}</span></div><div class="bsr-sub">E: \${fmt(x.ai_entry)} · SL: \${fmt(x.ai_stop_loss)}</div></div><div class="bsr-sc" style="color:var(--red)">\${x.ai_score}/100</div></div>\`).join('')}</div></div>\`;
-el.innerHTML=h;}
+let btMode='analytics';
+async function lbt(){
+  const el=document.getElementById('bt-body');
+  el.innerHTML='<div class="empty"><p>Lade…</p></div>';
+  // Load both datasets
+  const [an,bt2]=await Promise.all([
+    fetch('/analytics').then(r=>r.json()).catch(()=>null),
+    fetch('/backtesting').then(r=>r.json()).catch(()=>null)
+  ]);
+  bd={analytics:an,backtesting:bt2};
+  rbT(btMode);
+}
+function btp(p,btn){btMode=p;document.querySelectorAll('.bttab').forEach(t=>t.classList.remove('on'));btn.classList.add('on');rbT(p);}
+
+function bar2(val,max,color){const pct=max>0?Math.min(100,(val/max)*100):0;return\`<div style="display:flex;align-items:center;gap:8px"><div style="flex:1;height:6px;background:var(--bg3);border-radius:99px;overflow:hidden"><div style="width:\${pct}%;height:100%;background:\${color};border-radius:99px;transition:width .6s ease"></div></div><div style="font-family:'DM Mono',monospace;font-size:.68rem;font-weight:500;color:\${color};width:40px;text-align:right">\${val}</div></div>\`;}
+
+function drawEquity(curve){
+  if(!curve||!curve.length)return'';
+  const vals=curve.map(p=>p.equity);
+  const min=Math.min(...vals)*0.995,max=Math.max(...vals)*1.005;
+  const W=300,H=80;
+  const px=(i)=>Math.round((i/(vals.length-1))*W);
+  const py=(v)=>Math.round(H-((v-min)/(max-min))*H);
+  let path=vals.map((v,i)=>(i===0?'M':'L')+px(i)+' '+py(v)).join(' ');
+  const lastEq=vals[vals.length-1];
+  const firstEq=vals[0];
+  const up=lastEq>=firstEq;
+  const col=up?'var(--green)':'var(--red)';
+  return\`<svg viewBox="0 0 \${W} \${H}" style="width:100%;height:80px" preserveAspectRatio="none">
+    <defs><linearGradient id="eg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="\${col}" stop-opacity=".25"/>
+      <stop offset="100%" stop-color="\${col}" stop-opacity="0"/>
+    </linearGradient></defs>
+    <path d="\${path} L\${W} \${H} L0 \${H} Z" fill="url(#eg)"/>
+    <path d="\${path}" fill="none" stroke="\${col}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>\`;
+}
+
+function rbT(mode){
+  if(!bd)return;
+  const el=document.getElementById('bt-body');
+  const an=bd.analytics;
+  const bt2=bd.backtesting;
+
+  if(mode==='analytics'){
+    if(!an||an.error){el.innerHTML='<div class="empty"><p>Noch keine abgeschlossenen Trades.<br>Markiere Signale als WIN oder LOSS um die Auswertung zu sehen.</p></div>';return;}
+    const s=an.summary;
+    const pnlColor=s.total_pnl_pct>=0?'var(--green)':'var(--red)';
+    let h=\`
+    <div class="bt-ks" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+      <div class="btk"><div class="btkv" style="color:var(--green)">\${s.wins}</div><div class="btkl">Wins</div></div>
+      <div class="btk"><div class="btkv" style="color:var(--red)">\${s.losses}</div><div class="btkl">Losses</div></div>
+      <div class="btk"><div class="btkv" style="color:var(--blue3)">\${s.winrate}%</div><div class="btkl">Winrate</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div class="btk"><div class="btkv" style="color:\${pnlColor}">\${s.total_pnl_pct>0?'+':''}\${s.total_pnl_pct}%</div><div class="btkl">Gesamt P&L</div></div>
+      <div class="btk"><div class="btkv" style="color:var(--amber)">\${s.profit_factor}x</div><div class="btkl">Profit Factor</div></div>
+      <div class="btk"><div class="btkv" style="color:var(--green)">+\${s.avg_win_pct}%</div><div class="btkl">Ø Win</div></div>
+      <div class="btk"><div class="btkv" style="color:var(--red)">\${s.avg_loss_pct}%</div><div class="btkl">Ø Loss</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div class="btk"><div class="btkv" style="color:var(--red)">-\${s.max_drawdown_pct}%</div><div class="btkl">Max Drawdown</div></div>
+      <div class="btk"><div class="btkv" style="color:var(--blue3)">\${s.final_equity.toLocaleString('de-DE',{maximumFractionDigits:0})}</div><div class="btkl">Equity (10k Start)</div></div>
+    </div>\`;
+
+    // Equity Curve
+    if(an.equityCurve?.length>1){
+      const first=an.equityCurve[0].equity;
+      const last=an.equityCurve[an.equityCurve.length-1].equity;
+      const up=last>=first;
+      h+=\`<div class="card" style="margin-bottom:12px">
+        <div class="ch">
+          <div><div class="ct">📈 Equity Kurve</div><div class="cs">Wie wächst 10.000€ Startkapital über alle Trades</div></div>
+          <div style="font-family:'DM Mono',monospace;font-size:.78rem;font-weight:500;color:\${up?'var(--green)':'var(--red)'}">
+            \${up?'▲':'▼'} \${Math.abs(((last-first)/first)*100).toFixed(1)}%
+          </div>
+        </div>
+        <div style="padding:12px 16px 8px">\${drawEquity(an.equityCurve)}</div>
+        <div style="display:flex;justify-content:space-between;padding:0 16px 12px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--t3)">
+          <span>\${an.equityCurve[0].date}</span>
+          <span>\${an.equityCurve[an.equityCurve.length-1].date}</span>
+        </div>
+      </div>\`;
+    }
+
+    // Filter Vergleich
+    const f=an.filters;
+    h+=\`<div class="card" style="margin-bottom:12px">
+      <div class="ch"><div><div class="ct">🤖 Claude Empfehlung — macht sie einen Unterschied?</div><div class="cs">Performen empfohlene Signale besser als nicht-empfohlene?</div></div></div>
+      <div class="cb">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.15);border-radius:10px;padding:14px;text-align:center">
+            <div style="font-size:.62rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--green);margin-bottom:8px">✓ Empfohlen (\${f.claude.recommended.total})</div>
+            <div style="font-family:'DM Mono',monospace;font-size:1.4rem;font-weight:500;color:var(--green)">\${f.claude.recommended.wr}%</div>
+            <div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div>
+            <div style="font-family:'DM Mono',monospace;font-size:.78rem;color:var(--green);margin-top:4px">\${f.claude.recommended.avgPnl>0?'+':''}\${f.claude.recommended.avgPnl}% Ø P&L</div>
+          </div>
+          <div style="background:rgba(244,63,94,.06);border:1px solid rgba(244,63,94,.15);border-radius:10px;padding:14px;text-align:center">
+            <div style="font-size:.62rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--red);margin-bottom:8px">✗ Nicht empf. (\${f.claude.not_recommended.total})</div>
+            <div style="font-family:'DM Mono',monospace;font-size:1.4rem;font-weight:500;color:var(--red)">\${f.claude.not_recommended.wr}%</div>
+            <div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div>
+            <div style="font-family:'DM Mono',monospace;font-size:.78rem;color:var(--red);margin-top:4px">\${f.claude.not_recommended.avgPnl>0?'+':''}\${f.claude.not_recommended.avgPnl}% Ø P&L</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="ch"><div><div class="ct">📊 EMA200 Bias-Filter — hilft er wirklich?</div><div class="cs">Trades in Bias-Richtung vs gegen den Bias</div></div></div>
+      <div class="cb">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="background:rgba(37,99,235,.06);border:1px solid rgba(37,99,235,.15);border-radius:10px;padding:14px;text-align:center">
+            <div style="font-size:.62rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--blue3);margin-bottom:8px">Mit Bias (\${f.ema_bias.with_bias.total})</div>
+            <div style="font-family:'DM Mono',monospace;font-size:1.4rem;font-weight:500;color:var(--blue3)">\${f.ema_bias.with_bias.wr}%</div>
+            <div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div>
+            <div style="font-family:'DM Mono',monospace;font-size:.78rem;color:var(--blue3);margin-top:4px">\${f.ema_bias.with_bias.avgPnl>0?'+':''}\${f.ema_bias.with_bias.avgPnl}% Ø P&L</div>
+          </div>
+          <div style="background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.15);border-radius:10px;padding:14px;text-align:center">
+            <div style="font-size:.62rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--amber);margin-bottom:8px">Gegen Bias (\${f.ema_bias.against_bias.total})</div>
+            <div style="font-family:'DM Mono',monospace;font-size:1.4rem;font-weight:500;color:var(--amber)">\${f.ema_bias.against_bias.wr}%</div>
+            <div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div>
+            <div style="font-family:'DM Mono',monospace;font-size:.78rem;color:var(--amber);margin-top:4px">\${f.ema_bias.against_bias.avgPnl>0?'+':''}\${f.ema_bias.against_bias.avgPnl}% Ø P&L</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="ch"><div><div class="ct">🎯 Score-Analyse — welche Scores performen am besten?</div><div class="cs">Winrate und Ø P&L pro Score-Bereich</div></div></div>
+      <div class="cb">
+        \${f.score_buckets.map(b=>\`
+        <div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+            <div style="font-size:.74rem;font-weight:600;color:var(--t2)">Score \${b.label}</div>
+            <div style="display:flex;gap:12px;font-family:'DM Mono',monospace;font-size:.68rem">
+              <span style="color:var(--blue3)">\${b.total} Trades</span>
+              <span style="color:\${b.wr>=50?'var(--green)':'var(--red)'}">\${b.wr}% WR</span>
+              <span style="color:\${b.avgPnl>=0?'var(--green)':'var(--red)'}">\${b.avgPnl>0?'+':''}\${b.avgPnl}%</span>
+            </div>
+          </div>
+          \${bar2(b.wr,100,b.wr>=50?'var(--green)':'var(--red)')}
+        </div>\`).join('')}
+      </div>
+    </div>\`;
+
+    // Letzte Trades
+    if(an.recentTrades?.length){
+      h+=\`<div class="card"><div class="ch"><div class="ct">Letzte Trades</div></div><div style="padding:0 4px"><table class="stbl">
+        <tr><th>Datum</th><th>Symbol</th><th>Dir.</th><th>Score</th><th>P&L</th><th>Status</th></tr>
+        \${an.recentTrades.map(t=>\`<tr>
+          <td style="font-size:.65rem;color:var(--t3)">\${t.date}</td>
+          <td><strong>\${t.symbol}</strong></td>
+          <td style="color:\${t.direction==='LONG'?'var(--green)':'var(--red)';font-size:.68rem}">\${t.direction}</td>
+          <td style="font-family:'DM Mono',monospace">\${t.score}/100</td>
+          <td style="font-family:'DM Mono',monospace;color:\${t.pnl>=0?'var(--green)':'var(--red)'}">\${t.pnl>0?'+':''}\${t.pnl}%</td>
+          <td><span class="tg \${t.outcome==='WIN'?'tw':'tl'}">\${t.outcome}</span></td>
+        </tr>\`).join('')}
+      </table></div></div>\`;
+    }
+
+    el.innerHTML=h;
+
+  } else if(mode==='symbol'){
+    // Symbol-Breakdown from backtesting endpoint
+    if(!bt2||bt2.error){el.innerHTML='<div class="empty"><p>Keine Daten.</p></div>';return;}
+    let h='';
+    if(bt2.bySymbol?.length){
+      h+=\`<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">Winrate pro Symbol</div></div><div style="padding:0 4px"><table class="stbl">
+        <tr><th>Symbol</th><th>Wins</th><th>Losses</th><th>Winrate</th><th>Ø Score</th></tr>
+        \${bt2.bySymbol.map(s=>{const c=(s.wins||0)+(s.losses||0);const w=c>0?((s.wins/c)*100).toFixed(0):0;return\`<tr>
+          <td><strong>\${s.symbol}</strong></td>
+          <td style="color:var(--green)">\${s.wins||0}</td>
+          <td style="color:var(--red)">\${s.losses||0}</td>
+          <td style="font-family:'DM Mono',monospace;font-weight:500;color:var(--blue3)">\${w}%</td>
+          <td style="font-family:'DM Mono',monospace">\${Number(s.avg_score||0).toFixed(0)}</td>
+        </tr>\`;}).join('')}
+      </table></div></div>\`;
+    }
+    if(bt2.best?.length)h+=\`<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">🏆 Beste Signale</div></div><div class="cb">\${bt2.best.map(x=>\`<div class="bsr"><div><div class="bsr-sym">\${x.symbol} <span style="color:var(--green);font-size:.6rem">\${x.ai_direction}</span></div><div class="bsr-sub">E:\${fmt(x.ai_entry)} TP:\${fmt(x.ai_take_profit)}</div></div><div class="bsr-sc" style="color:var(--green)">\${x.ai_score}/100</div></div>\`).join('')}</div></div>\`;
+    if(bt2.worst?.length)h+=\`<div class="card"><div class="ch"><div class="ct">📉 Schlechteste Signale</div></div><div class="cb">\${bt2.worst.map(x=>\`<div class="bsr"><div><div class="bsr-sym">\${x.symbol} <span style="color:var(--red);font-size:.6rem">\${x.ai_direction}</span></div><div class="bsr-sub">E:\${fmt(x.ai_entry)} SL:\${fmt(x.ai_stop_loss)}</div></div><div class="bsr-sc" style="color:var(--red)">\${x.ai_score}/100</div></div>\`).join('')}</div></div>\`;
+    el.innerHTML=h||'<div class="empty"><p>Keine Symbol-Daten.</p></div>';
+  }
+}
 
 /* TOOLS */
 async function ta(a){if(!SECRET&&a!=='health'){toast('⚠️ Secret in URL benoetigt');return;}toast('Wird ausgefuehrt…');try{if(a==='health'){const d=await fetch('/health').then(r=>r.json());toast('✅ Worker OK · '+new Date(d.time).toLocaleTimeString('de-DE'),3000);}else if(a==='telegram'){await fetch('/test-telegram?secret='+encodeURIComponent(SECRET));toast('📨 Telegram gesendet!');}else if(a==='morning'){await fetch('/morning-brief?secret='+encodeURIComponent(SECRET));toast('🌅 Morning Brief gesendet!');}else if(a==='outcomes'){const d=await fetch('/check-outcomes?secret='+encodeURIComponent(SECRET)).then(r=>r.json());toast('🔄 '+(d.result?.closed||0)+' Trades aktualisiert',3000);}}catch(e){toast('❌ Fehler: '+e.message);}}
