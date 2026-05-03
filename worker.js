@@ -2066,7 +2066,7 @@ setInterval(function(){document.getElementById('clk').textContent=new Date().toL
 /* UTILS */
 const fmt=(n,d=2)=>(!n&&n!==0)?'–':Number(n).toLocaleString('de-DE',{minimumFractionDigits:d,maximumFractionDigits:d});
 const ago=function(ts){const d=Date.now()-ts;if(d<60000)return'jetzt';if(d<3600000)return Math.floor(d/60000)+'m';if(d<86400000)return Math.floor(d/3600000)+'h';return Math.floor(d/86400000)+'d';};
-const sc=function(s){return s>=70?'var(--green)':s>=50?'var(--amber)':'var(--red)';};
+const sc=function(s){return s>=70?"var(--green)":s>=50?"var(--amber)":"var(--red)";};
 function toast(m,d){d=d||2500;const t=document.getElementById('toast');t.textContent=m;t.classList.add('on');setTimeout(function(){t.classList.remove('on');},d);}
 
 /* NAV */
@@ -2222,40 +2222,139 @@ function drawEquity(curve){
   const py=function(v){return Math.round(H-((v-min)/(max-min))*H);};
   const path=vals.map(function(v,i){return(i===0?'M':'L')+px(i)+' '+py(v);}).join(' ');
   const up=vals[vals.length-1]>=vals[0];
-  const col=up?'var(--green)':'var(--red)';
+  const col=up?"var(--green)":"var(--red)";
   return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:80px" preserveAspectRatio="none"><defs><linearGradient id="eg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="'+col+'" stop-opacity=".2"/><stop offset="100%" stop-color="'+col+'" stop-opacity="0"/></linearGradient></defs><path d="'+path+' L'+W+' '+H+' L0 '+H+' Z" fill="url(#eg)"/><path d="'+path+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 }
 
 function rbT(p){
   if(!bd)return;
-  const el=document.getElementById('bt-body');
-  const an=bd.analytics;
+  var el=document.getElementById('bt-body');
+  var an=bd.analytics;
+
   if(p==='analytics'){
-    if(!an||an.error){el.innerHTML='<div class="empty"><p>Noch keine abgeschlossenen Trades.<br>Markiere Signale als WIN oder LOSS.</p></div>';return;}
-    const s=an.summary;
-    const pnlC=s.total_pnl_pct>=0?'var(--green)':'var(--red)';
-    let h='<div class="bt-ks" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px"><div class="btk"><div class="btkv" style="color:var(--green)">'+s.wins+'</div><div class="btkl">Wins</div></div><div class="btk"><div class="btkv" style="color:var(--red)">'+s.losses+'</div><div class="btkl">Losses</div></div><div class="btk"><div class="btkv" style="color:var(--blue3)">'+s.winrate+'%</div><div class="btkl">Winrate</div></div></div>';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px"><div class="btk"><div class="btkv" style="color:'+pnlC+'">'+(s.total_pnl_pct>0?'+':'')+s.total_pnl_pct+'%</div><div class="btkl">Gesamt P&L</div></div><div class="btk"><div class="btkv" style="color:var(--amber)">'+s.profit_factor+'x</div><div class="btkl">Profit Factor</div></div><div class="btk"><div class="btkv" style="color:var(--green)">+'+s.avg_win_pct+'%</div><div class="btkl">Ø Win</div></div><div class="btk"><div class="btkv" style="color:var(--red)">'+s.avg_loss_pct+'%</div><div class="btkl">Ø Loss</div></div></div>';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px"><div class="btk"><div class="btkv" style="color:var(--red)">-'+s.max_drawdown_pct+'%</div><div class="btkl">Max Drawdown</div></div><div class="btk"><div class="btkv" style="color:var(--blue3)">'+s.final_equity.toLocaleString('de-DE',{maximumFractionDigits:0})+'</div><div class="btkl">Equity (10k Start)</div></div></div>';
+    if(!an||an.error){
+      el.innerHTML='<div class="empty"><p>Noch keine abgeschlossenen Trades.<br>Markiere Signale als WIN oder LOSS.</p></div>';
+      return;
+    }
+    var s=an.summary;
+    var pnlC=s.total_pnl_pct>=0?"var(--green)":"var(--red)";
+    var h='';
+
+    // KPI grid
+    h+='<div class="bt-ks" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">';
+    h+='<div class="btk"><div class="btkv" style="color:var(--green)">'+s.wins+'</div><div class="btkl">Wins</div></div>';
+    h+='<div class="btk"><div class="btkv" style="color:var(--red)">'+s.losses+'</div><div class="btkl">Losses</div></div>';
+    h+='<div class="btk"><div class="btkv" style="color:var(--blue3)">'+s.winrate+'%</div><div class="btkl">Winrate</div></div>';
+    h+='</div>';
+
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">';
+    h+='<div class="btk"><div class="btkv" style="color:'+pnlC+'">'+(s.total_pnl_pct>0?'+':'')+s.total_pnl_pct+'%</div><div class="btkl">Gesamt P&L</div></div>';
+    h+='<div class="btk"><div class="btkv" style="color:var(--amber)">'+s.profit_factor+'x</div><div class="btkl">Profit Factor</div></div>';
+    h+='<div class="btk"><div class="btkv" style="color:var(--green)">+'+s.avg_win_pct+'%</div><div class="btkl">Ø Win</div></div>';
+    h+='<div class="btk"><div class="btkv" style="color:var(--red)">'+s.avg_loss_pct+'%</div><div class="btkl">Ø Loss</div></div>';
+    h+='</div>';
+
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">';
+    h+='<div class="btk"><div class="btkv" style="color:var(--red)">-'+s.max_drawdown_pct+'%</div><div class="btkl">Max Drawdown</div></div>';
+    h+='<div class="btk"><div class="btkv" style="color:var(--blue3)">'+s.final_equity.toLocaleString('de-DE',{maximumFractionDigits:0})+'</div><div class="btkl">Equity (10k Start)</div></div>';
+    h+='</div>';
+
+    // Equity curve
     if(an.equityCurve&&an.equityCurve.length>1){
-      const first=an.equityCurve[0].equity,last=an.equityCurve[an.equityCurve.length-1].equity;
-      const up=last>=first;
-      h+='<div class="card" style="margin-bottom:12px"><div class="ch"><div><div class="ct">📈 Equity Kurve</div><div class="cs">10.000€ Startkapital über alle Trades</div></div><div style="font-family:\'DM Mono\',monospace;font-size:.78rem;font-weight:500;color:'+(up?'var(--green)':'var(--red)')+'">'+(up?'▲':'▼')+' '+Math.abs(((last-first)/first)*100).toFixed(1)+'%</div></div><div style="padding:12px 16px 8px">'+drawEquity(an.equityCurve)+'</div><div style="display:flex;justify-content:space-between;padding:0 16px 12px;font-family:\'DM Mono\',monospace;font-size:.6rem;color:var(--t3)"><span>'+an.equityCurve[0].date+'</span><span>'+an.equityCurve[an.equityCurve.length-1].date+'</span></div></div>';
+      var first=an.equityCurve[0].equity;
+      var last=an.equityCurve[an.equityCurve.length-1].equity;
+      var up=last>=first;
+      var upColor=up?"var(--green)":"var(--red)";
+      var pctChange=Math.abs(((last-first)/first)*100).toFixed(1);
+      h+='<div class="card" style="margin-bottom:12px">';
+      h+='<div class="ch"><div><div class="ct">Equity Kurve</div><div class="cs">10.000 Start über alle Trades</div></div>';
+      h+='<div style="font-size:.78rem;font-weight:500;color:'+upColor+'">'+(up?'▲':'▼')+' '+pctChange+'%</div></div>';
+      h+='<div style="padding:12px 16px 8px">'+drawEquity(an.equityCurve)+'</div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:0 16px 12px;font-size:.6rem;color:var(--t3)">';
+      h+='<span>'+an.equityCurve[0].date+'</span><span>'+an.equityCurve[an.equityCurve.length-1].date+'</span></div></div>';
     }
-    const f=an.filters;
-    h+='<div class="card" style="margin-bottom:12px"><div class="ch"><div><div class="ct">🤖 Claude — macht die Empfehlung einen Unterschied?</div></div></div><div class="cb"><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div style="background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.15);border-radius:10px;padding:14px;text-align:center"><div style="font-size:.62rem;font-weight:600;text-transform:uppercase;color:var(--green);margin-bottom:8px">✓ Empfohlen ('+f.claude.recommended.total+')</div><div style="font-family:\'DM Mono\',monospace;font-size:1.4rem;color:var(--green)">'+f.claude.recommended.wr+'%</div><div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div><div style="font-family:\'DM Mono\',monospace;font-size:.78rem;color:var(--green);margin-top:4px">'+(f.claude.recommended.avgPnl>0?'+':'')+f.claude.recommended.avgPnl+'% Ø P&L</div></div><div style="background:rgba(244,63,94,.06);border:1px solid rgba(244,63,94,.15);border-radius:10px;padding:14px;text-align:center"><div style="font-size:.62rem;font-weight:600;text-transform:uppercase;color:var(--red);margin-bottom:8px">✗ Nicht empf. ('+f.claude.not_recommended.total+')</div><div style="font-family:\'DM Mono\',monospace;font-size:1.4rem;color:var(--red)">'+f.claude.not_recommended.wr+'%</div><div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div><div style="font-family:\'DM Mono\',monospace;font-size:.78rem;color:var(--red);margin-top:4px">'+(f.claude.not_recommended.avgPnl>0?'+':'')+f.claude.not_recommended.avgPnl+'% Ø P&L</div></div></div></div></div>';
-    h+='<div class="card" style="margin-bottom:12px"><div class="ch"><div><div class="ct">📊 EMA200 Bias — hilft der Filter?</div></div></div><div class="cb"><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div style="background:rgba(37,99,235,.06);border:1px solid rgba(37,99,235,.15);border-radius:10px;padding:14px;text-align:center"><div style="font-size:.62rem;font-weight:600;text-transform:uppercase;color:var(--blue3);margin-bottom:8px">Mit Bias ('+f.ema_bias.with_bias.total+')</div><div style="font-family:\'DM Mono\',monospace;font-size:1.4rem;color:var(--blue3)">'+f.ema_bias.with_bias.wr+'%</div><div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div></div><div style="background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.15);border-radius:10px;padding:14px;text-align:center"><div style="font-size:.62rem;font-weight:600;text-transform:uppercase;color:var(--amber);margin-bottom:8px">Gegen Bias ('+f.ema_bias.against_bias.total+')</div><div style="font-family:\'DM Mono\',monospace;font-size:1.4rem;color:var(--amber)">'+f.ema_bias.against_bias.wr+'%</div><div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div></div></div></div></div>';
+
+    // Claude filter
+    var f=an.filters;
+    var cr=f.claude.recommended;
+    var cn2=f.claude.not_recommended;
+    h+='<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">Claude — macht die Empfehlung einen Unterschied?</div></div><div class="cb">';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div style="background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.15);border-radius:10px;padding:14px;text-align:center">';
+    h+='<div style="font-size:.62rem;font-weight:600;text-transform:uppercase;color:var(--green);margin-bottom:8px">Empfohlen ('+cr.total+')</div>';
+    h+='<div style="font-size:1.4rem;color:var(--green)">'+cr.wr+'%</div>';
+    h+='<div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div>';
+    h+='<div style="font-size:.78rem;color:var(--green);margin-top:4px">'+(cr.avgPnl>0?'+':'')+cr.avgPnl+'% Ø P&L</div></div>';
+    h+='<div style="background:rgba(244,63,94,.06);border:1px solid rgba(244,63,94,.15);border-radius:10px;padding:14px;text-align:center">';
+    h+='<div style="font-size:.62rem;font-weight:600;text-transform:uppercase;color:var(--red);margin-bottom:8px">Nicht empf. ('+cn2.total+')</div>';
+    h+='<div style="font-size:1.4rem;color:var(--red)">'+cn2.wr+'%</div>';
+    h+='<div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div>';
+    h+='<div style="font-size:.78rem;color:var(--red);margin-top:4px">'+(cn2.avgPnl>0?'+':'')+cn2.avgPnl+'% Ø P&L</div></div>';
+    h+='</div></div></div>';
+
+    // EMA bias
+    var wb=f.ema_bias.with_bias;
+    var ab=f.ema_bias.against_bias;
+    h+='<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">EMA200 Bias — hilft der Filter?</div></div><div class="cb">';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div style="background:rgba(37,99,235,.06);border:1px solid rgba(37,99,235,.15);border-radius:10px;padding:14px;text-align:center">';
+    h+='<div style="font-size:.62rem;font-weight:600;color:var(--blue3);margin-bottom:8px">Mit Bias ('+wb.total+')</div>';
+    h+='<div style="font-size:1.4rem;color:var(--blue3)">'+wb.wr+'%</div>';
+    h+='<div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div></div>';
+    h+='<div style="background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.15);border-radius:10px;padding:14px;text-align:center">';
+    h+='<div style="font-size:.62rem;font-weight:600;color:var(--amber);margin-bottom:8px">Gegen Bias ('+ab.total+')</div>';
+    h+='<div style="font-size:1.4rem;color:var(--amber)">'+ab.wr+'%</div>';
+    h+='<div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div></div>';
+    h+='</div></div></div>';
+
+    // Recent trades
     if(an.recentTrades&&an.recentTrades.length){
-      h+='<div class="card"><div class="ch"><div class="ct">Letzte Trades</div></div><div style="padding:0 4px"><table class="stbl"><tr><th>Datum</th><th>Symbol</th><th>P&L</th><th>Score</th><th>Status</th></tr>'+an.recentTrades.map(function(t){return'<tr><td style="font-size:.65rem;color:var(--t3)">'+t.date+'</td><td><strong>'+t.symbol+'</strong></td><td style="font-family:\'DM Mono\',monospace;color:'+(t.pnl>=0?'var(--green)':'var(--red)')+'">'+(t.pnl>0?'+':'')+t.pnl+'%</td><td style="font-family:\'DM Mono\',monospace">'+t.score+'/100</td><td><span class="tg '+(t.outcome==='WIN'?'tw':'tl')+'">'+t.outcome+'</span></td></tr>';}).join('')+'</table></div></div>';
+      h+='<div class="card"><div class="ch"><div class="ct">Letzte Trades</div></div>';
+      h+='<div style="padding:0 4px"><table class="stbl">';
+      h+='<tr><th>Datum</th><th>Symbol</th><th>P&L</th><th>Score</th><th>Status</th></tr>';
+      an.recentTrades.forEach(function(t){
+        h+='<tr>';
+        h+='<td style="font-size:.65rem;color:var(--t3)">'+t.date+'</td>';
+        h+='<td><strong>'+t.symbol+'</strong></td>';
+        h+='<td style="color:'+(t.pnl>=0?"var(--green)":"var(--red)")+'">'+(t.pnl>0?'+':'')+t.pnl+'%</td>';
+        h+='<td>'+t.score+'/100</td>';
+        h+='<td><span class="tg '+(t.outcome==='WIN'?'tw':'tl')+'">'+t.outcome+'</span></td>';
+        h+='</tr>';
+      });
+      h+='</table></div></div>';
     }
+
     el.innerHTML=h;
+
   } else {
-    const bt2=bd.backtesting;
+    var bt2=bd.backtesting;
     if(!bt2||bt2.error){el.innerHTML='<div class="empty"><p>Keine Daten.</p></div>';return;}
-    let h='';
-    if(bt2.bySymbol&&bt2.bySymbol.length){h+='<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">Winrate pro Symbol</div></div><div style="padding:0 4px"><table class="stbl"><tr><th>Symbol</th><th>W</th><th>L</th><th>Winrate</th><th>Ø Score</th></tr>'+bt2.bySymbol.map(function(s){const c=(s.wins||0)+(s.losses||0);const w=c>0?((s.wins/c)*100).toFixed(0):0;return'<tr><td><strong>'+s.symbol+'</strong></td><td style="color:var(--green)">'+(s.wins||0)+'</td><td style="color:var(--red)">'+(s.losses||0)+'</td><td style="font-family:\'DM Mono\',monospace;color:var(--blue3)">'+w+'%</td><td style="font-family:\'DM Mono\',monospace">'+Number(s.avg_score||0).toFixed(0)+'</td></tr>';}).join('')+'</table></div></div>';}
-    if(bt2.best&&bt2.best.length){h+='<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">🏆 Beste Signale</div></div><div class="cb">'+bt2.best.map(function(x){return'<div class="bsr"><div><div class="bsr-sym">'+x.symbol+' <span style="color:var(--green);font-size:.6rem">'+x.ai_direction+'</span></div><div class="bsr-sub">E:'+fmt(x.ai_entry)+' TP:'+fmt(x.ai_take_profit)+'</div></div><div class="bsr-sc" style="color:var(--green)">'+x.ai_score+'/100</div></div>';}).join('')+'</div></div>';}
-    el.innerHTML=h||'<div class="empty"><p>Keine Daten.</p></div>';
+    var h2='';
+    if(bt2.bySymbol&&bt2.bySymbol.length){
+      h2+='<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">Winrate pro Symbol</div></div>';
+      h2+='<div style="padding:0 4px"><table class="stbl">';
+      h2+='<tr><th>Symbol</th><th>W</th><th>L</th><th>Winrate</th><th>Score</th></tr>';
+      bt2.bySymbol.forEach(function(s){
+        var c=(s.wins||0)+(s.losses||0);
+        var w=c>0?((s.wins/c)*100).toFixed(0):0;
+        h2+='<tr><td><strong>'+s.symbol+'</strong></td>';
+        h2+='<td style="color:var(--green)">'+(s.wins||0)+'</td>';
+        h2+='<td style="color:var(--red)">'+(s.losses||0)+'</td>';
+        h2+='<td style="color:var(--blue3)">'+w+'%</td>';
+        h2+='<td>'+Number(s.avg_score||0).toFixed(0)+'</td></tr>';
+      });
+      h2+='</table></div></div>';
+    }
+    if(bt2.best&&bt2.best.length){
+      h2+='<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">Beste Signale</div></div><div class="cb">';
+      bt2.best.forEach(function(x){
+        h2+='<div class="bsr"><div><div class="bsr-sym">'+x.symbol+' <span style="color:var(--green);font-size:.6rem">'+x.ai_direction+'</span></div>';
+        h2+='<div class="bsr-sub">E:'+fmt(x.ai_entry)+' TP:'+fmt(x.ai_take_profit)+'</div></div>';
+        h2+='<div class="bsr-sc" style="color:var(--green)">'+x.ai_score+'/100</div></div>';
+      });
+      h2+='</div></div>';
+    }
+    el.innerHTML=h2||'<div class="empty"><p>Keine Daten.</p></div>';
   }
 }
 
