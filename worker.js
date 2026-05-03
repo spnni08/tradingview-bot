@@ -558,10 +558,20 @@ async function saveSnapshot(env, signal) {
       raw_signal TEXT
     )
   `).run();
-  // Migration: add key column if missing (for older DBs)
-  try {
-    await env.DB.prepare(`ALTER TABLE snapshots ADD COLUMN key TEXT`).run();
-  } catch(e) { /* column already exists, ignore */ }
+  // Migration: add missing columns for older DBs
+  const migrations = [
+    'ALTER TABLE snapshots ADD COLUMN key TEXT',
+    'ALTER TABLE snapshots ADD COLUMN timeframe TEXT',
+    'ALTER TABLE snapshots ADD COLUMN symbol TEXT',
+    'ALTER TABLE snapshots ADD COLUMN updated_at INTEGER',
+    'ALTER TABLE snapshots ADD COLUMN raw_signal TEXT',
+    'ALTER TABLE signals ADD COLUMN exit_price REAL',
+    'ALTER TABLE signals ADD COLUMN pnl_pct REAL',
+    'ALTER TABLE signals ADD COLUMN closed_at INTEGER',
+  ];
+  for (const sql of migrations) {
+    try { await env.DB.prepare(sql).run(); } catch(e) { /* already exists */ }
+  }
 
   await env.DB.prepare(`
     INSERT INTO snapshots (key, symbol, timeframe, updated_at, raw_signal)
