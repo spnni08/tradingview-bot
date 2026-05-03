@@ -1762,19 +1762,25 @@ nav::-webkit-scrollbar{display:none}
       <div class="lb">WAVESCOUT</div>
       <div class="ls2">Trading Signal Dashboard</div>
     </div>
-    <div class="lul">Account wählen</div>
+    <div class="lul">Wer bist du?</div>
     <div class="lug">
-      <button class="lu" type="button" onclick="pu('Marvin',this)"><div class="lav av-M">M</div><div class="lun">Marvin</div></button>
-      <button class="lu" type="button" onclick="pu('Sandro',this)"><div class="lav av-S">S</div><div class="lun">Sandro</div></button>
-      <button class="lu" type="button" onclick="pu('Iven',this)"><div class="lav av-I">I</div><div class="lun">Iven</div></button>
+      <button class="lu" type="button" id="btn-M" onclick="window.selectUser('Marvin')">
+        <div class="lav av-M">M</div><div class="lun">Marvin</div>
+      </button>
+      <button class="lu" type="button" id="btn-S" onclick="window.selectUser('Sandro')">
+        <div class="lav av-S">S</div><div class="lun">Sandro</div>
+      </button>
+      <button class="lu" type="button" id="btn-I" onclick="window.selectUser('Iven')">
+        <div class="lav av-I">I</div><div class="lun">Iven</div>
+      </button>
     </div>
-    <div class="lpw" id="lpw">
-      <div class="lpl">Passwort</div>
-      <input type="password" class="lpi" id="lpi" placeholder="••••••••" onkeydown="if(event.key==='Enter')dl()">
-      <div class="lph" id="lph"></div>
+    <div id="lpw" style="display:none;margin-bottom:18px">
+      <div class="lpl" id="lpl-title">Passwort</div>
+      <input type="password" class="lpi" id="lpi" placeholder="••••••••">
+      <div id="lph" style="font-size:.6rem;color:var(--t3);margin-top:4px;font-style:italic"></div>
     </div>
-    <button class="lbt" id="lbt" style="display:none" onclick="dl()">Anmelden →</button>
-    <div class="lerr" id="lerr"></div>
+    <button class="lbt" id="lbt" style="display:none" type="button">Anmelden →</button>
+    <div class="lerr" id="lerr" style="font-size:.68rem;color:var(--red);text-align:center;margin-top:8px;min-height:14px"></div>
     <div class="lft"><p>Made by <strong>WaveWatch</strong> · Made for Trader</p></div>
   </div>
 </div>
@@ -2042,30 +2048,121 @@ const UA={Marvin:{bg:'linear-gradient(135deg,#1e40af,#3b82f6)',i:'M'},Sandro:{bg
 let su=null,aS=[],sm='score',bd=null,bp='all';
 
 /* THEME */
-function toggleTheme(){const h=document.documentElement;const d=h.dataset.theme==='dark';h.dataset.theme=d?'light':'dark';document.getElementById('thbtn').textContent=d?'🌙':'☀️';localStorage.setItem('wst',d?'light':'dark');}
-(()=>{const t=localStorage.getItem('wst')||'dark';document.documentElement.dataset.theme=t;document.getElementById('thbtn').textContent=t==='dark'?'🌙':'☀️';})();
-
-/* AUTH */
-function ca(){const u=localStorage.getItem('wu');if(!u||!localStorage.getItem('wp_'+u))return false;lok(u);return true;}
-function pu(n,e){
-  su=n;
-  document.querySelectorAll('.lu').forEach(b=>b.classList.remove('sel'));
-  e.classList.add('sel');
-  const s=localStorage.getItem('wp_'+n);
-  const pwEl=document.getElementById('lpw');
-  const btEl=document.getElementById('lbt');
-  const piEl=document.getElementById('lpi');
-  const phEl=document.getElementById('lph');
-  const errEl=document.getElementById('lerr');
-  if(pwEl) pwEl.classList.add('v');
-  if(btEl) btEl.style.display='block';
-  if(piEl) { piEl.value=''; setTimeout(()=>piEl.focus(),50); }
-  if(errEl) errEl.textContent='';
-  if(phEl) phEl.textContent=s?'Willkommen zurueck, '+n+'!':'Erste Anmeldung — lege jetzt dein Passwort fest.';
+function toggleTheme(){
+  const h=document.documentElement;
+  const d=h.dataset.theme==='dark';
+  h.dataset.theme=d?'light':'dark';
+  document.getElementById('thbtn').textContent=d?'🌙':'☀️';
+  localStorage.setItem('wst',d?'light':'dark');
 }
-function dl(){if(!su)return;const pw=document.getElementById('lpi').value;if(!pw||pw.length<4){document.getElementById('lerr').textContent='Mind. 4 Zeichen.';return;}const s=localStorage.getItem('wp_'+su);if(!s){localStorage.setItem('wp_'+su,pw);localStorage.setItem('wu',su);lok(su);}else if(s===pw){localStorage.setItem('wu',su);lok(su);}else{document.getElementById('lerr').textContent='Falsches Passwort.';document.getElementById('lpi').value='';document.getElementById('lpi').focus();}}
-function lok(n){const el=document.getElementById('ls');el.classList.add('fade');setTimeout(()=>el.classList.add('gone'),300);const u=UA[n]||UA.Marvin;document.getElementById('uav').style.background=u.bg;document.getElementById('uav').textContent=u.i;document.getElementById('uname').textContent=n;ug(n);lh();}
-function logout(){localStorage.removeItem('wu');const el=document.getElementById('ls');el.classList.remove('fade','gone');document.querySelectorAll('.lu').forEach(b=>b.classList.remove('sel'));document.getElementById('lpw').classList.remove('v');document.getElementById('lbt').style.display='none';document.getElementById('lerr').textContent='';su=null;}
+(function(){
+  const t=localStorage.getItem('wst')||'dark';
+  document.documentElement.dataset.theme=t;
+  const btn=document.getElementById('thbtn');
+  if(btn) btn.textContent=t==='dark'?'🌙':'☀️';
+})();
+
+/* AUTH — bulletproof version */
+window.selectUser = function(name) {
+  su = name;
+  // Highlight selected
+  ['M','S','I'].forEach(function(i){
+    const b=document.getElementById('btn-'+i);
+    if(b) b.classList.remove('sel');
+  });
+  const first = name.charAt(0);
+  const selBtn = document.getElementById('btn-'+first);
+  if(selBtn) selBtn.classList.add('sel');
+
+  // Show password field
+  const pwEl = document.getElementById('lpw');
+  const btEl = document.getElementById('lbt');
+  const piEl = document.getElementById('lpi');
+  const phEl = document.getElementById('lph');
+  const errEl = document.getElementById('lerr');
+
+  if(pwEl) pwEl.style.display = 'block';
+  if(btEl) btEl.style.display = 'block';
+  if(piEl) { piEl.value = ''; }
+  if(errEl) errEl.textContent = '';
+
+  const hasPw = localStorage.getItem('wp_'+name);
+  if(phEl) phEl.textContent = hasPw
+    ? 'Willkommen zurueck, '+name+'!'
+    : 'Erste Anmeldung: Lege jetzt dein Passwort fest.';
+
+  setTimeout(function(){ if(piEl) piEl.focus(); }, 100);
+};
+
+// Wire up login button and enter key
+document.addEventListener('DOMContentLoaded', function() {
+  var btn = document.getElementById('lbt');
+  var inp = document.getElementById('lpi');
+  if(btn) btn.addEventListener('click', doLoginAction);
+  if(inp) inp.addEventListener('keydown', function(e){ if(e.key==='Enter') doLoginAction(); });
+});
+
+function doLoginAction() {
+  if(!su) { document.getElementById('lerr').textContent='Bitte zuerst einen Account wählen.'; return; }
+  var inp = document.getElementById('lpi');
+  var pw = inp ? inp.value : '';
+  if(!pw || pw.length < 4) {
+    document.getElementById('lerr').textContent = 'Passwort muss mind. 4 Zeichen haben.';
+    return;
+  }
+  var stored = localStorage.getItem('wp_'+su);
+  if(!stored) {
+    // First time — set password
+    localStorage.setItem('wp_'+su, pw);
+    localStorage.setItem('wu', su);
+    loginOk(su);
+  } else if(stored === pw) {
+    localStorage.setItem('wu', su);
+    loginOk(su);
+  } else {
+    document.getElementById('lerr').textContent = 'Falsches Passwort. Bitte erneut versuchen.';
+    if(inp) { inp.value=''; inp.focus(); }
+  }
+}
+
+function ca(){
+  var u = localStorage.getItem('wu');
+  if(!u || !localStorage.getItem('wp_'+u)) return false;
+  loginOk(u);
+  return true;
+}
+
+function loginOk(n) {
+  var el = document.getElementById('ls');
+  if(el) { el.classList.add('fade'); setTimeout(function(){ el.classList.add('gone'); }, 300); }
+  var u = UA[n] || UA.Marvin;
+  var av = document.getElementById('uav');
+  var nm = document.getElementById('uname');
+  if(av) { av.style.background=u.bg; av.textContent=u.i; }
+  if(nm) nm.textContent=n;
+  ug(n);
+  lh();
+}
+
+function logout() {
+  localStorage.removeItem('wu');
+  var el=document.getElementById('ls');
+  if(el) el.classList.remove('fade','gone');
+  ['M','S','I'].forEach(function(i){
+    var b=document.getElementById('btn-'+i);
+    if(b) b.classList.remove('sel');
+  });
+  var pwEl=document.getElementById('lpw');
+  var btEl=document.getElementById('lbt');
+  var errEl=document.getElementById('lerr');
+  if(pwEl) pwEl.style.display='none';
+  if(btEl) btEl.style.display='none';
+  if(errEl) errEl.textContent='';
+  su=null;
+}
+
+// dl = alias for backwards compat
+function dl() { doLoginAction(); }
 
 /* CLOCK */
 const DN=['So','Mo','Di','Mi','Do','Fr','Sa'],MN=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
@@ -2293,7 +2390,12 @@ function rbT(mode){
 async function ta(a){if(!SECRET&&a!=='health'){toast('⚠️ Secret in URL benoetigt');return;}toast('Wird ausgefuehrt…');try{if(a==='health'){const d=await fetch('/health').then(r=>r.json());toast('✅ Worker OK · '+new Date(d.time).toLocaleTimeString('de-DE'),3000);}else if(a==='telegram'){await fetch('/test-telegram?secret='+encodeURIComponent(SECRET));toast('📨 Telegram gesendet!');}else if(a==='morning'){await fetch('/morning-brief?secret='+encodeURIComponent(SECRET));toast('🌅 Morning Brief gesendet!');}else if(a==='outcomes'){const d=await fetch('/check-outcomes?secret='+encodeURIComponent(SECRET)).then(r=>r.json());toast('🔄 '+(d.result?.closed||0)+' Trades aktualisiert',3000);}}catch(e){toast('❌ Fehler: '+e.message);}}
 function cp(c){navigator.clipboard.writeText(c).then(()=>toast('📋 Kopiert: '+c));}
 
-if(!ca()){}
+// Init auth check
+(function(){
+  if(!ca()) {
+    // Login screen already visible, nothing to do
+  }
+})();
 </script>
 </body>
 </html>`;
