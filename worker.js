@@ -1442,8 +1442,7 @@ html{height:100%;scroll-behavior:smooth}
 body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--t2);min-height:100vh;transition:background .3s,color .3s}
 
 /* ══ LOGIN ══ */
-#ls{position:fixed;inset:0;z-index:500;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px;transition:opacity .3s}
-#ls.fade{opacity:0;pointer-events:none}
+#ls{position:fixed;inset:0;z-index:500;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px}
 #ls.gone{display:none!important}
 .lc{width:100%;max-width:400px;background:var(--card);border:1px solid var(--border);border-radius:20px;padding:32px 28px;box-shadow:var(--shadow)}
 .lh{text-align:center;margin-bottom:28px}
@@ -2056,31 +2055,33 @@ function toggleTheme(){
   if(btn) btn.textContent=t==='dark'?'🌙':'☀️';
 })();
 
-/* AUTH — no password, just pick profile */
+/* AUTH — simple profile picker */
 function loginAs(name) {
   localStorage.setItem('wu', name);
-  const el=document.getElementById('ls');
-  if(el){ el.style.opacity='0'; setTimeout(()=>{ el.style.display='none'; },300); }
-  const u=UA[name]||UA.Marvin;
-  const av=document.getElementById('uav');
-  const nm=document.getElementById('uname');
-  if(av){ av.style.background=u.bg; av.textContent=u.i; }
-  if(nm) nm.textContent=name;
+  // Hide login screen immediately
+  const ls = document.getElementById('ls');
+  if(ls) ls.className = 'gone';
+  // Set user info in header
+  const u = UA[name] || UA.Marvin;
+  const av = document.getElementById('uav');
+  const nm = document.getElementById('uname');
+  if(av) { av.style.background = u.bg; av.textContent = u.i; }
+  if(nm) nm.textContent = name;
   ug(name);
   lh();
 }
 
-function ca(){
-  const u=localStorage.getItem('wu');
+function ca() {
+  const u = localStorage.getItem('wu');
   if(!u) return false;
   loginAs(u);
   return true;
 }
 
-function logout(){
+function logout() {
   localStorage.removeItem('wu');
-  const el=document.getElementById('ls');
-  if(el){ el.style.display='flex'; el.style.opacity='1'; }
+  const ls = document.getElementById('ls');
+  if(ls) ls.className = '';
 }
 
 // Init auth check
