@@ -2101,8 +2101,21 @@ async function ls2(){
   const snaps=await fetch('/snapshots').then(function(r){return r.json();}).catch(function(){return[];});
   if(!snaps.length){el.innerHTML='<div class="empty"><p>Noch keine Snapshots.<br>TradingView sendet diese automatisch.</p></div>';return;}
   el.innerHTML=snaps.map(function(s){
-    return '<div><div class="snap"><div style="flex:1;min-width:0"><div class="snap-sym">'+s.symbol+'</div><div class="snap-meta">RSI '+fmt(s.rsi,1)+' · EMA50 '+fmt(s.ema50,0)+' · Trend: '+(s.trend||'–')+'</div></div><div class="snap-px">'+fmt(s.price)+'</div>'+(SECRET?'<button class="btn btn-p" onclick="cn(\''+s.symbol+'\',this)" style="font-size:.65rem;padding:6px 12px">🔍 Prüfen</button>':'<button class="btn btn-p" disabled style="font-size:.65rem;padding:6px 12px">🔒</button>')+'</div><div class="res" id="res-'+s.symbol+'" style="display:none"></div></div>';
+    var safeId=s.symbol.replace(/[^a-zA-Z0-9]/g,'_');
+    var html='<div><div class="snap">';
+    html+='<div style="flex:1;min-width:0"><div class="snap-sym">'+s.symbol+'</div>';
+    html+='<div class="snap-meta">RSI '+fmt(s.rsi,1)+' · EMA50 '+fmt(s.ema50,0)+' · Trend: '+(s.trend||'–')+'</div></div>';
+    html+='<div class="snap-px">'+fmt(s.price)+'</div>';
+    if(SECRET){html+='<button class="btn btn-p" id="sbtn-'+safeId+'" style="font-size:.65rem;padding:6px 12px">🔍 Prüfen</button>';}
+    else{html+='<button class="btn btn-p" disabled style="font-size:.65rem;padding:6px 12px">🔒</button>';}
+    html+='</div><div class="res" id="res-'+s.symbol+'" style="display:none"></div></div>';
+    return html;
   }).join('');
+  snaps.forEach(function(s){
+    var safeId=s.symbol.replace(/[^a-zA-Z0-9]/g,'_');
+    var btn=document.getElementById('sbtn-'+safeId);
+    if(btn){ (function(sym,b){b.addEventListener('click',function(){cn(sym,b);});})(s.symbol,btn); }
+  });
 }
 
 /* ANALYSE */
@@ -2115,12 +2128,25 @@ async function cn(sym,btn){
     const ai=d.ai||{},s=Number(ai.score)||0,rec=ai.recommendation==='RECOMMENDED';
     const rr=(ai.entry&&ai.take_profit&&ai.stop_loss)?(Math.abs(ai.take_profit-ai.entry)/Math.abs(ai.entry-ai.stop_loss)).toFixed(2):null;
     el.style.display='block';
-    el.innerHTML='<div class="res-top"><span class="rbadge '+(rec?'ry':'rn')+'">'+(rec?'✓ Empfohlen':'✗ Nicht empfohlen')+'</span><span style="font-family:\'DM Mono\',monospace;font-size:.82rem;font-weight:500;color:'+sc(s)+'">'+s+'/100</span></div><div class="res-bd"><div class="rr"><span class="rk">Richtung</span><span class="rv">'+(ai.direction||'–')+'</span></div><div class="rr"><span class="rk">Risiko</span><span class="rv">'+(ai.risk||'–')+'</span></div><div class="rr"><span class="rk">Confidence</span><span class="rv">'+(ai.confidence||0)+'%</span></div>'+(rr?'<div class="rr"><span class="rk">R/R</span><span class="rv">1:'+rr+'</span></div>':'')+'<div class="bar"><div class="bar-f" style="width:'+s+'%;background:'+sc(s)+'"></div></div><div class="rplan"><div class="rpc"><div class="rpl">Entry</div><div class="rpv" style="color:var(--blue3)">'+fmt(ai.entry)+'</div></div><div class="rpc"><div class="rpl">Take Profit</div><div class="rpv" style="color:var(--green)">'+fmt(ai.take_profit)+'</div></div><div class="rpc"><div class="rpl">Stop Loss</div><div class="rpv" style="color:var(--red)">'+fmt(ai.stop_loss)+'</div></div></div><div class="rreason">'+(ai.reason||'')+'</div></div>';
-    toast(rec?'✅ Empfohlen!':'⛔ Nicht empfohlen');
-  }catch(e){el.style.display='block';el.innerHTML='<div style="padding:12px 15px;color:var(--red);font-size:.72rem">Fehler: '+e.message+'</div>';}
-  btn.disabled=false;btn.textContent='🔍 Prüfen';
-}
-
+    var parts=[];
+    parts.push('<div class="res-top">');
+    parts.push('<span class="rbadge '+(rec?'ry':'rn')+'">'+(rec?'Empfohlen':'Nicht empfohlen')+'</span>');
+    parts.push('<span style="font-family:monospace;font-size:.82rem;font-weight:500;color:'+sc(s)+'">'+s+'/100</span>');
+    parts.push('</div><div class="res-bd">');
+    parts.push('<div class="rr"><span class="rk">Richtung</span><span class="rv">'+(ai.direction||'–')+'</span></div>');
+    parts.push('<div class="rr"><span class="rk">Risiko</span><span class="rv">'+(ai.risk||'–')+'</span></div>');
+    parts.push('<div class="rr"><span class="rk">Confidence</span><span class="rv">'+(ai.confidence||0)+'%</span></div>');
+    if(rr) parts.push('<div class="rr"><span class="rk">R/R</span><span class="rv">1:'+rr+'</span></div>');
+    parts.push('<div class="bar"><div class="bar-f" style="width:'+s+'%;background:'+sc(s)+'"></div></div>');
+    parts.push('<div class="rplan">');
+    parts.push('<div class="rpc"><div class="rpl">Entry</div><div class="rpv" style="color:var(--blue3)">'+fmt(ai.entry)+'</div></div>');
+    parts.push('<div class="rpc"><div class="rpl">Take Profit</div><div class="rpv" style="color:var(--green)">'+fmt(ai.take_profit)+'</div></div>');
+    parts.push('<div class="rpc"><div class="rpl">Stop Loss</div><div class="rpv" style="color:var(--red)">'+fmt(ai.stop_loss)+'</div></div>');
+    parts.push('</div>');
+    if(ai.reason) parts.push('<div class="rreason">'+ai.reason+'</div>');
+    parts.push('</div>');
+    el.innerHTML=parts.join('');
+    btn.textContent='🔍 Prüfen';
 /* SIGNALS */
 async function lsg(){
   const el=document.getElementById('sig-list');
@@ -2149,9 +2175,15 @@ function af(){
     const rk=x.ai_risk==='HIGH'?'thi':x.ai_risk==='MEDIUM'?'tmd':'tlo';
     const op=x.outcome==='OPEN';
     const L=x.ai_direction==='LONG';
-    const obs=op&&SECRET?'<div class="obt"><button class="ob obw" onclick="so(\''+x.id+'\',\'WIN\',this)">✓ WIN</button><button class="ob obl" onclick="so(\''+x.id+'\',\'LOSS\',this)">✗ LOSS</button><button class="ob obs" onclick="so(\''+x.id+'\',\'SKIPPED\',this)">— Skip</button></div>':'';
+    const obs=op&&SECRET?('<div class="obt"><button class="ob obw" data-id="'+x.id+'" data-out="WIN">WIN</button><button class="ob obl" data-id="'+x.id+'" data-out="LOSS">LOSS</button><button class="ob obs" data-id="'+x.id+'" data-out="SKIPPED">Skip</button></div>'):'';
     return '<div class="sc"><div class="sc-top"><div class="sc-left"><div class="sc-sym">'+(x.symbol||'–')+'</div><span class="sc-dp '+(L?'dp-long':'dp-short')+'">'+(x.ai_direction||'–')+'</span></div><div class="sc-right"><div class="sc-score" style="color:'+sc(s)+'">'+s+'/100</div><div class="sc-age">'+ago(x.created_at)+'</div></div></div><div class="sc-px"><span>Entry: '+fmt(x.ai_entry)+'</span><span style="color:var(--green)">TP: '+fmt(x.ai_take_profit)+'</span><span style="color:var(--red)">SL: '+fmt(x.ai_stop_loss)+'</span></div><div class="bar" style="margin-bottom:8px"><div class="bar-f" style="width:'+s+'%;background:'+sc(s)+'"></div></div><div class="sc-ft"><div class="tags"><span class="tg '+rc+'">'+(x.ai_recommendation==='RECOMMENDED'?'Empfohlen':'Nicht empf.')+'</span><span class="tg '+rk+'">'+(x.ai_risk||'–')+'</span><span class="tg '+oc+'" id="out-'+x.id+'">'+(x.outcome||'–')+'</span></div>'+obs+'</div></div>';
   }).join('');
+  // Wire up outcome buttons
+  el.querySelectorAll('.ob[data-id]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      so(btn.dataset.id, btn.dataset.out, btn);
+    });
+  });
 }
 async function so(id,o,btn){
   const all=btn.parentElement.querySelectorAll('.ob');
