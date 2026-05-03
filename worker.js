@@ -1444,7 +1444,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--t2);min-h
 /* ══ LOGIN ══ */
 #ls{position:fixed;inset:0;z-index:500;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px;transition:opacity .3s}
 #ls.fade{opacity:0;pointer-events:none}
-#ls.gone{display:none}
+#ls.gone{display:none!important}
 .lc{width:100%;max-width:400px;background:var(--card);border:1px solid var(--border);border-radius:20px;padding:32px 28px;box-shadow:var(--shadow)}
 .lh{text-align:center;margin-bottom:28px}
 .ll{width:48px;height:48px;border-radius:12px;margin:0 auto 12px;display:block}
@@ -1452,7 +1452,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--t2);min-h
 .ls2{font-size:.78rem;color:var(--t3)}
 .lul{font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.09em;color:var(--t3);margin-bottom:10px}
 .lug{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:22px}
-.lu{border:2px solid var(--border);border-radius:11px;padding:14px 6px;cursor:pointer;text-align:center;background:var(--card2);transition:all .15s;font-family:'DM Sans',sans-serif}
+.lu{border:2px solid var(--border);border-radius:11px;padding:14px 6px;cursor:pointer;text-align:center;background:var(--card2);transition:all .15s;font-family:'DM Sans',sans-serif;width:100%;display:flex;flex-direction:column;align-items:center}
 .lu:hover{border-color:var(--blue3);transform:translateY(-1px)}
 .lu.sel{border-color:var(--blue2);background:var(--dim)}
 .lav{width:36px;height:36px;border-radius:50%;margin:0 auto 7px;display:flex;align-items:center;justify-content:center;font-size:.88rem;font-weight:700;color:#fff}
@@ -1764,9 +1764,9 @@ nav::-webkit-scrollbar{display:none}
     </div>
     <div class="lul">Account wählen</div>
     <div class="lug">
-      <div class="lu" onclick="pu('Marvin',this)"><div class="lav av-M">M</div><div class="lun">Marvin</div></div>
-      <div class="lu" onclick="pu('Sandro',this)"><div class="lav av-S">S</div><div class="lun">Sandro</div></div>
-      <div class="lu" onclick="pu('Iven',this)"><div class="lav av-I">I</div><div class="lun">Iven</div></div>
+      <button class="lu" type="button" onclick="pu('Marvin',this)"><div class="lav av-M">M</div><div class="lun">Marvin</div></button>
+      <button class="lu" type="button" onclick="pu('Sandro',this)"><div class="lav av-S">S</div><div class="lun">Sandro</div></button>
+      <button class="lu" type="button" onclick="pu('Iven',this)"><div class="lav av-I">I</div><div class="lun">Iven</div></button>
     </div>
     <div class="lpw" id="lpw">
       <div class="lpl">Passwort</div>
@@ -2047,7 +2047,22 @@ function toggleTheme(){const h=document.documentElement;const d=h.dataset.theme=
 
 /* AUTH */
 function ca(){const u=localStorage.getItem('wu');if(!u||!localStorage.getItem('wp_'+u))return false;lok(u);return true;}
-function pu(n,e){su=n;document.querySelectorAll('.lu').forEach(b=>b.classList.remove('sel'));e.classList.add('sel');const s=localStorage.getItem('wp_'+n);document.getElementById('lpw').classList.add('v');document.getElementById('lbt').style.display='block';document.getElementById('lpi').value='';document.getElementById('lerr').textContent='';document.getElementById('lph').textContent=s?'Willkommen zurueck, '+n+'!':'Erste Anmeldung — lege dein Passwort fest.';document.getElementById('lpi').focus();}
+function pu(n,e){
+  su=n;
+  document.querySelectorAll('.lu').forEach(b=>b.classList.remove('sel'));
+  e.classList.add('sel');
+  const s=localStorage.getItem('wp_'+n);
+  const pwEl=document.getElementById('lpw');
+  const btEl=document.getElementById('lbt');
+  const piEl=document.getElementById('lpi');
+  const phEl=document.getElementById('lph');
+  const errEl=document.getElementById('lerr');
+  if(pwEl) pwEl.classList.add('v');
+  if(btEl) btEl.style.display='block';
+  if(piEl) { piEl.value=''; setTimeout(()=>piEl.focus(),50); }
+  if(errEl) errEl.textContent='';
+  if(phEl) phEl.textContent=s?'Willkommen zurueck, '+n+'!':'Erste Anmeldung — lege jetzt dein Passwort fest.';
+}
 function dl(){if(!su)return;const pw=document.getElementById('lpi').value;if(!pw||pw.length<4){document.getElementById('lerr').textContent='Mind. 4 Zeichen.';return;}const s=localStorage.getItem('wp_'+su);if(!s){localStorage.setItem('wp_'+su,pw);localStorage.setItem('wu',su);lok(su);}else if(s===pw){localStorage.setItem('wu',su);lok(su);}else{document.getElementById('lerr').textContent='Falsches Passwort.';document.getElementById('lpi').value='';document.getElementById('lpi').focus();}}
 function lok(n){const el=document.getElementById('ls');el.classList.add('fade');setTimeout(()=>el.classList.add('gone'),300);const u=UA[n]||UA.Marvin;document.getElementById('uav').style.background=u.bg;document.getElementById('uav').textContent=u.i;document.getElementById('uname').textContent=n;ug(n);lh();}
 function logout(){localStorage.removeItem('wu');const el=document.getElementById('ls');el.classList.remove('fade','gone');document.querySelectorAll('.lu').forEach(b=>b.classList.remove('sel'));document.getElementById('lpw').classList.remove('v');document.getElementById('lbt').style.display='none';document.getElementById('lerr').textContent='';su=null;}
