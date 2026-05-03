@@ -1764,23 +1764,16 @@ nav::-webkit-scrollbar{display:none}
     </div>
     <div class="lul">Wer bist du?</div>
     <div class="lug">
-      <button class="lu" type="button" id="btn-M" onclick="window.selectUser('Marvin')">
+      <button class="lu" type="button" onclick="loginAs('Marvin')">
         <div class="lav av-M">M</div><div class="lun">Marvin</div>
       </button>
-      <button class="lu" type="button" id="btn-S" onclick="window.selectUser('Sandro')">
+      <button class="lu" type="button" onclick="loginAs('Sandro')">
         <div class="lav av-S">S</div><div class="lun">Sandro</div>
       </button>
-      <button class="lu" type="button" id="btn-I" onclick="window.selectUser('Iven')">
+      <button class="lu" type="button" onclick="loginAs('Iven')">
         <div class="lav av-I">I</div><div class="lun">Iven</div>
       </button>
     </div>
-    <div id="lpw" style="display:none;margin-bottom:18px">
-      <div class="lpl" id="lpl-title">Passwort</div>
-      <input type="password" class="lpi" id="lpi" placeholder="••••••••">
-      <div id="lph" style="font-size:.6rem;color:var(--t3);margin-top:4px;font-style:italic"></div>
-    </div>
-    <button class="lbt" id="lbt" style="display:none" type="button">Anmelden →</button>
-    <div class="lerr" id="lerr" style="font-size:.68rem;color:var(--red);text-align:center;margin-top:8px;min-height:14px"></div>
     <div class="lft"><p>Made by <strong>WaveWatch</strong> · Made for Trader</p></div>
   </div>
 </div>
@@ -2052,7 +2045,8 @@ function toggleTheme(){
   const h=document.documentElement;
   const d=h.dataset.theme==='dark';
   h.dataset.theme=d?'light':'dark';
-  document.getElementById('thbtn').textContent=d?'🌙':'☀️';
+  const btn=document.getElementById('thbtn');
+  if(btn) btn.textContent=d?'🌙':'☀️';
   localStorage.setItem('wst',d?'light':'dark');
 }
 (function(){
@@ -2062,334 +2056,34 @@ function toggleTheme(){
   if(btn) btn.textContent=t==='dark'?'🌙':'☀️';
 })();
 
-/* AUTH — bulletproof version */
-window.selectUser = function(name) {
-  su = name;
-  // Highlight selected
-  ['M','S','I'].forEach(function(i){
-    const b=document.getElementById('btn-'+i);
-    if(b) b.classList.remove('sel');
-  });
-  const first = name.charAt(0);
-  const selBtn = document.getElementById('btn-'+first);
-  if(selBtn) selBtn.classList.add('sel');
-
-  // Show password field
-  const pwEl = document.getElementById('lpw');
-  const btEl = document.getElementById('lbt');
-  const piEl = document.getElementById('lpi');
-  const phEl = document.getElementById('lph');
-  const errEl = document.getElementById('lerr');
-
-  if(pwEl) pwEl.style.display = 'block';
-  if(btEl) btEl.style.display = 'block';
-  if(piEl) { piEl.value = ''; }
-  if(errEl) errEl.textContent = '';
-
-  const hasPw = localStorage.getItem('wp_'+name);
-  if(phEl) phEl.textContent = hasPw
-    ? 'Willkommen zurueck, '+name+'!'
-    : 'Erste Anmeldung: Lege jetzt dein Passwort fest.';
-
-  setTimeout(function(){ if(piEl) piEl.focus(); }, 100);
-};
-
-// Wire up login button and enter key
-document.addEventListener('DOMContentLoaded', function() {
-  var btn = document.getElementById('lbt');
-  var inp = document.getElementById('lpi');
-  if(btn) btn.addEventListener('click', doLoginAction);
-  if(inp) inp.addEventListener('keydown', function(e){ if(e.key==='Enter') doLoginAction(); });
-});
-
-function doLoginAction() {
-  if(!su) { document.getElementById('lerr').textContent='Bitte zuerst einen Account wählen.'; return; }
-  var inp = document.getElementById('lpi');
-  var pw = inp ? inp.value : '';
-  if(!pw || pw.length < 4) {
-    document.getElementById('lerr').textContent = 'Passwort muss mind. 4 Zeichen haben.';
-    return;
-  }
-  var stored = localStorage.getItem('wp_'+su);
-  if(!stored) {
-    // First time — set password
-    localStorage.setItem('wp_'+su, pw);
-    localStorage.setItem('wu', su);
-    loginOk(su);
-  } else if(stored === pw) {
-    localStorage.setItem('wu', su);
-    loginOk(su);
-  } else {
-    document.getElementById('lerr').textContent = 'Falsches Passwort. Bitte erneut versuchen.';
-    if(inp) { inp.value=''; inp.focus(); }
-  }
-}
-
-function ca(){
-  var u = localStorage.getItem('wu');
-  if(!u || !localStorage.getItem('wp_'+u)) return false;
-  loginOk(u);
-  return true;
-}
-
-function loginOk(n) {
-  var el = document.getElementById('ls');
-  if(el) { el.classList.add('fade'); setTimeout(function(){ el.classList.add('gone'); }, 300); }
-  var u = UA[n] || UA.Marvin;
-  var av = document.getElementById('uav');
-  var nm = document.getElementById('uname');
-  if(av) { av.style.background=u.bg; av.textContent=u.i; }
-  if(nm) nm.textContent=n;
-  ug(n);
+/* AUTH — no password, just pick profile */
+function loginAs(name) {
+  localStorage.setItem('wu', name);
+  const el=document.getElementById('ls');
+  if(el){ el.style.opacity='0'; setTimeout(()=>{ el.style.display='none'; },300); }
+  const u=UA[name]||UA.Marvin;
+  const av=document.getElementById('uav');
+  const nm=document.getElementById('uname');
+  if(av){ av.style.background=u.bg; av.textContent=u.i; }
+  if(nm) nm.textContent=name;
+  ug(name);
   lh();
 }
 
-function logout() {
+function ca(){
+  const u=localStorage.getItem('wu');
+  if(!u) return false;
+  loginAs(u);
+  return true;
+}
+
+function logout(){
   localStorage.removeItem('wu');
-  var el=document.getElementById('ls');
-  if(el) el.classList.remove('fade','gone');
-  ['M','S','I'].forEach(function(i){
-    var b=document.getElementById('btn-'+i);
-    if(b) b.classList.remove('sel');
-  });
-  var pwEl=document.getElementById('lpw');
-  var btEl=document.getElementById('lbt');
-  var errEl=document.getElementById('lerr');
-  if(pwEl) pwEl.style.display='none';
-  if(btEl) btEl.style.display='none';
-  if(errEl) errEl.textContent='';
-  su=null;
+  const el=document.getElementById('ls');
+  if(el){ el.style.display='flex'; el.style.opacity='1'; }
 }
 
-// dl = alias for backwards compat
-function dl() { doLoginAction(); }
-
-/* CLOCK */
-const DN=['So','Mo','Di','Mi','Do','Fr','Sa'],MN=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
-function ug(n){const h=new Date().getHours();const g=h<12?'Guten Morgen':h<18?'Guten Tag':'Guten Abend';const now=new Date();const t=document.getElementById('htitle'),d=document.getElementById('hdate');if(t)t.innerHTML=g+', <em>'+(n||'Trader')+'</em> 👋';if(d)d.textContent=DN[now.getDay()]+', '+now.getDate()+'. '+MN[now.getMonth()]+' '+now.getFullYear();}
-setInterval(()=>{document.getElementById('clk').textContent=new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});const u=localStorage.getItem('wu');if(u)ug(u);},1000);
-
-/* UTILS */
-const fmt=(n,d=2)=>(!n&&n!==0)?'–':Number(n).toLocaleString('de-DE',{minimumFractionDigits:d,maximumFractionDigits:d});
-const ago=ts=>{const d=Date.now()-ts;if(d<60000)return'jetzt';if(d<3600000)return Math.floor(d/60000)+'m';if(d<86400000)return Math.floor(d/3600000)+'h';return Math.floor(d/86400000)+'d';};
-const sc=s=>s>=70?'var(--green)':s>=50?'var(--amber)':'var(--red)';
-function toast(m,d=2500){const t=document.getElementById('toast');t.textContent=m;t.classList.add('on');setTimeout(()=>t.classList.remove('on'),d);}
-
-/* NAV */
-const PG=['home','analyse','signals','bt','str','tools','tg'];
-function go(n){
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
-  document.querySelectorAll('.nb').forEach((b,i)=>b.classList.toggle('on',PG[i]===n));
-  document.querySelectorAll('.bn').forEach((b,i)=>b.classList.toggle('on',['home','analyse','signals','bt','tools'][i]===n));
-  document.getElementById('pg-'+n).classList.add('on');
-  if(n==='analyse')ls2();if(n==='signals')lsg();if(n==='bt')lbt();if(n==='home')lh();
-}
-
-/* STATS */
-async function lst(){const d=await fetch('/stats').then(r=>r.json()).catch(()=>({}));document.getElementById('k-open').textContent=d.open||0;document.getElementById('k-wins').textContent=d.wins||0;document.getElementById('k-losses').textContent=d.losses||0;document.getElementById('k-wr').textContent=(d.winrate||0)+'%';}
-
-/* HOME */
-async function lh(){await lst();const h=await fetch('/history').then(r=>r.json()).catch(()=>[]);const el=document.getElementById('home-sigs');if(!h.length){el.innerHTML='<div class="empty"><p>Noch keine Signale empfangen.<br>TradingView muss erst Daten senden.</p></div>';return;}el.innerHTML=h.slice(0,5).map(x=>{const s=Number(x.ai_score)||0;const L=x.ai_direction==='LONG';return\`<div class="rs"><div class="rs-dp \${L?'dp-L':'dp-S'}">\${L?'L':'S'}</div><div class="rs-info"><div class="rs-sym">\${x.symbol||'–'}</div><div class="rs-sub">\${x.trigger||'–'}</div></div><div class="rs-right"><div class="rs-sc" style="color:\${sc(s)}">\${s}/100</div><div class="rs-age">\${ago(x.created_at)}</div></div></div>\`;}).join('');}
-
-/* SNAPSHOTS */
-async function ls2(){const el=document.getElementById('snap-list');el.innerHTML='<div class="empty"><p>Lade…</p></div>';const snaps=await fetch('/snapshots').then(r=>r.json()).catch(()=>[]);if(!snaps.length){el.innerHTML='<div class="empty"><p>Noch keine Snapshots.<br>TradingView sendet diese automatisch alle 5 Minuten.</p></div>';return;}el.innerHTML=snaps.map(s=>\`<div><div class="snap"><div style="flex:1;min-width:0"><div class="snap-sym">\${s.symbol}</div><div class="snap-meta">RSI \${fmt(s.rsi,1)} · EMA50 \${fmt(s.ema50,0)} · Trend: \${s.trend||'–'}</div></div><div class="snap-px">\${fmt(s.price)}</div><button class="btn btn-p" onclick="cn('\${s.symbol}',this)" \${SECRET?'':'disabled'} style="font-size:.65rem;padding:6px 12px">\${SECRET?'🔍 Prüfen':'🔒'}</button></div><div class="res" id="res-\${s.symbol}" style="display:none"></div></div>\`).join('');}
-
-/* ANALYSE */
-async function cn(sym,btn){btn.disabled=true;btn.textContent='⏳';const el=document.getElementById('res-'+sym);try{const d=await fetch('/ask?symbol='+encodeURIComponent(sym)+'&secret='+encodeURIComponent(SECRET)).then(r=>r.json());if(d.error)throw new Error(d.error);const ai=d.ai||{},s=Number(ai.score)||0,rec=ai.recommendation==='RECOMMENDED';const rr=(ai.entry&&ai.take_profit&&ai.stop_loss)?(Math.abs(ai.take_profit-ai.entry)/Math.abs(ai.entry-ai.stop_loss)).toFixed(2):null;el.style.display='block';el.innerHTML=\`<div class="res-top"><span class="rbadge \${rec?'ry':'rn'}">\${rec?'✓ Empfohlen':'✗ Nicht empfohlen'}</span><span style="font-family:'DM Mono',monospace;font-size:.82rem;font-weight:500;color:\${sc(s)}">\${s}/100</span></div><div class="res-bd"><div class="rr"><span class="rk">Richtung</span><span class="rv">\${ai.direction||'–'}</span></div><div class="rr"><span class="rk">Risiko</span><span class="rv">\${ai.risk||'–'}</span></div><div class="rr"><span class="rk">Confidence</span><span class="rv">\${ai.confidence||0}%</span></div>\${rr?'<div class="rr"><span class="rk">R/R</span><span class="rv">1:'+rr+'</span></div>':''}<div class="bar"><div class="bar-f" style="width:\${s}%;background:\${sc(s)}"></div></div><div class="rplan"><div class="rpc"><div class="rpl">Entry</div><div class="rpv" style="color:var(--blue3)">\${fmt(ai.entry)}</div></div><div class="rpc"><div class="rpl">Take Profit</div><div class="rpv" style="color:var(--green)">\${fmt(ai.take_profit)}</div></div><div class="rpc"><div class="rpl">Stop Loss</div><div class="rpv" style="color:var(--red)">\${fmt(ai.stop_loss)}</div></div></div><div class="rreason">\${ai.reason||''}</div></div>\`;toast(rec?'✅ Empfohlen!':'⛔ Nicht empfohlen');}catch(e){el.style.display='block';el.innerHTML='<div style="padding:12px 15px;color:var(--red);font-size:.72rem">Fehler: '+e.message+'</div>';}btn.disabled=false;btn.textContent='🔍 Prüfen';}
-
-/* SIGNALS */
-async function lsg(){const el=document.getElementById('sig-list');el.innerHTML='<div class="empty"><p>Lade…</p></div>';aS=await fetch('/history').then(r=>r.json()).catch(()=>[]);const syms=[...new Set(aS.map(x=>x.symbol).filter(Boolean))];const sel=document.getElementById('fsym');sel.innerHTML='<option value="">Alle Symbole</option>'+syms.map(s=>'<option value="'+s+'">'+s+'</option>').join('');af();}
-function srt(m){sm=m;document.getElementById('ss').classList.toggle('on',m==='score');document.getElementById('st').classList.toggle('on',m==='time');af();}
-function af(){const sym=document.getElementById('fsym').value;const out=document.getElementById('fout').value;let f=[...aS];if(sym)f=f.filter(x=>x.symbol===sym);if(out)f=f.filter(x=>x.outcome===out);if(sm==='score')f.sort((a,b)=>(b.ai_score||0)-(a.ai_score||0));else f.sort((a,b)=>b.created_at-a.created_at);const el=document.getElementById('sig-list');if(!f.length){el.innerHTML='<div class="empty"><p>Keine Signale für diese Filter.</p></div>';return;}el.innerHTML=f.map(x=>{const s=Number(x.ai_score)||0;const oc=x.outcome==='WIN'?'tw':x.outcome==='LOSS'?'tl':x.outcome==='SKIPPED'?'tsk':'to';const rc=x.ai_recommendation==='RECOMMENDED'?'tr':'tnr';const rk=x.ai_risk==='HIGH'?'thi':x.ai_risk==='MEDIUM'?'tmd':'tlo';const op=x.outcome==='OPEN';const L=x.ai_direction==='LONG';return\`<div class="sc"><div class="sc-top"><div class="sc-left"><div class="sc-sym">\${x.symbol||'–'}</div><span class="sc-dp \${L?'dp-long':'dp-short'}">\${x.ai_direction||'–'}</span></div><div class="sc-right"><div class="sc-score" style="color:\${sc(s)}">\${s}/100</div><div class="sc-age">\${ago(x.created_at)}</div></div></div><div class="sc-px"><span>Entry: \${fmt(x.ai_entry)}</span><span style="color:var(--green)">TP: \${fmt(x.ai_take_profit)}</span><span style="color:var(--red)">SL: \${fmt(x.ai_stop_loss)}</span></div><div class="bar" style="margin-bottom:8px"><div class="bar-f" style="width:\${s}%;background:\${sc(s)}"></div></div><div class="sc-ft"><div class="tags"><span class="tg \${rc}">\${x.ai_recommendation==='RECOMMENDED'?'Empfohlen':'Nicht empf.'}</span><span class="tg \${rk}">\${x.ai_risk||'–'}</span><span class="tg \${oc}" id="out-\${x.id}">\${x.outcome||'–'}</span></div>\${op&&SECRET?\`<div class="obt"><button class="ob obw" onclick="so('\${x.id}','WIN',this)">✓ WIN</button><button class="ob obl" onclick="so('\${x.id}','LOSS',this)">✗ LOSS</button><button class="ob obs" onclick="so('\${x.id}','SKIPPED',this)">— Skip</button></div>\`:''}</div></div>\`;}).join('');}
-async function so(id,o,btn){const all=btn.parentElement.querySelectorAll('.ob');all.forEach(b=>b.disabled=true);try{const r=await fetch('/outcome?id='+id+'&outcome='+o+'&secret='+encodeURIComponent(SECRET),{method:'POST'}).then(r=>r.json());if(r.status==='ok'){const b=document.getElementById('out-'+id);if(b){b.className='tg '+(o==='WIN'?'tw':o==='LOSS'?'tl':'tsk');b.textContent=o;}btn.parentElement.style.display='none';lst();toast(o==='WIN'?'🏆 WIN!':o==='LOSS'?'❌ LOSS':'— Skip');}}catch(e){all.forEach(b=>b.disabled=false);toast('Fehler: '+e.message);}}
-
-/* BACKTESTING */
-let btMode='analytics';
-async function lbt(){
-  const el=document.getElementById('bt-body');
-  el.innerHTML='<div class="empty"><p>Lade…</p></div>';
-  // Load both datasets
-  const [an,bt2]=await Promise.all([
-    fetch('/analytics').then(r=>r.json()).catch(()=>null),
-    fetch('/backtesting').then(r=>r.json()).catch(()=>null)
-  ]);
-  bd={analytics:an,backtesting:bt2};
-  rbT(btMode);
-}
-function btp(p,btn){btMode=p;document.querySelectorAll('.bttab').forEach(t=>t.classList.remove('on'));btn.classList.add('on');rbT(p);}
-
-function bar2(val,max,color){const pct=max>0?Math.min(100,(val/max)*100):0;return\`<div style="display:flex;align-items:center;gap:8px"><div style="flex:1;height:6px;background:var(--bg3);border-radius:99px;overflow:hidden"><div style="width:\${pct}%;height:100%;background:\${color};border-radius:99px;transition:width .6s ease"></div></div><div style="font-family:'DM Mono',monospace;font-size:.68rem;font-weight:500;color:\${color};width:40px;text-align:right">\${val}</div></div>\`;}
-
-function drawEquity(curve){
-  if(!curve||!curve.length)return'';
-  const vals=curve.map(p=>p.equity);
-  const min=Math.min(...vals)*0.995,max=Math.max(...vals)*1.005;
-  const W=300,H=80;
-  const px=(i)=>Math.round((i/(vals.length-1))*W);
-  const py=(v)=>Math.round(H-((v-min)/(max-min))*H);
-  let path=vals.map((v,i)=>(i===0?'M':'L')+px(i)+' '+py(v)).join(' ');
-  const lastEq=vals[vals.length-1];
-  const firstEq=vals[0];
-  const up=lastEq>=firstEq;
-  const col=up?'var(--green)':'var(--red)';
-  return\`<svg viewBox="0 0 \${W} \${H}" style="width:100%;height:80px" preserveAspectRatio="none">
-    <defs><linearGradient id="eg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="\${col}" stop-opacity=".25"/>
-      <stop offset="100%" stop-color="\${col}" stop-opacity="0"/>
-    </linearGradient></defs>
-    <path d="\${path} L\${W} \${H} L0 \${H} Z" fill="url(#eg)"/>
-    <path d="\${path}" fill="none" stroke="\${col}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-  </svg>\`;
-}
-
-function rbT(mode){
-  if(!bd)return;
-  const el=document.getElementById('bt-body');
-  const an=bd.analytics;
-  const bt2=bd.backtesting;
-
-  if(mode==='analytics'){
-    if(!an||an.error){el.innerHTML='<div class="empty"><p>Noch keine abgeschlossenen Trades.<br>Markiere Signale als WIN oder LOSS um die Auswertung zu sehen.</p></div>';return;}
-    const s=an.summary;
-    const pnlColor=s.total_pnl_pct>=0?'var(--green)':'var(--red)';
-    let h=\`
-    <div class="bt-ks" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
-      <div class="btk"><div class="btkv" style="color:var(--green)">\${s.wins}</div><div class="btkl">Wins</div></div>
-      <div class="btk"><div class="btkv" style="color:var(--red)">\${s.losses}</div><div class="btkl">Losses</div></div>
-      <div class="btk"><div class="btkv" style="color:var(--blue3)">\${s.winrate}%</div><div class="btkl">Winrate</div></div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-      <div class="btk"><div class="btkv" style="color:\${pnlColor}">\${s.total_pnl_pct>0?'+':''}\${s.total_pnl_pct}%</div><div class="btkl">Gesamt P&L</div></div>
-      <div class="btk"><div class="btkv" style="color:var(--amber)">\${s.profit_factor}x</div><div class="btkl">Profit Factor</div></div>
-      <div class="btk"><div class="btkv" style="color:var(--green)">+\${s.avg_win_pct}%</div><div class="btkl">Ø Win</div></div>
-      <div class="btk"><div class="btkv" style="color:var(--red)">\${s.avg_loss_pct}%</div><div class="btkl">Ø Loss</div></div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-      <div class="btk"><div class="btkv" style="color:var(--red)">-\${s.max_drawdown_pct}%</div><div class="btkl">Max Drawdown</div></div>
-      <div class="btk"><div class="btkv" style="color:var(--blue3)">\${s.final_equity.toLocaleString('de-DE',{maximumFractionDigits:0})}</div><div class="btkl">Equity (10k Start)</div></div>
-    </div>\`;
-
-    // Equity Curve
-    if(an.equityCurve?.length>1){
-      const first=an.equityCurve[0].equity;
-      const last=an.equityCurve[an.equityCurve.length-1].equity;
-      const up=last>=first;
-      h+=\`<div class="card" style="margin-bottom:12px">
-        <div class="ch">
-          <div><div class="ct">📈 Equity Kurve</div><div class="cs">Wie wächst 10.000€ Startkapital über alle Trades</div></div>
-          <div style="font-family:'DM Mono',monospace;font-size:.78rem;font-weight:500;color:\${up?'var(--green)':'var(--red)'}">
-            \${up?'▲':'▼'} \${Math.abs(((last-first)/first)*100).toFixed(1)}%
-          </div>
-        </div>
-        <div style="padding:12px 16px 8px">\${drawEquity(an.equityCurve)}</div>
-        <div style="display:flex;justify-content:space-between;padding:0 16px 12px;font-family:'DM Mono',monospace;font-size:.6rem;color:var(--t3)">
-          <span>\${an.equityCurve[0].date}</span>
-          <span>\${an.equityCurve[an.equityCurve.length-1].date}</span>
-        </div>
-      </div>\`;
-    }
-
-    // Filter Vergleich
-    const f=an.filters;
-    h+=\`<div class="card" style="margin-bottom:12px">
-      <div class="ch"><div><div class="ct">🤖 Claude Empfehlung — macht sie einen Unterschied?</div><div class="cs">Performen empfohlene Signale besser als nicht-empfohlene?</div></div></div>
-      <div class="cb">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <div style="background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.15);border-radius:10px;padding:14px;text-align:center">
-            <div style="font-size:.62rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--green);margin-bottom:8px">✓ Empfohlen (\${f.claude.recommended.total})</div>
-            <div style="font-family:'DM Mono',monospace;font-size:1.4rem;font-weight:500;color:var(--green)">\${f.claude.recommended.wr}%</div>
-            <div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div>
-            <div style="font-family:'DM Mono',monospace;font-size:.78rem;color:var(--green);margin-top:4px">\${f.claude.recommended.avgPnl>0?'+':''}\${f.claude.recommended.avgPnl}% Ø P&L</div>
-          </div>
-          <div style="background:rgba(244,63,94,.06);border:1px solid rgba(244,63,94,.15);border-radius:10px;padding:14px;text-align:center">
-            <div style="font-size:.62rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--red);margin-bottom:8px">✗ Nicht empf. (\${f.claude.not_recommended.total})</div>
-            <div style="font-family:'DM Mono',monospace;font-size:1.4rem;font-weight:500;color:var(--red)">\${f.claude.not_recommended.wr}%</div>
-            <div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div>
-            <div style="font-family:'DM Mono',monospace;font-size:.78rem;color:var(--red);margin-top:4px">\${f.claude.not_recommended.avgPnl>0?'+':''}\${f.claude.not_recommended.avgPnl}% Ø P&L</div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="card" style="margin-bottom:12px">
-      <div class="ch"><div><div class="ct">📊 EMA200 Bias-Filter — hilft er wirklich?</div><div class="cs">Trades in Bias-Richtung vs gegen den Bias</div></div></div>
-      <div class="cb">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <div style="background:rgba(37,99,235,.06);border:1px solid rgba(37,99,235,.15);border-radius:10px;padding:14px;text-align:center">
-            <div style="font-size:.62rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--blue3);margin-bottom:8px">Mit Bias (\${f.ema_bias.with_bias.total})</div>
-            <div style="font-family:'DM Mono',monospace;font-size:1.4rem;font-weight:500;color:var(--blue3)">\${f.ema_bias.with_bias.wr}%</div>
-            <div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div>
-            <div style="font-family:'DM Mono',monospace;font-size:.78rem;color:var(--blue3);margin-top:4px">\${f.ema_bias.with_bias.avgPnl>0?'+':''}\${f.ema_bias.with_bias.avgPnl}% Ø P&L</div>
-          </div>
-          <div style="background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.15);border-radius:10px;padding:14px;text-align:center">
-            <div style="font-size:.62rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--amber);margin-bottom:8px">Gegen Bias (\${f.ema_bias.against_bias.total})</div>
-            <div style="font-family:'DM Mono',monospace;font-size:1.4rem;font-weight:500;color:var(--amber)">\${f.ema_bias.against_bias.wr}%</div>
-            <div style="font-size:.62rem;color:var(--t3);margin-top:4px">Winrate</div>
-            <div style="font-family:'DM Mono',monospace;font-size:.78rem;color:var(--amber);margin-top:4px">\${f.ema_bias.against_bias.avgPnl>0?'+':''}\${f.ema_bias.against_bias.avgPnl}% Ø P&L</div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="card" style="margin-bottom:12px">
-      <div class="ch"><div><div class="ct">🎯 Score-Analyse — welche Scores performen am besten?</div><div class="cs">Winrate und Ø P&L pro Score-Bereich</div></div></div>
-      <div class="cb">
-        \${f.score_buckets.map(b=>\`
-        <div style="margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
-            <div style="font-size:.74rem;font-weight:600;color:var(--t2)">Score \${b.label}</div>
-            <div style="display:flex;gap:12px;font-family:'DM Mono',monospace;font-size:.68rem">
-              <span style="color:var(--blue3)">\${b.total} Trades</span>
-              <span style="color:\${b.wr>=50?'var(--green)':'var(--red)'}">\${b.wr}% WR</span>
-              <span style="color:\${b.avgPnl>=0?'var(--green)':'var(--red)'}">\${b.avgPnl>0?'+':''}\${b.avgPnl}%</span>
-            </div>
-          </div>
-          \${bar2(b.wr,100,b.wr>=50?'var(--green)':'var(--red)')}
-        </div>\`).join('')}
-      </div>
-    </div>\`;
-
-    // Letzte Trades
-    if(an.recentTrades?.length){
-      h+=\`<div class="card"><div class="ch"><div class="ct">Letzte Trades</div></div><div style="padding:0 4px"><table class="stbl">
-        <tr><th>Datum</th><th>Symbol</th><th>Dir.</th><th>Score</th><th>P&L</th><th>Status</th></tr>
-        \${an.recentTrades.map(t=>\`<tr>
-          <td style="font-size:.65rem;color:var(--t3)">\${t.date}</td>
-          <td><strong>\${t.symbol}</strong></td>
-          <td style="color:\${t.direction==='LONG'?'var(--green)':'var(--red)';font-size:.68rem}">\${t.direction}</td>
-          <td style="font-family:'DM Mono',monospace">\${t.score}/100</td>
-          <td style="font-family:'DM Mono',monospace;color:\${t.pnl>=0?'var(--green)':'var(--red)'}">\${t.pnl>0?'+':''}\${t.pnl}%</td>
-          <td><span class="tg \${t.outcome==='WIN'?'tw':'tl'}">\${t.outcome}</span></td>
-        </tr>\`).join('')}
-      </table></div></div>\`;
-    }
-
-    el.innerHTML=h;
-
-  } else if(mode==='symbol'){
-    // Symbol-Breakdown from backtesting endpoint
-    if(!bt2||bt2.error){el.innerHTML='<div class="empty"><p>Keine Daten.</p></div>';return;}
-    let h='';
-    if(bt2.bySymbol?.length){
-      h+=\`<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">Winrate pro Symbol</div></div><div style="padding:0 4px"><table class="stbl">
-        <tr><th>Symbol</th><th>Wins</th><th>Losses</th><th>Winrate</th><th>Ø Score</th></tr>
-        \${bt2.bySymbol.map(s=>{const c=(s.wins||0)+(s.losses||0);const w=c>0?((s.wins/c)*100).toFixed(0):0;return\`<tr>
-          <td><strong>\${s.symbol}</strong></td>
-          <td style="color:var(--green)">\${s.wins||0}</td>
-          <td style="color:var(--red)">\${s.losses||0}</td>
-          <td style="font-family:'DM Mono',monospace;font-weight:500;color:var(--blue3)">\${w}%</td>
-          <td style="font-family:'DM Mono',monospace">\${Number(s.avg_score||0).toFixed(0)}</td>
-        </tr>\`;}).join('')}
-      </table></div></div>\`;
-    }
-    if(bt2.best?.length)h+=\`<div class="card" style="margin-bottom:12px"><div class="ch"><div class="ct">🏆 Beste Signale</div></div><div class="cb">\${bt2.best.map(x=>\`<div class="bsr"><div><div class="bsr-sym">\${x.symbol} <span style="color:var(--green);font-size:.6rem">\${x.ai_direction}</span></div><div class="bsr-sub">E:\${fmt(x.ai_entry)} TP:\${fmt(x.ai_take_profit)}</div></div><div class="bsr-sc" style="color:var(--green)">\${x.ai_score}/100</div></div>\`).join('')}</div></div>\`;
-    if(bt2.worst?.length)h+=\`<div class="card"><div class="ch"><div class="ct">📉 Schlechteste Signale</div></div><div class="cb">\${bt2.worst.map(x=>\`<div class="bsr"><div><div class="bsr-sym">\${x.symbol} <span style="color:var(--red);font-size:.6rem">\${x.ai_direction}</span></div><div class="bsr-sub">E:\${fmt(x.ai_entry)} SL:\${fmt(x.ai_stop_loss)}</div></div><div class="bsr-sc" style="color:var(--red)">\${x.ai_score}/100</div></div>\`).join('')}</div></div>\`;
-    el.innerHTML=h||'<div class="empty"><p>Keine Symbol-Daten.</p></div>';
-  }
-}
-
-/* TOOLS */
-async function ta(a){if(!SECRET&&a!=='health'){toast('⚠️ Secret in URL benoetigt');return;}toast('Wird ausgefuehrt…');try{if(a==='health'){const d=await fetch('/health').then(r=>r.json());toast('✅ Worker OK · '+new Date(d.time).toLocaleTimeString('de-DE'),3000);}else if(a==='telegram'){await fetch('/test-telegram?secret='+encodeURIComponent(SECRET));toast('📨 Telegram gesendet!');}else if(a==='morning'){await fetch('/morning-brief?secret='+encodeURIComponent(SECRET));toast('🌅 Morning Brief gesendet!');}else if(a==='outcomes'){const d=await fetch('/check-outcomes?secret='+encodeURIComponent(SECRET)).then(r=>r.json());toast('🔄 '+(d.result?.closed||0)+' Trades aktualisiert',3000);}}catch(e){toast('❌ Fehler: '+e.message);}}
-function cp(c){navigator.clipboard.writeText(c).then(()=>toast('📋 Kopiert: '+c));}
-
+// Init auth check
 // Init auth check
 (function(){
   if(!ca()) {
