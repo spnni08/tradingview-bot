@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>WAVESCOUT — Login</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-0: #060F1F;
+  --bg-1: #0A1628;
+  --bg-2: #0F2240;
+  --bg-3: #142849;
+  --border-default: rgba(148, 175, 230, 0.14);
+  --border-strong: rgba(148, 175, 230, 0.24);
+  --text-primary: #E8EEFB;
+  --text-secondary: #94A8CC;
+  --text-tertiary: #5E739B;
+  --blue-500: #3B82F6;
+  --blue-600: #2563EB;
+  --font-sans: 'Geist', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0;
+  background: 
+    radial-gradient(1200px 800px at 50% -10%, rgba(59,130,246,0.08), transparent 60%),
+    var(--bg-1);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-container {
+  width: 100%;
+  max-width: 420px;
+  padding: 20px;
+}
+
+.login-card {
+  background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  padding: 40px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+}
+
+.logo {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.logo-icon {
+  width: 48px;
+  height: 48px;
+  background: linear-gradient(135deg, var(--blue-500), var(--blue-600));
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.logo-text {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.logo-sub {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-top: 4px;
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.input {
+  width: 100%;
+  background: var(--bg-0);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 14px;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  transition: all 0.2s;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--blue-500);
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+}
+
+.input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.btn {
+  width: 100%;
+  background: linear-gradient(180deg, var(--blue-500), var(--blue-600));
+  border: 1px solid var(--blue-500);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: var(--font-sans);
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(59,130,246,0.4);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 13px;
+  color: #FCA5A5;
+  margin-bottom: 20px;
+  display: none;
+}
+
+.error.show {
+  display: block;
+  animation: shake 0.4s;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-8px); }
+  75% { transform: translateX(8px); }
+}
+
+.info-text {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-align: center;
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-default);
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  margin-right: 8px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+</style>
+</head>
+<body>
+
+<div class="login-container">
+  <div class="login-card">
+    <div class="logo">
+      <div class="logo-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4">
+          <path d="M2 14c2-3 4-3 6 0s4 3 6 0 4-3 6 0 4 3 2 0"/>
+        </svg>
+      </div>
+      <div class="logo-text">WAVESCOUT</div>
+      <div class="logo-sub">Trading Intel</div>
+    </div>
+
+    <div id="errorMessage" class="error"></div>
+
+    <form id="loginForm">
+      <div class="form-group">
+        <label>Benutzername</label>
+        <input 
+          type="text" 
+          class="input" 
+          id="username" 
+          placeholder="Iven, Sandro, Marvin oder Extern"
+          required
+          autocomplete="username"
+        />
+      </div>
+
+      <div class="form-group">
+        <label>Passwort</label>
+        <input 
+          type="password" 
+          class="input" 
+          id="password" 
+          placeholder="Dein Passwort"
+          required
+          autocomplete="current-password"
+        />
+      </div>
+
+      <button type="submit" class="btn" id="loginBtn">
+        Anmelden
+      </button>
+    </form>
+
+    <div class="info-text">
+      <strong>Erstanmeldung:</strong> Passwort <code style="background: var(--bg-0); padding: 2px 6px; border-radius: 4px;">123456789</code><br>
+      Du wirst aufgefordert, das Passwort zu ändern.
+    </div>
+  </div>
+</div>
+
+<script>
+const API_URL = 'https://tradingview-bot.spnn08.workers.dev';
+
+const loginForm = document.getElementById('loginForm');
+const loginBtn = document.getElementById('loginBtn');
+const errorMessage = document.getElementById('errorMessage');
+const usernameInput = document.getElementById('username');
+const passwordInput = document.getElementById('password');
+
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  
+  const username = usernameInput.value.trim();
+  const password = passwordInput.value;
+
+  if (!username || !password) {
+    showError('Bitte Benutzername und Passwort eingeben');
+    return;
+  }
+
+  loginBtn.disabled = true;
+  loginBtn.innerHTML = '<span class="spinner"></span> Anmelden...';
+  errorMessage.classList.remove('show');
+
+  try {
+    const response = await fetch(`${API_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      // Save session
+      localStorage.setItem('wavescout_session', data.session.id);
+      localStorage.setItem('wavescout_user', JSON.stringify(data.user));
+
+      // Check if password change required
+      if (data.user.mustChangePassword) {
+        window.location.href = 'change-password.html';
+      } else {
+        window.location.href = 'index.html';
+      }
+    } else {
+      showError(data.error || 'Login fehlgeschlagen');
+    }
+  } catch (error) {
+    console.error('Login error:', error);
+    showError('Verbindung zum Server fehlgeschlagen');
+  } finally {
+    loginBtn.disabled = false;
+    loginBtn.innerHTML = 'Anmelden';
+  }
+});
+
+function showError(message) {
+  errorMessage.textContent = message;
+  errorMessage.classList.add('show');
+}
+
+// Auto-focus username
+usernameInput.focus();
+</script>
+
+</body>
+</html>
