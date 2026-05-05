@@ -1,14 +1,28 @@
 name = "tradingview-bot"
 main = "worker.js"
-compatibility_date = "2026-04-28"
+compatibility_date = "2024-01-01"
+workers_dev = true
 
-[triggers]
-crons = ["0 7 * * *", "0 * * * *"]
-
+# D1 Database
 [[d1_databases]]
 binding = "DB"
 database_name = "wavescout_db"
-database_id = "550e7c98-5757-451d-b0ea-5c8f374c53b1"
+database_id = "YOUR_DATABASE_ID_HERE"
 
-[observability.logs]
-enabled = true
+# Environment Variables (via Dashboard oder wrangler secret)
+# WEBHOOK_SECRET = "WaveWatch"
+# TELEGRAM_BOT_TOKEN = "your_telegram_token"
+# TELEGRAM_CHAT_ID = "your_chat_id"
+# ANTHROPIC_API_KEY = "your_anthropic_key"
+
+# Cron Triggers
+[triggers]
+crons = [
+  "0 7 * * *",  # Daily summary at 7am UTC
+  "0 */4 * * *" # Check outcomes every 4 hours
+]
+
+# Route configuration
+routes = [
+  { pattern = "tradingview-bot.spnn08.workers.dev", zone_name = "spnn08.workers.dev" }
+]
