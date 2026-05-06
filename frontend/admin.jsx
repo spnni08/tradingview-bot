@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-// WAVESCOUT v3.3 - ADMIN (USER MANAGEMENT)
+// WAVESCOUT v3.3 - ADMIN MIT TELEGRAM TEST
 // ═══════════════════════════════════════════════════════════════
 
 const { useState, useEffect } = React;
@@ -10,6 +10,8 @@ const AdminPage = () => {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [users, setUsers] = useState([]);
+  const [telegramTesting, setTelegramTesting] = useState(false);
+  const [telegramResult, setTelegramResult] = useState(null);
 
   useEffect(() => {
     const sessionId = localStorage.getItem('wavescout_session');
@@ -23,7 +25,6 @@ const AdminPage = () => {
     const parsedUser = JSON.parse(userData);
     setUser(parsedUser);
 
-    // Check if admin
     if (parsedUser.role !== 'admin') {
       alert('Nur für Administratoren!');
       window.location.href = 'index.html';
@@ -52,6 +53,27 @@ const AdminPage = () => {
     } catch (err) {
       console.error('Error loading users:', err);
       setLoading(false);
+    }
+  };
+
+  const handleTestTelegram = async () => {
+    setTelegramTesting(true);
+    setTelegramResult(null);
+    
+    const sessionId = localStorage.getItem('wavescout_session');
+    
+    try {
+      const response = await fetch(`${API_URL}/test-telegram`, {
+        headers: { 'X-Session-ID': sessionId }
+      });
+
+      const data = await response.json();
+      setTelegramResult(data);
+      setTelegramTesting(false);
+    } catch (err) {
+      console.error('Telegram test error:', err);
+      setTelegramResult({ success: false, message: 'Fehler beim Testen' });
+      setTelegramTesting(false);
     }
   };
 
@@ -92,10 +114,61 @@ const AdminPage = () => {
       <main className="main">
         <Topbar
           title="🛡️ Administration"
-          subtitle={`${users.length} Benutzer · User Management`}
+          subtitle={`${users.length} Benutzer · System Management`}
         />
         <div className="content page-enter">
 
+          {/* Telegram Test */}
+          <div className="card">
+            <div className="card-head">
+              <Icon name="bell" className="ico"/>
+              <h3>Telegram Integration</h3>
+            </div>
+            <div className="card-body">
+              <p style={{marginBottom: 16, color: 'var(--text-secondary)'}}>
+                Teste ob Telegram-Benachrichtigungen funktionieren
+              </p>
+              <button 
+                className="btn btn-primary" 
+                onClick={handleTestTelegram}
+                disabled={telegramTesting}
+              >
+                {telegramTesting ? (
+                  <>
+                    <div className="spinner-sm" style={{marginRight: 8}}></div>
+                    Sende Test-Nachricht...
+                  </>
+                ) : (
+                  <>
+                    <Icon name="bell" size={14}/>
+                    Telegram testen
+                  </>
+                )}
+              </button>
+              
+              {telegramResult && (
+                <div style={{
+                  marginTop: 16,
+                  padding: 12,
+                  background: telegramResult.success ? 'var(--bg-success)' : 'var(--bg-error)',
+                  borderRadius: 8,
+                  border: `1px solid ${telegramResult.success ? 'var(--win)' : 'var(--loss)'}`
+                }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    color: telegramResult.success ? 'var(--win)' : 'var(--loss)'
+                  }}>
+                    {telegramResult.success ? '✅' : '❌'}
+                    <strong>{telegramResult.message}</strong>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* User Management */}
           <div className="card">
             <div className="card-head">
               <Icon name="users" className="ico"/>
@@ -141,6 +214,25 @@ const AdminPage = () => {
                 </tbody>
               </table>
             )}
+          </div>
+
+          {/* System Info */}
+          <div className="grid" style={{gridTemplateColumns: 'repeat(3, 1fr)'}}>
+            <div className="stat">
+              <div className="label">Worker Version</div>
+              <div className="value">3.3.0</div>
+              <div className="sub muted">Production</div>
+            </div>
+            <div className="stat">
+              <div className="label">Total Users</div>
+              <div className="value">{users.length}</div>
+              <div className="sub muted">Registriert</div>
+            </div>
+            <div className="stat">
+              <div className="label">Admin Users</div>
+              <div className="value">{users.filter(u => u.role === 'admin').length}</div>
+              <div className="sub muted">Administratoren</div>
+            </div>
           </div>
 
         </div>
