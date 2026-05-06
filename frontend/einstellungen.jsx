@@ -1,292 +1,252 @@
-// WaveScout — Einstellungen page mit Broker-Auswahl
+// ═══════════════════════════════════════════════════════════════
+// WAVESCOUT v3.3 - EINSTELLUNGEN
+// ═══════════════════════════════════════════════════════════════
+
 const { useState, useEffect } = React;
 
-const Einstellungen = () => {
+const API_URL = 'https://tradingview-bot.spnn08.workers.dev';
+
+const EinstellungenPage = () => {
+  const [user, setUser] = useState(null);
   const [settings, setSettings] = useState({
-    broker: "bybit",
-    apiKey: "",
-    apiSecret: "",
+    broker: 'bybit',
+    apiKey: '',
+    apiSecret: '',
     testnet: true,
-    defaultLeverage: 5,
-    maxRiskPercent: 2,
-    minConfidenceScore: 65,
+    notifications: true,
     telegramEnabled: true,
-    autoTrade: false
+    autoTrade: false,
+    riskPerTrade: 2,
+    maxOpenTrades: 3
   });
-
   const [saved, setSaved] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  const API_URL = window.location.hostname.includes('localhost') 
-    ? 'http://localhost:8787' 
-    : 'https://tradingview-bot.spnn08.workers.dev';
 
   useEffect(() => {
+    const sessionId = localStorage.getItem('wavescout_session');
+    const userData = localStorage.getItem('wavescout_user');
+    
+    if (!sessionId || !userData) {
+      window.location.href = 'login.html';
+      return;
+    }
+
+    const parsedUser = JSON.parse(userData);
+    setUser(parsedUser);
+
+    if (parsedUser.mustChangePassword) {
+      window.location.href = 'change-password.html';
+      return;
+    }
+
     loadSettings();
   }, []);
 
-  const loadSettings = async () => {
-    try {
-      const response = await fetch(`${API_URL}/settings?user=default`);
-      if (response.ok) {
-        const data = await response.json();
-        setSettings(data);
-      }
-    } catch (error) {
-      console.error('Fehler beim Laden der Einstellungen:', error);
-    } finally {
-      setLoading(false);
+  const loadSettings = () => {
+    const savedSettings = localStorage.getItem('wavescout_settings');
+    if (savedSettings) {
+      setSettings(JSON.parse(savedSettings));
     }
   };
 
-  const saveSettings = async () => {
-    setSaved(false);
+  const handleSave = () => {
+    localStorage.setItem('wavescout_settings', JSON.stringify(settings));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+  };
+
+  const handleLogout = async () => {
+    const sessionId = localStorage.getItem('wavescout_session');
     try {
-      const response = await fetch(`${API_URL}/settings?user=default&secret=WaveWatch`, {
+      await fetch(`${API_URL}/auth/logout`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings)
+        headers: { 'X-Session-ID': sessionId }
       });
-
-      if (response.ok) {
-        setSaved(true);
-        setTimeout(() => setSaved(false), 3000);
-      }
-    } catch (error) {
-      console.error('Fehler beim Speichern:', error);
-      alert('Fehler beim Speichern der Einstellungen');
+    } finally {
+      localStorage.clear();
+      window.location.href = 'login.html';
     }
   };
-
-  const handleChange = (key, value) => {
-    setSettings(prev => ({ ...prev, [key]: value }));
-  };
-
-  const brokers = [
-    { id: 'bybit', name: 'Bybit', logo: '🟡', testnetSupport: true },
-    { id: 'binance', name: 'Binance', logo: '🟨', testnetSupport: true },
-    { id: 'mexc', name: 'MEXC', logo: '🔵', testnetSupport: false }
-  ];
-
-  if (loading) {
-    return (
-      <div className="app">
-        <Sidebar active="einstellungen" />
-        <main className="main">
-          <div style={{display:'flex', alignItems:'center', justifyContent:'center', height:'100vh'}}>
-            <div className="spinner"></div>
-          </div>
-        </main>
-      </div>
-    );
-  }
 
   return (
     <div className="app">
-      <Sidebar active="einstellungen" />
+      <Sidebar active="einstellungen" user={user} onLogout={handleLogout} />
       <main className="main">
         <Topbar
-          title="Einstellungen ⚙️"
-          subtitle="Broker verbinden, Trading-Parameter anpassen"
+          title="⚙️ Einstellungen"
+          subtitle="Trading-Konfiguration & Präferenzen"
         />
-
         <div className="content page-enter">
-          
-          {/* Broker Selection */}
+
+          {/* Broker Settings */}
           <div className="card">
             <div className="card-head">
-              <Icon name="link" className="ico"/>
-              <h3>Broker-Verbindung</h3>
-              {saved && (
-                <div className="actions">
-                  <span className="badge badge-win" style={{animation:'fadeIn 0.3s'}}>
-                    ✓ Gespeichert
-                  </span>
-                </div>
-              )}
+              <Icon name="settings" className="ico"/>
+              <h3>Broker Konfiguration</h3>
             </div>
             <div className="card-body">
-              
-              <div className="form-group">
-                <label>Broker auswählen</label>
-                <div className="broker-grid">
-                  {brokers.map(broker => (
-                    <div 
-                      key={broker.id}
-                      className={`broker-card ${settings.broker === broker.id ? 'active' : ''}`}
-                      onClick={() => handleChange('broker', broker.id)}
-                    >
-                      <div className="broker-logo">{broker.logo}</div>
-                      <div className="broker-name">{broker.name}</div>
-                      {broker.testnetSupport && (
-                        <div className="broker-badge">Testnet ✓</div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+              <div style={{marginBottom: 20}}>
+                <label style={{display: 'block', marginBottom: 8, fontSize: 13, fontWeight: 500}}>
+                  Broker
+                </label>
+                <select
+                  value={settings.broker}
+                  onChange={(e) => setSettings({...settings, broker: e.target.value})}
+                  className="input"
+                  style={{width: '100%', maxWidth: 300}}
+                >
+                  <option value="bybit">Bybit</option>
+                  <option value="binance">Binance</option>
+                  <option value="mexc">MEXC</option>
+                </select>
               </div>
 
-              <div className="form-group">
-                <label>API Key</label>
+              <div style={{marginBottom: 20}}>
+                <label style={{display: 'block', marginBottom: 8, fontSize: 13, fontWeight: 500}}>
+                  API Key
+                </label>
                 <input
                   type="text"
-                  className="input"
-                  placeholder="Dein API Key"
                   value={settings.apiKey}
-                  onChange={(e) => handleChange('apiKey', e.target.value)}
+                  onChange={(e) => setSettings({...settings, apiKey: e.target.value})}
+                  placeholder="Dein API Key"
+                  className="input"
+                  style={{width: '100%'}}
                 />
-                <div className="hint">
-                  Erstelle einen API Key in deinem {brokers.find(b => b.id === settings.broker)?.name} Account.
-                </div>
               </div>
 
-              <div className="form-group">
-                <label>API Secret</label>
+              <div style={{marginBottom: 20}}>
+                <label style={{display: 'block', marginBottom: 8, fontSize: 13, fontWeight: 500}}>
+                  API Secret
+                </label>
                 <input
                   type="password"
-                  className="input"
-                  placeholder="Dein API Secret"
                   value={settings.apiSecret}
-                  onChange={(e) => handleChange('apiSecret', e.target.value)}
-                />
-                <div className="hint">
-                  Wird verschlüsselt gespeichert. Niemals mit anderen teilen.
-                </div>
-              </div>
-
-              {brokers.find(b => b.id === settings.broker)?.testnetSupport && (
-                <div className="form-group">
-                  <label className="checkbox-label">
-                    <input
-                      type="checkbox"
-                      checked={settings.testnet}
-                      onChange={(e) => handleChange('testnet', e.target.checked)}
-                    />
-                    <span>Testnet verwenden (empfohlen für Tests)</span>
-                  </label>
-                  <div className="hint">
-                    Mit Testnet kannst du ohne echtes Geld testen. Aktiviere es für die ersten Trades.
-                  </div>
-                </div>
-              )}
-
-            </div>
-          </div>
-
-          {/* Trading Parameters */}
-          <div className="card">
-            <div className="card-head">
-              <Icon name="target" className="ico"/>
-              <h3>Trading-Parameter</h3>
-            </div>
-            <div className="card-body">
-
-              <div className="form-group">
-                <label>Standard-Hebel (Leverage)</label>
-                <input
-                  type="number"
+                  onChange={(e) => setSettings({...settings, apiSecret: e.target.value})}
+                  placeholder="Dein API Secret"
                   className="input"
-                  min="1"
-                  max="125"
-                  value={settings.defaultLeverage}
-                  onChange={(e) => handleChange('defaultLeverage', parseInt(e.target.value) || 5)}
+                  style={{width: '100%'}}
                 />
-                <div className="hint">
-                  Empfohlen: 5x-10x für Anfänger, max. 20x für Erfahrene.
-                </div>
               </div>
 
-              <div className="form-group">
-                <label>Max. Risiko pro Trade (%)</label>
-                <input
-                  type="number"
-                  className="input"
-                  min="0.5"
-                  max="5"
-                  step="0.5"
-                  value={settings.maxRiskPercent}
-                  onChange={(e) => handleChange('maxRiskPercent', parseFloat(e.target.value) || 2)}
-                />
-                <div className="hint">
-                  Empfohlen: 1-2% deines Kapitals pro Trade. Nie mehr als 5%.
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label>Minimum Confidence Score</label>
-                <input
-                  type="number"
-                  className="input"
-                  min="50"
-                  max="90"
-                  value={settings.minConfidenceScore}
-                  onChange={(e) => handleChange('minConfidenceScore', parseInt(e.target.value) || 65)}
-                />
-                <div className="hint">
-                  Nur Signale über diesem Score werden ausgeführt. Empfohlen: 65-75.
-                </div>
-              </div>
-
-            </div>
-          </div>
-
-          {/* Notifications & Automation */}
-          <div className="card">
-            <div className="card-head">
-              <Icon name="bell" className="ico"/>
-              <h3>Benachrichtigungen & Automatisierung</h3>
-            </div>
-            <div className="card-body">
-
-              <div className="form-group">
-                <label className="checkbox-label">
+              <div style={{marginBottom: 20}}>
+                <label style={{display: 'flex', alignItems: 'center', gap: 8}}>
                   <input
                     type="checkbox"
-                    checked={settings.telegramEnabled}
-                    onChange={(e) => handleChange('telegramEnabled', e.target.checked)}
+                    checked={settings.testnet}
+                    onChange={(e) => setSettings({...settings, testnet: e.target.checked})}
                   />
-                  <span>Telegram-Benachrichtigungen aktivieren</span>
+                  <span style={{fontSize: 13}}>Testnet verwenden</span>
                 </label>
-                <div className="hint">
-                  Du erhältst Push-Benachrichtigungen für alle neuen Signale.
-                </div>
               </div>
+            </div>
+          </div>
 
-              <div className="form-group">
-                <label className="checkbox-label">
+          {/* Trading Settings */}
+          <div className="card">
+            <div className="card-head">
+              <Icon name="chart" className="ico"/>
+              <h3>Trading Einstellungen</h3>
+            </div>
+            <div className="card-body">
+              <div style={{marginBottom: 20}}>
+                <label style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12}}>
                   <input
                     type="checkbox"
                     checked={settings.autoTrade}
-                    onChange={(e) => handleChange('autoTrade', e.target.checked)}
+                    onChange={(e) => setSettings({...settings, autoTrade: e.target.checked})}
                   />
-                  <span>Auto-Trading aktivieren (gefährlich!)</span>
+                  <span style={{fontSize: 13, fontWeight: 500}}>Auto-Trading aktivieren</span>
                 </label>
-                <div className="hint" style={{color: 'var(--warn)'}}>
-                  ⚠️ Trades werden automatisch ohne deine Bestätigung ausgeführt. Nur mit Testnet empfohlen!
-                </div>
+                <p style={{fontSize: 12, color: 'var(--text-tertiary)', marginLeft: 24}}>
+                  Signale werden automatisch ausgeführt
+                </p>
               </div>
 
+              <div style={{marginBottom: 20}}>
+                <label style={{display: 'block', marginBottom: 8, fontSize: 13, fontWeight: 500}}>
+                  Risiko pro Trade: {settings.riskPerTrade}%
+                </label>
+                <input
+                  type="range"
+                  min="1"
+                  max="5"
+                  step="0.5"
+                  value={settings.riskPerTrade}
+                  onChange={(e) => setSettings({...settings, riskPerTrade: parseFloat(e.target.value)})}
+                  style={{width: '100%', maxWidth: 300}}
+                />
+              </div>
+
+              <div style={{marginBottom: 20}}>
+                <label style={{display: 'block', marginBottom: 8, fontSize: 13, fontWeight: 500}}>
+                  Max. offene Trades: {settings.maxOpenTrades}
+                </label>
+                <input
+                  type="range"
+                  min="1"
+                  max="10"
+                  step="1"
+                  value={settings.maxOpenTrades}
+                  onChange={(e) => setSettings({...settings, maxOpenTrades: parseInt(e.target.value)})}
+                  style={{width: '100%', maxWidth: 300}}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Notification Settings */}
+          <div className="card">
+            <div className="card-head">
+              <Icon name="bell" className="ico"/>
+              <h3>Benachrichtigungen</h3>
+            </div>
+            <div className="card-body">
+              <div style={{marginBottom: 12}}>
+                <label style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                  <input
+                    type="checkbox"
+                    checked={settings.notifications}
+                    onChange={(e) => setSettings({...settings, notifications: e.target.checked})}
+                  />
+                  <span style={{fontSize: 13}}>Browser-Benachrichtigungen</span>
+                </label>
+              </div>
+
+              <div>
+                <label style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                  <input
+                    type="checkbox"
+                    checked={settings.telegramEnabled}
+                    onChange={(e) => setSettings({...settings, telegramEnabled: e.target.checked})}
+                  />
+                  <span style={{fontSize: 13}}>Telegram-Benachrichtigungen</span>
+                </label>
+              </div>
             </div>
           </div>
 
           {/* Save Button */}
-          <div style={{display:'flex', justifyContent:'flex-end', gap:12}}>
-            <button className="btn" onClick={() => loadSettings()}>
-              <Icon name="refresh" size={14}/>
-              Zurücksetzen
-            </button>
-            <button className="btn btn-primary" onClick={saveSettings}>
+          <div style={{display: 'flex', gap: 12}}>
+            <button className="btn btn-primary" onClick={handleSave}>
               <Icon name="check" size={14}/>
               Einstellungen speichern
             </button>
+            {saved && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                color: 'var(--win)'
+              }}>
+                ✓ Gespeichert
+              </div>
+            )}
           </div>
 
         </div>
       </main>
-      <ShortcutsOverlay />
-      <HintChip />
     </div>
   );
 };
 
-ReactDOM.createRoot(document.getElementById('root')).render(<Einstellungen/>);
+ReactDOM.createRoot(document.getElementById('root')).render(<EinstellungenPage/>);
