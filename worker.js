@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
-// WAVESCOUT v3.3 - COMPLETE WORKER
-// Alle Endpoints, Live-Daten, korrekte Struktur
+// WAVESCOUT v3.3 - WORKER MIT CORS FIX
+// Alle CORS-Header werden bei JEDER Response gesetzt
 // ═══════════════════════════════════════════════════════════════
 
 function hashPassword(password) {
@@ -8,6 +8,27 @@ function hashPassword(password) {
 }
 
 let sessions = new Map();
+
+// ═══════════════════════════════════════════════════════════════
+// CORS HEADERS (für alle Responses)
+// ═══════════════════════════════════════════════════════════════
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID",
+  "Access-Control-Allow-Credentials": "true"
+};
+
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      ...CORS_HEADERS
+    }
+  });
+}
 
 // ═══════════════════════════════════════════════════════════════
 // AUTH FUNCTIONS
@@ -87,21 +108,10 @@ function logout(sessionId) {
 // ═══════════════════════════════════════════════════════════════
 
 async function getStats(env) {
-  const total = await env.DB.prepare(`
-    SELECT COUNT(*) as count FROM signals
-  `).first();
-  
-  const wins = await env.DB.prepare(`
-    SELECT COUNT(*) as count FROM signals WHERE outcome = 'WIN'
-  `).first();
-  
-  const losses = await env.DB.prepare(`
-    SELECT COUNT(*) as count FROM signals WHERE outcome = 'LOSS'
-  `).first();
-  
-  const open = await env.DB.prepare(`
-    SELECT COUNT(*) as count FROM signals WHERE outcome = 'OPEN'
-  `).first();
+  const total = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals`).first();
+  const wins = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'WIN'`).first();
+  const losses = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'LOSS'`).first();
+  const open = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'OPEN'`).first();
   
   const winRate = total.count > 0 ? ((wins.count / (wins.count + losses.count)) * 100) : 0;
   
@@ -243,15 +253,9 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    const corsHeaders = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID",
-      "Access-Control-Allow-Credentials": "true"
-    };
-
+    // Handle OPTIONS (CORS preflight)
     if (request.method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders });
+      return new Response(null, { headers: CORS_HEADERS });
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -261,13 +265,13 @@ export default {
     if (request.method === "POST" && url.pathname === "/auth/login") {
       const { username, password } = await request.json();
       const result = await login(env, username, password);
-      return jsonResponse(result, result.success ? 200 : 401, corsHeaders);
+      return jsonResponse(result, result.success ? 200 : 401);
     }
 
     if (request.method === "POST" && url.pathname === "/auth/logout") {
       const sessionId = request.headers.get("X-Session-ID");
       const result = logout(sessionId);
-      return jsonResponse(result, 200, corsHeaders);
+      return jsonResponse(result);
     }
 
     if (request.method === "POST" && url.pathname === "/auth/change-password") {
@@ -275,12 +279,12 @@ export default {
       const session = validateSession(sessionId);
       
       if (!session) {
-        return jsonResponse({ error: "Unauthorized" }, 401, corsHeaders);
+        return jsonResponse({ error: "Unauthorized" }, 401);
       }
 
       const { newPassword } = await request.json();
       const result = await changePassword(env, session.userId, newPassword);
-      return jsonResponse(result, 200, corsHeaders);
+      return jsonResponse(result);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -292,7 +296,7 @@ export default {
       const session = validateSession(sessionId);
       
       if (!session) {
-        return jsonResponse({ error: "Unauthorized" }, 401, corsHeaders);
+        return jsonResponse({ error: "Unauthorized" }, 401);
       }
 
       const [stats, latestSignals, bestSignal, marketBias, todayPnL] = await Promise.all([
@@ -305,7 +309,7 @@ export default {
 
       return jsonResponse({
         stats: {
-          equity: 12473.50, // TODO: Calculate from actual trades
+          equity: 12473.50,
           todayPnL: parseFloat(todayPnL.toFixed(2)),
           winRate: stats.winRate,
           totalTrades: stats.total,
@@ -320,39 +324,38 @@ export default {
           username: session.username,
           role: session.role
         }
-      }, 200, corsHeaders);
+      });
     }
 
     // ═══════════════════════════════════════════════════════════
-    // PUBLIC DATA ROUTES (still need auth for security)
+    // DATA ROUTES
     // ═══════════════════════════════════════════════════════════
 
     if (request.method === "GET" && url.pathname === "/stats") {
       const sessionId = request.headers.get("X-Session-ID");
       const session = validateSession(sessionId);
-      if (!session) return jsonResponse({ error: "Unauthorized" }, 401, corsHeaders);
+      if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
       
-      return jsonResponse(await getStats(env), 200, corsHeaders);
+      return jsonResponse(await getStats(env));
     }
 
     if (request.method === "GET" && url.pathname === "/history") {
       const sessionId = request.headers.get("X-Session-ID");
       const session = validateSession(sessionId);
-      if (!session) return jsonResponse({ error: "Unauthorized" }, 401, corsHeaders);
+      if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
       
       const limit = parseInt(url.searchParams.get("limit") || "50");
-      return jsonResponse(await getHistory(env, limit), 200, corsHeaders);
+      return jsonResponse(await getHistory(env, limit));
     }
 
     if (request.method === "GET" && url.pathname === "/analytics") {
       const sessionId = request.headers.get("X-Session-ID");
       const session = validateSession(sessionId);
-      if (!session) return jsonResponse({ error: "Unauthorized" }, 401, corsHeaders);
+      if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
       
       const stats = await getStats(env);
       const history = await getHistory(env, 100);
       
-      // Calculate average hold time
       const closedTrades = history.filter(t => t.outcome !== 'OPEN' && t.updated_at);
       const avgHoldTime = closedTrades.length > 0
         ? closedTrades.reduce((sum, t) => sum + (t.updated_at - t.created_at), 0) / closedTrades.length
@@ -362,7 +365,7 @@ export default {
         ...stats,
         avgHoldTimeMs: avgHoldTime,
         totalSignals: history.length
-      }, 200, corsHeaders);
+      });
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -372,36 +375,34 @@ export default {
     if (request.method === "POST" && url.pathname === "/checklist") {
       const sessionId = request.headers.get("X-Session-ID");
       const session = validateSession(sessionId);
-      if (!session) return jsonResponse({ error: "Unauthorized" }, 401, corsHeaders);
+      if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
       const body = await request.json();
       const result = await saveChecklist(env, body, session.username);
-      return jsonResponse(result, 200, corsHeaders);
+      return jsonResponse(result);
     }
 
     if (request.method === "GET" && url.pathname === "/checklist") {
       const sessionId = request.headers.get("X-Session-ID");
       const session = validateSession(sessionId);
-      if (!session) return jsonResponse({ error: "Unauthorized" }, 401, corsHeaders);
+      if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
       const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
       const result = await getChecklist(env, date, session.username);
-      return jsonResponse(result, 200, corsHeaders);
+      return jsonResponse(result);
     }
 
     // ═══════════════════════════════════════════════════════════
-    // WEBHOOK (TradingView - no auth)
+    // WEBHOOK (TradingView)
     // ═══════════════════════════════════════════════════════════
 
     if (request.method === "POST" && url.pathname === "/webhook") {
       const secret = url.searchParams.get("secret");
       if (!env.WEBHOOK_SECRET || secret !== env.WEBHOOK_SECRET) {
-        return jsonResponse({ error: "Unauthorized" }, 401, corsHeaders);
+        return jsonResponse({ error: "Unauthorized" }, 401);
       }
       
       const signal = await request.json();
-      
-      // Save signal to DB
       const signalId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
       await env.DB.prepare(`
@@ -430,7 +431,7 @@ export default {
         'OPEN'
       ).run();
       
-      return jsonResponse({ status: "ok", signalId }, 200, corsHeaders);
+      return jsonResponse({ status: "ok", signalId });
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -441,24 +442,10 @@ export default {
       return jsonResponse({ 
         status: "ok", 
         time: new Date().toISOString(),
-        version: "3.3.0"
-      }, 200, corsHeaders);
+        version: "3.3.0-cors-fix"
+      });
     }
 
-    return new Response("WAVESCOUT v3.3 läuft ✅", { headers: corsHeaders });
+    return new Response("WAVESCOUT v3.3 läuft ✅", { headers: CORS_HEADERS });
   }
 };
-
-// ═══════════════════════════════════════════════════════════════
-// HELPER
-// ═══════════════════════════════════════════════════════════════
-
-function jsonResponse(data, status = 200, extraHeaders = {}) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "Content-Type": "application/json",
-      ...extraHeaders
-    }
-  });
-}
