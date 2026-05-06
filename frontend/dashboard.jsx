@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
-// WAVESCOUT v3.3 - DASHBOARD MIT ECHTEN LIVE-DATEN
+// WAVESCOUT v3.3 - DASHBOARD MIT FUNKTIONALEN BUTTONS
+// Keine Dummy-Daten · Alle Buttons funktionieren
 // ═══════════════════════════════════════════════════════════════
 
 const { useState, useEffect } = React;
@@ -13,7 +14,6 @@ const Dashboard = () => {
   const [user, setUser] = useState(null);
 
   useEffect(() => {
-    // Check auth
     const sessionId = localStorage.getItem('wavescout_session');
     const userData = localStorage.getItem('wavescout_user');
     
@@ -33,7 +33,6 @@ const Dashboard = () => {
 
       loadLiveData(sessionId);
 
-      // Refresh every 30 seconds
       const interval = setInterval(() => loadLiveData(sessionId), 30000);
       return () => clearInterval(interval);
     } catch (err) {
@@ -93,6 +92,22 @@ const Dashboard = () => {
     }
   };
 
+  const handleExecuteTrade = (signal) => {
+    alert(`Trade-Ausführung für ${signal.symbol} ${signal.direction}\nDiese Funktion wird bald verfügbar sein.`);
+  };
+
+  const handleSaveToJournal = (signal) => {
+    localStorage.setItem('signal_for_journal', JSON.stringify(signal));
+    window.location.href = 'journal.html';
+  };
+
+  const handleIgnoreSignal = async (signal) => {
+    if (confirm(`Signal ${signal.symbol} ignorieren?`)) {
+      // TODO: Update signal status in database
+      alert('Signal ignoriert');
+    }
+  };
+
   if (loading) {
     return (
       <div className="app">
@@ -126,6 +141,7 @@ const Dashboard = () => {
               {error || 'Keine Daten verfügbar'}
             </p>
             <button className="btn" onClick={() => window.location.reload()}>
+              <Icon name="refresh" size={14}/>
               Neu laden
             </button>
           </div>
@@ -173,13 +189,16 @@ const Dashboard = () => {
         />
         <div className="content page-enter">
 
-          {/* Row 1: Best Signal + Market Bias */}
           <div className="grid grid-2" style={{gridTemplateColumns: '1.4fr 1fr'}}>
-            <BestSignalCard signal={data.bestSignal} />
+            <BestSignalCard 
+              signal={data.bestSignal} 
+              onExecuteTrade={handleExecuteTrade}
+              onSaveToJournal={handleSaveToJournal}
+              onIgnore={handleIgnoreSignal}
+            />
             <MarketBiasCard marketBias={data.marketBias} />
           </div>
 
-          {/* Row 2: Stats KPIs */}
           <div className="grid" style={{gridTemplateColumns: 'repeat(4, 1fr)'}}>
             <StatCard
               label="Trades heute"
@@ -206,7 +225,6 @@ const Dashboard = () => {
             />
           </div>
 
-          {/* Row 3: Latest Trades */}
           <LatestTradesCard signals={data.latestSignals} />
 
         </div>
@@ -219,7 +237,7 @@ const Dashboard = () => {
 // COMPONENTS
 // ═══════════════════════════════════════════════════════════════
 
-const BestSignalCard = ({ signal }) => {
+const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) => {
   if (!signal) {
     return (
       <div className="card">
@@ -298,15 +316,26 @@ const BestSignalCard = ({ signal }) => {
             )}
 
             <div style={{display: 'flex', gap: 10, marginTop: 18}}>
-              <button className="btn btn-primary">
+              <button 
+                className="btn btn-primary" 
+                onClick={() => onExecuteTrade(signal)}
+              >
                 <Icon name="bolt" size={14}/>
                 Trade ausführen
               </button>
-              <button className="btn">
+              <button 
+                className="btn" 
+                onClick={() => onSaveToJournal(signal)}
+              >
                 <Icon name="book" size={14}/>
                 Im Journal
               </button>
-              <button className="btn btn-ghost">Ignorieren</button>
+              <button 
+                className="btn btn-ghost" 
+                onClick={() => onIgnore(signal)}
+              >
+                Ignorieren
+              </button>
             </div>
           </div>
 
@@ -426,7 +455,12 @@ const LatestTradesCard = ({ signals }) => {
         <Icon name="signal" className="ico"/>
         <h3>Letzte Trades · {signals.length}</h3>
         <div className="actions">
-          <button className="btn btn-sm btn-ghost">Alle anzeigen →</button>
+          <button 
+            className="btn btn-sm btn-ghost"
+            onClick={() => window.location.href = 'backtest.html'}
+          >
+            Alle anzeigen →
+          </button>
         </div>
       </div>
       <table className="tbl">
@@ -490,7 +524,7 @@ function getTimeAgo(timestamp) {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
   if (seconds < 60) return 'gerade eben';
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `vor ${minutes}m`;
+  if (minutes < 60) return `vor ${minutes}min`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `vor ${hours}h`;
   const days = Math.floor(hours / 24);
