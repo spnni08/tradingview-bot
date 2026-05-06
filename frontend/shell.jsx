@@ -12,6 +12,7 @@ const Sidebar = ({ active, user, onLogout }) => {
   const NAV = [
     { id: 'dashboard', label: 'Home', icon: 'home', file: 'index.html' },
     { id: 'journal', label: 'Journal', icon: 'journal', file: 'journal.html' },
+    { id: 'backtest', label: 'Backtest', icon: 'chart', file: 'backtest.html' },
     { id: 'statistiken', label: 'Statistiken', icon: 'stats', file: 'statistiken.html' },
     { id: 'einstellungen', label: 'Einstellungen', icon: 'settings', file: 'einstellungen.html' },
   ];
