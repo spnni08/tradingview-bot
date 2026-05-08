@@ -10,16 +10,16 @@ const { useState, useEffect } = React;
 
 const Sidebar = ({ active, user, onLogout }) => {
   const NAV = [
-    { id: 'dashboard', label: 'Home', icon: 'home', file: 'index.html' },
-    { id: 'journal', label: 'Journal', icon: 'journal', file: 'journal.html' },
-    { id: 'backtest', label: 'Backtest', icon: 'chart', file: 'backtest.html' },
-    { id: 'statistiken', label: 'Statistiken', icon: 'stats', file: 'statistiken.html' },
-    { id: 'einstellungen', label: 'Einstellungen', icon: 'settings', file: 'einstellungen.html' },
+    { id: 'dashboard',    label: 'Home',        icon: 'home',     file: 'index.html' },
+    { id: 'journal',      label: 'Journal',     icon: 'journal',  file: 'journal.html' },
+    { id: 'backtest',     label: 'Backtest',    icon: 'chart',    file: 'backtest.html' },
+    { id: 'statistiken',  label: 'Statistiken', icon: 'stats',    file: 'statistiken.html' },
+    { id: 'einstellungen',label: 'Einstellungen',icon:'settings', file: 'einstellungen.html' },
+    { id: 'waveboard',    label: 'Waveboard',   icon: 'target',   file: 'https://waveboard-e54ed.web.app/waveboard/dashboard', external: true },
   ];
 
-  // Add Admin for admins
   if (user?.role === 'admin') {
-    NAV.push({ id: 'admin', label: 'Admin', icon: 'shield', file: 'admin.html' });
+    NAV.splice(5, 0, { id: 'admin', label: 'Admin', icon: 'shield', file: 'admin.html' });
   }
 
   return (
@@ -42,10 +42,13 @@ const Sidebar = ({ active, user, onLogout }) => {
             key={n.id}
             href={n.file}
             className={`nav-item ${active === n.id ? 'active' : ''}`}
-            data-tip={`Öffne ${n.label}`}
+            data-tip={n.external ? `Öffnet ${n.label} in neuem Tab` : `Öffne ${n.label}`}
+            target={n.external ? '_blank' : undefined}
+            rel={n.external ? 'noopener noreferrer' : undefined}
           >
             <Icon name={n.icon} className="ico" />
-            <span>{n.label}</span>
+            <span style={{ flex: 1 }}>{n.label}</span>
+            {n.external && <Icon name="external" size={11} style={{ opacity: 0.35, flexShrink: 0 }} />}
           </a>
         ))}
       </nav>
@@ -85,11 +88,19 @@ const Sidebar = ({ active, user, onLogout }) => {
 
 const Topbar = ({ title, subtitle, kpis }) => {
   const [time, setTime] = useState(new Date());
+  const [lightMode, setLightMode] = useState(() =>
+    localStorage.getItem('theme') === 'light'
+  );
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', lightMode ? 'light' : 'dark');
+    localStorage.setItem('theme', lightMode ? 'light' : 'dark');
+  }, [lightMode]);
 
   const timeStr = time.toLocaleTimeString('de-DE', {
     hour: '2-digit',
@@ -144,8 +155,13 @@ const Topbar = ({ title, subtitle, kpis }) => {
         </div>
       </div>
 
-      <button className="icon-btn" data-tip="Dark Mode aktiv">
-        <Icon name="moon" size={16}/>
+      <button
+        className="icon-btn"
+        onClick={() => setLightMode(m => !m)}
+        data-tip={lightMode ? 'Dark Mode aktivieren' : 'Light Mode aktivieren'}
+        title={lightMode ? 'Dark Mode' : 'Light Mode'}
+      >
+        <Icon name={lightMode ? 'sun' : 'moon'} size={16}/>
       </button>
     </header>
   );
@@ -181,6 +197,8 @@ const Icon = ({ name, size = 16, className = '', style = {} }) => {
     users: <><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></>,
     filter: <><path d="M3 4h18l-7 9v6l-4-2v-4z"/></>,
     refresh: <><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></>,
+    sun: <><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></>,
+    external: <><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></>,
   };
 
   return (
