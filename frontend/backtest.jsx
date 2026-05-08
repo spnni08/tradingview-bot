@@ -41,19 +41,6 @@ const BacktestPage = ({ user }) => {
     }
   };
 
-  const updateOutcome = async (tradeId, outcome) => {
-    const sessionId = localStorage.getItem('wavescout_session');
-    try {
-      await fetch(`${API_URL}/signals/${tradeId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
-        body: JSON.stringify({ outcome })
-      });
-      setHistory(prev => prev.map(t => t.id === tradeId ? { ...t, outcome } : t));
-    } catch (err) {
-      console.error('Update outcome error:', err);
-    }
-  };
 
   if (loading) return (
     <div className="content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 'calc(100vh - 52px)' }}>
@@ -252,60 +239,6 @@ const BacktestPage = ({ user }) => {
           </div>
         )}
       </div>
-    </div>
-  );
-};
-
-// ─── Outcome selector inline in table ───────────────────────
-
-const OutcomeSelector = ({ tradeId, current, onChange }) => {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, [open]);
-
-  const options = ['WIN', 'LOSS', 'BE', 'OPEN', 'IGNORED'];
-  const cls = current === 'WIN' ? 'badge-win' : current === 'LOSS' ? 'badge-loss' : 'badge-wait';
-
-  return (
-    <div style={{ position: 'relative' }} ref={ref}>
-      <button
-        className={`badge ${cls}`}
-        style={{ cursor: 'pointer', border: 'none', fontFamily: 'var(--font-main)' }}
-        onClick={() => setOpen(o => !o)}
-        title="Ergebnis ändern"
-      >
-        {current || 'OPEN'}
-      </button>
-      {open && (
-        <div style={{
-          position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 50,
-          background: 'var(--bg-1)', border: '1px solid var(--border)',
-          borderRadius: 8, overflow: 'hidden', minWidth: 110,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
-        }}>
-          {options.map(o => (
-            <button
-              key={o}
-              style={{
-                display: 'block', width: '100%', padding: '8px 12px', background: 'none',
-                border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                textAlign: 'left', fontFamily: 'var(--font-main)',
-                color: o === current ? 'var(--blue-500)' : 'var(--text-secondary)',
-                background: o === current ? 'var(--bg-2)' : 'none'
-              }}
-              onClick={() => { onChange(tradeId, o); setOpen(false); }}
-            >
-              {o}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 };
