@@ -61,8 +61,8 @@ const BacktestPage = ({ user }) => {
     </div>
   );
 
-  const totalClosed = (stats?.wins || 0) + (stats?.losses || 0);
-  const winRate = totalClosed > 0 ? (stats.wins / totalClosed) * 100 : 0;
+  const totalClosed = (practiceStats?.wins || 0) + (practiceStats?.losses || 0);
+  const winRate = totalClosed > 0 ? ((practiceStats?.wins || 0) / totalClosed) * 100 : 0;
 
   const strategy = {
     name: 'Top-Down Daytrading v1.0',
@@ -75,8 +75,6 @@ const BacktestPage = ({ user }) => {
       'Ausschluss: Gegen Bias, flache EMA200, Chop/Wicks, FOMO'
     ]
   };
-
-  const successProgress = Math.max(0, Math.min(100, winRate));
 
   const symbols = ['all', ...new Set(practiceTrades.map(h => h.symbol).filter(Boolean))];
   const timeframes = ['all', ...new Set(practiceTrades.map(h => h.timeframe).filter(Boolean))];
@@ -93,7 +91,7 @@ const BacktestPage = ({ user }) => {
   });
 
   // Calculate cumulative PnL for the chart
-  const closedTrades = history.filter(t => t.outcome === 'WIN' || t.outcome === 'LOSS').slice().reverse();
+  const closedTrades = practiceTrades.filter(t => t.status === 'WIN' || t.status === 'LOSS').slice().reverse();
   let cumulative = 0;
   const pnlPoints = closedTrades.map(t => {
     const pnl = calculatePnL(t);
@@ -105,7 +103,7 @@ const BacktestPage = ({ user }) => {
     <div className="content page-enter">
       <div className="page-header">
         <h2>Backtest & Auswertung</h2>
-        <p className="subtitle">{history.length} Signale gesamt · {totalClosed} abgeschlossen · {stats?.open || 0} offen</p>
+        <p className="subtitle">{practiceStats?.total || 0} Übungstrades gesamt · {totalClosed} abgeschlossen · {practiceStats?.open || 0} offen</p>
       </div>
 
       {/* Overview */}
@@ -160,9 +158,9 @@ const BacktestPage = ({ user }) => {
         <div className="card-head">
           <Icon name="filter" className="ico"/>
           <h3>Filter</h3>
-          {(filterOutcome !== 'all' || filterSymbol !== 'all') && (
+          {(filterOutcome !== 'all' || filterSymbol !== 'all' || filterTimeframe !== 'all' || filterDirection !== 'all' || dateFrom || dateTo) && (
             <div className="actions">
-              <button className="btn btn-ghost btn-sm" onClick={() => { setFilterOutcome('all'); setFilterSymbol('all'); }}>
+              <button className="btn btn-ghost btn-sm" onClick={() => { setFilterOutcome('all'); setFilterSymbol('all'); setFilterTimeframe('all'); setFilterDirection('all'); setDateFrom(''); setDateTo(''); }}>
                 Zurücksetzen
               </button>
             </div>
@@ -209,7 +207,7 @@ const BacktestPage = ({ user }) => {
           <div className="card-body" style={{ padding: 60, textAlign: 'center' }}>
             <Icon name="signal" size={40} style={{ opacity: 0.15, marginBottom: 14 }}/>
             <p style={{ color: 'var(--text-tertiary)' }}>
-              {history.length === 0 ? 'Noch keine Signale empfangen' : 'Keine Trades mit diesen Filtern'}
+              {practiceTrades.length === 0 ? 'Noch keine Übungstrades vorhanden' : 'Keine Trades mit diesen Filtern'}
             </p>
           </div>
         ) : (
