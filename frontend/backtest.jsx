@@ -52,6 +52,21 @@ const BacktestPage = ({ user }) => {
 
   const totalClosed = (stats?.wins || 0) + (stats?.losses || 0);
   const winRate = totalClosed > 0 ? (stats.wins / totalClosed) * 100 : 0;
+
+  const strategy = {
+    name: 'Top-Down Daytrading v1.0',
+    focus: 'BTC/ETH · 5–15min Entry mit 1H/4H Bias',
+    steps: [
+      'Bias morgens auf 4H/1H prüfen (EMA200 über/unter Preis)',
+      'Nur in markierten 15m Key-Zonen aktiv werden',
+      'Entry auf 5–10m nach Strukturbruch + Trendkerze + RSI-Filter',
+      'TP mindestens 1:1.5, Ziel 1:2 · SL logisch über/unter Struktur',
+      'Ausschluss: Gegen Bias, flache EMA200, Chop/Wicks, FOMO'
+    ]
+  };
+
+  const successProgress = Math.max(0, Math.min(100, winRate));
+
   const symbols = ['all', ...new Set(history.map(h => h.symbol).filter(Boolean))];
 
   const filtered = history.filter(h => {
@@ -106,6 +121,44 @@ const BacktestPage = ({ user }) => {
           </div>
         </div>
       )}
+
+
+      {/* Strategy visibility */}
+      <div className="card">
+        <div className="card-head">
+          <Icon name="book" className="ico"/>
+          <h3>Aktive Strategie</h3>
+          <div className="actions"><span className="badge badge-tag">{strategy.name}</span></div>
+        </div>
+        <div className="card-body" style={{ display: 'grid', gap: 10 }}>
+          <p className="muted" style={{ margin: 0 }}>{strategy.focus}</p>
+          <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--text-secondary)', lineHeight: 1.65, fontSize: 13 }}>
+            {strategy.steps.map((step, idx) => <li key={idx}>{step}</li>)}
+          </ul>
+        </div>
+      </div>
+
+      {/* Strategy performance progress */}
+      <div className="card">
+        <div className="card-head">
+          <Icon name="target" className="ico"/>
+          <h3>Strategie-Erfolg</h3>
+          <div className="actions"><span className={`badge ${successProgress >= 50 ? 'badge-win' : 'badge-loss'}`}>{successProgress.toFixed(1)}%</span></div>
+        </div>
+        <div className="card-body">
+          <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--text-tertiary)' }}>Fortschritt auf Basis geschlossener Trades ({totalClosed})</div>
+          <div style={{ height: 12, background: 'var(--bg-2)', borderRadius: 999, overflow: 'hidden', border: '1px solid var(--border)' }}>
+            <div
+              style={{
+                width: `${successProgress}%`,
+                height: '100%',
+                background: successProgress >= 50 ? 'linear-gradient(90deg, var(--green-500), var(--green-400))' : 'linear-gradient(90deg, var(--red-500), var(--red-400))',
+                transition: 'width 300ms ease'
+              }}
+            />
+          </div>
+        </div>
+      </div>
 
       {/* Filters */}
       <div className="card">
@@ -166,7 +219,7 @@ const BacktestPage = ({ user }) => {
               <thead>
                 <tr>
                   <th>Datum</th><th>Symbol</th><th>Richtung</th>
-                  <th>Entry</th><th>Exit</th><th>PnL</th>
+                  <th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>PnL</th>
                   <th>Score</th><th>Risiko</th><th>Ergebnis</th>
                 </tr>
               </thead>
@@ -187,6 +240,8 @@ const BacktestPage = ({ user }) => {
                         </span>
                       </td>
                       <td className="mono">${(trade.ai_entry || trade.price || 0).toFixed(2)}</td>
+                      <td className="mono win">{trade.ai_tp ? `$${trade.ai_tp.toFixed(2)}` : '—'}</td>
+                      <td className="mono loss">{trade.ai_sl ? `$${trade.ai_sl.toFixed(2)}` : '—'}</td>
                       <td className="mono">{trade.exit_price ? `$${trade.exit_price.toFixed(2)}` : '—'}</td>
                       <td className={`mono ${pnl > 0 ? 'win' : pnl < 0 ? 'loss' : ''}`}>
                         {pnl !== 0 ? `${pnl > 0 ? '+' : ''}${pnl.toFixed(2)}%` : '—'}
