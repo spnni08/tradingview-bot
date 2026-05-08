@@ -8,9 +8,6 @@ function hashPassword(password) {
   return btoa(password);
 }
 
-// Session storage
-let sessions = new Map();
-
 // CORS headers for all responses
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -64,7 +61,7 @@ async function sendTelegramMessage(env, message) {
 function formatSignalForTelegram(signal) {
   const emoji = signal.direction === 'LONG' ? '🟢' : '🔴';
   const scoreEmoji = signal.ai_score >= 75 ? '⭐⭐⭐' : signal.ai_score >= 65 ? '⭐⭐' : '⭐';
-  
+
   return `
 ${emoji} <b>${signal.symbol}</b> ${signal.direction}
 
@@ -126,7 +123,7 @@ Format as JSON:
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-5',
         max_tokens: 500,
         messages: [{
           role: 'user',
@@ -137,7 +134,7 @@ Format as JSON:
 
     const data = await response.json();
     const text = data.content[0].text;
-    
+
     // Extract JSON from response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
@@ -153,17 +150,14 @@ Format as JSON:
 }
 
 function analyzeWithRules(signal) {
-  // Simple rule-based analysis
   let score = 50;
   let risk = 'MEDIUM';
   let recommendation = 'WAIT';
 
-  // Adjust score based on timeframe
   if (signal.timeframe === '1H' || signal.timeframe === '4H') {
     score += 10;
   }
 
-  // Set recommendation
   if (score >= 70) {
     recommendation = 'RECOMMENDED';
     risk = 'LOW';
@@ -172,7 +166,6 @@ function analyzeWithRules(signal) {
     risk = 'HIGH';
   }
 
-  // Calculate TP/SL (simple 2% levels)
   const entry = signal.price;
   const tp = signal.direction === 'LONG' ? entry * 1.02 : entry * 0.98;
   const sl = signal.direction === 'LONG' ? entry * 0.99 : entry * 1.01;
@@ -195,12 +188,10 @@ function analyzeWithRules(signal) {
 async function processSignal(env, signal) {
   console.log('📊 Processing signal:', signal.symbol, signal.direction);
 
-  // Analyze signal with AI
   const analysis = await analyzeSignalWithAI(env, signal);
 
-  // Save to database
   const signalId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  
+
   await env.DB.prepare(`
     INSERT INTO signals (
       id, symbol, timeframe, price, direction, trigger,
@@ -221,13 +212,12 @@ async function processSignal(env, signal) {
     analysis.tp,
     analysis.sl,
     analysis.reason,
-    analysis.score, // rule_score same as ai_score for now
+    analysis.score,
     analysis.reason,
     Date.now(),
     'OPEN'
   ).run();
 
-  // Send to Telegram if good score
   if (analysis.score >= 65) {
     const telegramMessage = formatSignalForTelegram({
       ...signal,
@@ -251,8 +241,22 @@ async function processSignal(env, signal) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// AUTH FUNCTIONS
+// AUTH FUNCTIONS (D1-backed sessions)
 // ═══════════════════════════════════════════════════════════════
+
+async function ensureSessionsTable(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user',
+      must_change_password INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    )
+  `).run();
+}
 
 async function login(env, username, password) {
   const user = await env.DB.prepare(`
@@ -263,27 +267,49 @@ async function login(env, username, password) {
     return { success: false, error: 'Benutzer nicht gefunden' };
   }
 
+  if (user.blocked) {
+    return { success: false, error: 'Konto gesperrt' };
+  }
+
   const passwordHash = hashPassword(password);
-  
+
   if (user.password_hash !== passwordHash) {
     return { success: false, error: 'Falsches Passwort' };
   }
 
-  const sessionId = crypto.randomUUID();
-  const session = {
-    id: sessionId,
-    userId: user.id,
-    username: user.username,
-    role: user.role,
-    mustChangePassword: user.must_change_password === 1,
-    createdAt: Date.now()
-  };
+  await ensureSessionsTable(env);
 
-  sessions.set(sessionId, session);
+  const sessionId = crypto.randomUUID();
+  const now = Date.now();
+  const expiresAt = now + 24 * 60 * 60 * 1000; // 24 hours
+
+  await env.DB.prepare(`
+    INSERT INTO sessions (id, user_id, username, role, must_change_password, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    sessionId,
+    user.id,
+    user.username,
+    user.role,
+    user.must_change_password,
+    now,
+    expiresAt
+  ).run();
+
+  // Update last_seen (column may not exist in older schemas — ignore errors)
+  try {
+    await env.DB.prepare(`UPDATE users SET last_seen = ? WHERE id = ?`).bind(now, user.id).run();
+  } catch (_) {}
 
   return {
     success: true,
-    session,
+    session: {
+      id: sessionId,
+      userId: user.id,
+      username: user.username,
+      role: user.role,
+      mustChangePassword: user.must_change_password === 1
+    },
     user: {
       id: user.id,
       username: user.username,
@@ -296,30 +322,57 @@ async function login(env, username, password) {
 
 async function changePassword(env, userId, newPassword) {
   const passwordHash = hashPassword(newPassword);
-  
+
   await env.DB.prepare(`
-    UPDATE users 
+    UPDATE users
     SET password_hash = ?, must_change_password = 0, updated_at = ?
     WHERE id = ?
   `).bind(passwordHash, Date.now(), userId).run();
 
+  // Also update any open sessions for this user so mustChangePassword is cleared
+  try {
+    await env.DB.prepare(`
+      UPDATE sessions SET must_change_password = 0 WHERE user_id = ?
+    `).bind(userId).run();
+  } catch (_) {}
+
   return { success: true };
 }
 
-function validateSession(sessionId) {
-  const session = sessions.get(sessionId);
-  if (!session) return null;
-  
-  if (Date.now() - session.createdAt > 24 * 60 * 60 * 1000) {
-    sessions.delete(sessionId);
+async function validateSession(env, sessionId) {
+  if (!sessionId) return null;
+
+  try {
+    const session = await env.DB.prepare(`
+      SELECT * FROM sessions WHERE id = ? AND expires_at > ?
+    `).bind(sessionId, Date.now()).first();
+
+    if (!session) return null;
+
+    // Update last_seen for the user (ignore errors for missing column)
+    try {
+      await env.DB.prepare(`UPDATE users SET last_seen = ? WHERE id = ?`)
+        .bind(Date.now(), session.user_id).run();
+    } catch (_) {}
+
+    return {
+      id: session.id,
+      userId: session.user_id,
+      username: session.username,
+      role: session.role,
+      mustChangePassword: session.must_change_password === 1,
+      createdAt: session.created_at
+    };
+  } catch (_) {
+    // Sessions table might not exist yet
     return null;
   }
-  
-  return session;
 }
 
-function logout(sessionId) {
-  sessions.delete(sessionId);
+async function logout(env, sessionId) {
+  try {
+    await env.DB.prepare(`DELETE FROM sessions WHERE id = ?`).bind(sessionId).run();
+  } catch (_) {}
   return { success: true };
 }
 
@@ -332,20 +385,20 @@ async function getStats(env) {
     const tableCheck = await env.DB.prepare(`
       SELECT name FROM sqlite_master WHERE type='table' AND name='signals'
     `).first();
-    
+
     if (!tableCheck) {
       return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0 };
     }
-    
+
     const total = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals`).first();
     const wins = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'WIN'`).first();
     const losses = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'LOSS'`).first();
     const open = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'OPEN'`).first();
-    
-    const winRate = (wins.count + losses.count) > 0 
-      ? ((wins.count / (wins.count + losses.count)) * 100) 
+
+    const winRate = (wins.count + losses.count) > 0
+      ? ((wins.count / (wins.count + losses.count)) * 100)
       : 0;
-    
+
     return {
       total: total.count || 0,
       wins: wins.count || 0,
@@ -364,17 +417,17 @@ async function getHistory(env, limit = 50) {
     const tableCheck = await env.DB.prepare(`
       SELECT name FROM sqlite_master WHERE type='table' AND name='signals'
     `).first();
-    
+
     if (!tableCheck) {
       return [];
     }
-    
+
     const rows = await env.DB.prepare(`
-      SELECT * FROM signals 
-      ORDER BY created_at DESC 
+      SELECT * FROM signals
+      ORDER BY created_at DESC
       LIMIT ?
     `).bind(limit).all();
-    
+
     return rows.results || [];
   } catch (error) {
     console.error('Error in getHistory:', error);
@@ -387,18 +440,18 @@ async function getSnapshot(env, symbol, timeframe = "5m") {
     const tableCheck = await env.DB.prepare(`
       SELECT name FROM sqlite_master WHERE type='table' AND name='snapshots'
     `).first();
-    
+
     if (!tableCheck) {
       return null;
     }
-    
+
     const row = await env.DB.prepare(`
-      SELECT * FROM snapshots 
-      WHERE symbol = ? AND timeframe = ? 
-      ORDER BY created_at DESC 
+      SELECT * FROM snapshots
+      WHERE symbol = ? AND timeframe = ?
+      ORDER BY created_at DESC
       LIMIT 1
     `).bind(symbol, timeframe).first();
-    
+
     return row;
   } catch (error) {
     console.error('Error in getSnapshot:', error);
@@ -409,17 +462,17 @@ async function getSnapshot(env, symbol, timeframe = "5m") {
 async function getTodayPnL(env) {
   try {
     const todayStart = new Date().setHours(0, 0, 0, 0);
-    
+
     const todayTrades = await env.DB.prepare(`
-      SELECT ai_entry, exit_price, outcome, direction FROM signals 
+      SELECT ai_entry, exit_price, outcome, direction FROM signals
       WHERE created_at >= ? AND outcome IN ('WIN', 'LOSS')
     `).bind(todayStart).all();
 
     let pnl = 0;
-    
+
     (todayTrades.results || []).forEach(trade => {
       if (!trade.exit_price || !trade.ai_entry) return;
-      
+
       const diff = trade.exit_price - trade.ai_entry;
       const pnlTrade = trade.direction === 'LONG' ? diff : -diff;
       pnl += pnlTrade;
@@ -435,12 +488,12 @@ async function getTodayPnL(env) {
 async function getBestSignal(env) {
   try {
     const signal = await env.DB.prepare(`
-      SELECT * FROM signals 
-      WHERE outcome = 'OPEN' 
-      ORDER BY ai_score DESC 
+      SELECT * FROM signals
+      WHERE outcome = 'OPEN'
+      ORDER BY ai_score DESC
       LIMIT 1
     `).first();
-    
+
     return signal;
   } catch (error) {
     console.error('Error in getBestSignal:', error);
@@ -452,14 +505,14 @@ async function getMarketBias(env) {
   try {
     const symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT'];
     const bias = [];
-    
+
     for (const symbol of symbols) {
       const snap = await getSnapshot(env, symbol, '5m');
-      
+
       if (snap) {
         let trend = 'neutral';
         let change = 0;
-        
+
         if (snap.ema50 && snap.ema200) {
           if (snap.price > snap.ema200 && snap.ema50 > snap.ema200) {
             trend = 'bullish';
@@ -469,7 +522,7 @@ async function getMarketBias(env) {
             change = ((snap.price - snap.ema200) / snap.ema200) * 100;
           }
         }
-        
+
         bias.push({
           symbol,
           price: snap.price,
@@ -479,7 +532,7 @@ async function getMarketBias(env) {
         });
       }
     }
-    
+
     return bias;
   } catch (error) {
     console.error('Error in getMarketBias:', error);
@@ -493,17 +546,17 @@ async function saveChecklist(env, data, username) {
   const now = Date.now();
 
   await env.DB.prepare(`
-    INSERT INTO checklists (id, date, user, type, data, created_at, updated_at) 
+    INSERT INTO checklists (id, date, user, type, data, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET 
+    ON CONFLICT(id) DO UPDATE SET
       data = excluded.data,
       updated_at = excluded.updated_at
   `).bind(
-    id, 
-    date, 
-    username, 
-    type, 
-    JSON.stringify(checklistData), 
+    id,
+    date,
+    username,
+    type,
+    JSON.stringify(checklistData),
     now,
     now
   ).run();
@@ -513,8 +566,8 @@ async function saveChecklist(env, data, username) {
 
 async function getChecklist(env, date, username) {
   const rows = await env.DB.prepare(`
-    SELECT * FROM checklists 
-    WHERE date = ? AND user = ? 
+    SELECT * FROM checklists
+    WHERE date = ? AND user = ?
     ORDER BY created_at DESC
   `).bind(date, username).all();
 
@@ -522,13 +575,23 @@ async function getChecklist(env, date, username) {
 }
 
 async function getUsers(env) {
-  const users = await env.DB.prepare(`
-    SELECT id, username, email, role, must_change_password, created_at, updated_at
-    FROM users
-    ORDER BY created_at DESC
-  `).all();
-
-  return users.results || [];
+  try {
+    // Try with blocked + last_seen columns (available after setup-db)
+    const users = await env.DB.prepare(`
+      SELECT id, username, email, role, must_change_password, blocked, last_seen, created_at, updated_at
+      FROM users
+      ORDER BY created_at DESC
+    `).all();
+    return users.results || [];
+  } catch (_) {
+    // Fallback for older schemas without blocked/last_seen
+    const users = await env.DB.prepare(`
+      SELECT id, username, email, role, must_change_password, created_at, updated_at
+      FROM users
+      ORDER BY created_at DESC
+    `).all();
+    return users.results || [];
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -559,14 +622,14 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/auth/logout") {
         const sessionId = request.headers.get("X-Session-ID");
-        const result = logout(sessionId);
+        const result = await logout(env, sessionId);
         return jsonResponse(result);
       }
 
       if (request.method === "POST" && url.pathname === "/auth/change-password") {
         const sessionId = request.headers.get("X-Session-ID");
-        const session = validateSession(sessionId);
-        
+        const session = await validateSession(env, sessionId);
+
         if (!session) {
           return jsonResponse({ error: "Unauthorized" }, 401);
         }
@@ -582,8 +645,8 @@ export default {
 
       if (request.method === "GET" && url.pathname === "/dashboard/live") {
         const sessionId = request.headers.get("X-Session-ID");
-        const session = validateSession(sessionId);
-        
+        const session = await validateSession(env, sessionId);
+
         if (!session) {
           return jsonResponse({ error: "Unauthorized" }, 401);
         }
@@ -622,34 +685,34 @@ export default {
 
       if (request.method === "GET" && url.pathname === "/stats") {
         const sessionId = request.headers.get("X-Session-ID");
-        const session = validateSession(sessionId);
+        const session = await validateSession(env, sessionId);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
-        
+
         return jsonResponse(await getStats(env));
       }
 
       if (request.method === "GET" && url.pathname === "/history") {
         const sessionId = request.headers.get("X-Session-ID");
-        const session = validateSession(sessionId);
+        const session = await validateSession(env, sessionId);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
-        
+
         const limit = parseInt(url.searchParams.get("limit") || "50");
         return jsonResponse(await getHistory(env, limit));
       }
 
       if (request.method === "GET" && url.pathname === "/analytics") {
         const sessionId = request.headers.get("X-Session-ID");
-        const session = validateSession(sessionId);
+        const session = await validateSession(env, sessionId);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
-        
+
         const stats = await getStats(env);
         const history = await getHistory(env, 100);
-        
+
         const closedTrades = history.filter(t => t.outcome !== 'OPEN' && t.updated_at);
         const avgHoldTime = closedTrades.length > 0
           ? closedTrades.reduce((sum, t) => sum + (t.updated_at - t.created_at), 0) / closedTrades.length
           : 0;
-        
+
         return jsonResponse({
           ...stats,
           avgHoldTimeMs: avgHoldTime,
@@ -663,7 +726,7 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/checklist") {
         const sessionId = request.headers.get("X-Session-ID");
-        const session = validateSession(sessionId);
+        const session = await validateSession(env, sessionId);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
         const body = await request.json();
@@ -673,7 +736,7 @@ export default {
 
       if (request.method === "GET" && url.pathname === "/checklist") {
         const sessionId = request.headers.get("X-Session-ID");
-        const session = validateSession(sessionId);
+        const session = await validateSession(env, sessionId);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
@@ -687,8 +750,8 @@ export default {
 
       if (request.method === "GET" && url.pathname === "/users") {
         const sessionId = request.headers.get("X-Session-ID");
-        const session = validateSession(sessionId);
-        
+        const session = await validateSession(env, sessionId);
+
         if (!session || session.role !== 'admin') {
           return jsonResponse({ error: "Unauthorized" }, 401);
         }
@@ -697,21 +760,198 @@ export default {
         return jsonResponse(users);
       }
 
+      if (request.method === "POST" && url.pathname === "/admin/create-user") {
+        const sessionId = request.headers.get("X-Session-ID");
+        const session = await validateSession(env, sessionId);
+
+        if (!session || session.role !== 'admin') {
+          return jsonResponse({ error: "Unauthorized" }, 401);
+        }
+
+        const { username, email, password, role } = await request.json();
+
+        if (!username || !email || !password) {
+          return jsonResponse({ error: "Fehlende Felder: username, email, password" }, 400);
+        }
+
+        const existing = await env.DB.prepare(
+          `SELECT id FROM users WHERE username = ? OR email = ?`
+        ).bind(username, email).first();
+
+        if (existing) {
+          return jsonResponse({ error: "Benutzername oder E-Mail bereits vergeben" }, 409);
+        }
+
+        const id = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const passwordHash = hashPassword(password);
+        const now = Date.now();
+
+        await env.DB.prepare(`
+          INSERT INTO users (id, username, email, password_hash, role, must_change_password, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+        `).bind(id, username, email, passwordHash, role || 'user', now, now).run();
+
+        return jsonResponse({ success: true, id });
+      }
+
+      if (request.method === "POST" && url.pathname === "/admin/block-user") {
+        const sessionId = request.headers.get("X-Session-ID");
+        const session = await validateSession(env, sessionId);
+
+        if (!session || session.role !== 'admin') {
+          return jsonResponse({ error: "Unauthorized" }, 401);
+        }
+
+        const { userId, blocked } = await request.json();
+
+        await env.DB.prepare(`
+          UPDATE users SET blocked = ?, updated_at = ? WHERE id = ?
+        `).bind(blocked ? 1 : 0, Date.now(), userId).run();
+
+        // If blocking, invalidate all of the user's sessions
+        if (blocked) {
+          try {
+            await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run();
+          } catch (_) {}
+        }
+
+        return jsonResponse({ success: true });
+      }
+
+      if (request.method === "POST" && url.pathname === "/admin/logout-user") {
+        const sessionId = request.headers.get("X-Session-ID");
+        const session = await validateSession(env, sessionId);
+
+        if (!session || session.role !== 'admin') {
+          return jsonResponse({ error: "Unauthorized" }, 401);
+        }
+
+        const { userId } = await request.json();
+
+        try {
+          await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run();
+        } catch (_) {}
+
+        return jsonResponse({ success: true });
+      }
+
+      if (request.method === "POST" && url.pathname === "/admin/change-password") {
+        const sessionId = request.headers.get("X-Session-ID");
+        const session = await validateSession(env, sessionId);
+
+        if (!session || session.role !== 'admin') {
+          return jsonResponse({ error: "Unauthorized" }, 401);
+        }
+
+        const { userId, newPassword } = await request.json();
+        const result = await changePassword(env, userId, newPassword);
+        return jsonResponse(result);
+      }
+
       if (request.method === "GET" && url.pathname === "/test-telegram") {
         const sessionId = request.headers.get("X-Session-ID");
-        const session = validateSession(sessionId);
-        
+        const session = await validateSession(env, sessionId);
+
         if (!session || session.role !== 'admin') {
           return jsonResponse({ error: "Unauthorized" }, 401);
         }
 
         const testMessage = `🧪 <b>WAVESCOUT Test</b>\n\nTelegram ist korrekt konfiguriert!\n⏰ ${new Date().toLocaleString('de-DE')}`;
         const success = await sendTelegramMessage(env, testMessage);
-        
+
         return jsonResponse({
           success,
           message: success ? 'Telegram-Nachricht gesendet!' : 'Fehler beim Senden'
         });
+      }
+
+      // ══════════════════════════════════════════════════════════
+      // ADMIN: DB SCHEMA MIGRATION
+      // Run once after first deploy to add sessions table and
+      // blocked/last_seen columns to users.
+      // ══════════════════════════════════════════════════════════
+
+      if (request.method === "POST" && url.pathname === "/admin/setup-db") {
+        const sessionId = request.headers.get("X-Session-ID");
+        const session = await validateSession(env, sessionId);
+
+        if (!session || session.role !== 'admin') {
+          return jsonResponse({ error: "Unauthorized" }, 401);
+        }
+
+        const results = [];
+
+        // Create sessions table
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            must_change_password INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL
+          )
+        `).run();
+        results.push('sessions table: OK');
+
+        // Add blocked column to users
+        try {
+          await env.DB.prepare(`ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0`).run();
+          results.push('users.blocked column: added');
+        } catch (_) {
+          results.push('users.blocked column: already exists');
+        }
+
+        // Add last_seen column to users
+        try {
+          await env.DB.prepare(`ALTER TABLE users ADD COLUMN last_seen INTEGER`).run();
+          results.push('users.last_seen column: added');
+        } catch (_) {
+          results.push('users.last_seen column: already exists');
+        }
+
+        // Create signals table if missing
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS signals (
+            id TEXT PRIMARY KEY,
+            symbol TEXT,
+            timeframe TEXT,
+            price REAL,
+            direction TEXT,
+            trigger TEXT,
+            ai_recommendation TEXT,
+            ai_score INTEGER,
+            ai_risk TEXT,
+            ai_entry REAL,
+            ai_tp REAL,
+            ai_sl REAL,
+            ai_reason TEXT,
+            rule_score INTEGER,
+            rule_reason TEXT,
+            exit_price REAL,
+            outcome TEXT DEFAULT 'OPEN',
+            created_at INTEGER,
+            updated_at INTEGER
+          )
+        `).run();
+        results.push('signals table: OK');
+
+        // Create checklists table if missing
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS checklists (
+            id TEXT PRIMARY KEY,
+            date TEXT,
+            user TEXT,
+            type TEXT,
+            data TEXT,
+            created_at INTEGER,
+            updated_at INTEGER
+          )
+        `).run();
+        results.push('checklists table: OK');
+
+        return jsonResponse({ success: true, results });
       }
 
       // ══════════════════════════════════════════════════════════
@@ -723,10 +963,10 @@ export default {
         if (!env.WEBHOOK_SECRET || secret !== env.WEBHOOK_SECRET) {
           return jsonResponse({ error: "Unauthorized" }, 401);
         }
-        
+
         const signal = await request.json();
         const result = await processSignal(env, signal);
-        
+
         return jsonResponse(result);
       }
 
@@ -735,17 +975,16 @@ export default {
       // ══════════════════════════════════════════════════════════
 
       if (request.method === "GET" && url.pathname === "/health") {
-        return jsonResponse({ 
-          status: "ok", 
+        return jsonResponse({
+          status: "ok",
           time: new Date().toISOString(),
-          version: "3.3.0-production"
+          version: "3.3.1-production"
         });
       }
 
       return new Response("WAVESCOUT v3.3 Production ✅", { headers: CORS_HEADERS });
 
     } catch (error) {
-      // Global error handler
       console.error('❌ Worker error:', error);
       return jsonResponse({
         error: "Internal Server Error",
