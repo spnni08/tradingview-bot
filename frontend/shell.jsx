@@ -71,9 +71,9 @@ const Navbar = ({ page, setPage, user, onLogout }) => {
   const menuRef = useRef(null);
 
   const NAV = [
+    { id: 'dashboard',     label: 'Dashboard' },
     { id: 'backtest',      label: 'Backtest' },
     { id: 'journal',       label: 'Journal' },
-    { id: 'dashboard',     label: 'Dashboard' },
     { id: 'statistiken',   label: 'Statistiken' },
     { id: 'einstellungen', label: 'Einstellungen' },
   ];
@@ -103,7 +103,7 @@ const Navbar = ({ page, setPage, user, onLogout }) => {
   return (
     <nav className="navbar">
       {/* Brand */}
-      <button className="navbar-brand" onClick={() => setPage('backtest')}>
+      <button className="navbar-brand" onClick={() => setPage('dashboard')}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--blue-500)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
           <path d="M2 14c2-3 4-3 6 0s4 3 6 0 4-3 6 0"/>
         </svg>
