@@ -955,6 +955,40 @@ export default {
       }
 
       // ══════════════════════════════════════════════════════════
+      // SIGNALS — update outcome / exit price
+      // PATCH /signals/:id  { outcome, exitPrice }
+      // ══════════════════════════════════════════════════════════
+
+      if (request.method === "PATCH" && url.pathname.startsWith("/signals/")) {
+        const sessionId = request.headers.get("X-Session-ID");
+        const session = await validateSession(env, sessionId);
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+
+        const signalId = url.pathname.replace("/signals/", "");
+        const body = await request.json();
+        const { outcome, exitPrice } = body;
+
+        const allowed = ['WIN', 'LOSS', 'BE', 'OPEN', 'IGNORED'];
+        if (outcome && !allowed.includes(outcome)) {
+          return jsonResponse({ error: "Ungültiges outcome" }, 400);
+        }
+
+        const sets = [];
+        const binds = [];
+
+        if (outcome) { sets.push("outcome = ?"); binds.push(outcome); }
+        if (exitPrice !== undefined) { sets.push("exit_price = ?"); binds.push(exitPrice); }
+        sets.push("updated_at = ?"); binds.push(Date.now());
+        binds.push(signalId);
+
+        await env.DB.prepare(
+          `UPDATE signals SET ${sets.join(", ")} WHERE id = ?`
+        ).bind(...binds).run();
+
+        return jsonResponse({ success: true });
+      }
+
+      // ══════════════════════════════════════════════════════════
       // WEBHOOK (TradingView)
       // ══════════════════════════════════════════════════════════
 

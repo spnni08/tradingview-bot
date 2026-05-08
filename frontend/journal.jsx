@@ -56,6 +56,22 @@ const JournalPage = () => {
     }
 
     loadEntries(sessionId, date);
+
+    // Auto-open checklist if a signal was saved from dashboard
+    const pendingSignal = localStorage.getItem('signal_for_journal');
+    if (pendingSignal) {
+      try {
+        const sig = JSON.parse(pendingSignal);
+        localStorage.removeItem('signal_for_journal');
+        setChecklist(prev => ({
+          ...prev,
+          biasSet: sig.direction === 'LONG' ? 'LONG' : sig.direction === 'SHORT' ? 'SHORT' : '',
+          tpRatio: '',
+          notes: `Signal: ${sig.symbol} ${sig.direction} · Score: ${sig.ai_score ?? '?'}/100 · Entry: $${(sig.ai_entry ?? sig.price ?? 0).toFixed(2)} · TP: $${(sig.ai_tp ?? 0).toFixed(2)} · SL: $${(sig.ai_sl ?? 0).toFixed(2)}\n${sig.ai_reason ?? ''}`.trim()
+        }));
+        setShowChecklist(true);
+      } catch (_) {}
+    }
   }, [date]);
 
   const loadEntries = async (sessionId, selectedDate) => {

@@ -93,7 +93,7 @@ const Dashboard = () => {
   };
 
   const handleExecuteTrade = (signal) => {
-    alert(`Trade-Ausführung für ${signal.symbol} ${signal.direction}\nDiese Funktion wird bald verfügbar sein.`);
+    alert(`Trade-Ausführung für ${signal.symbol} ${signal.direction}\nDiese Funktion wird in einem kommenden Update verfügbar sein.`);
   };
 
   const handleSaveToJournal = (signal) => {
@@ -102,9 +102,18 @@ const Dashboard = () => {
   };
 
   const handleIgnoreSignal = async (signal) => {
-    if (confirm(`Signal ${signal.symbol} ignorieren?`)) {
-      // TODO: Update signal status in database
-      alert('Signal ignoriert');
+    if (!confirm(`Signal ${signal.symbol} ${signal.direction} ignorieren?`)) return;
+
+    const sessionId = localStorage.getItem('wavescout_session');
+    try {
+      await fetch(`${API_URL}/signals/${signal.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+        body: JSON.stringify({ outcome: 'IGNORED' })
+      });
+      loadLiveData(sessionId);
+    } catch (err) {
+      console.error('Ignore error:', err);
     }
   };
 
@@ -150,24 +159,28 @@ const Dashboard = () => {
     );
   }
 
+  const equity = data.stats?.equity ?? 0;
+  const todayPnL = data.stats?.todayPnL ?? 0;
+  const winRate = data.stats?.winRate ?? 0;
+
   const kpis = [
     {
       label: 'Equity',
-      value: `$${data.stats.equity.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      value: `$${equity.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
       color: 'var(--text-primary)',
       tip: 'Gesamtkapital'
     },
     {
       label: 'Heute PnL',
-      value: (data.stats.todayPnL >= 0 ? '+' : '') + `$${data.stats.todayPnL.toFixed(2)}`,
-      color: data.stats.todayPnL >= 0 ? 'var(--win)' : 'var(--loss)',
+      value: (todayPnL >= 0 ? '+' : '') + `$${todayPnL.toFixed(2)}`,
+      color: todayPnL >= 0 ? 'var(--win)' : 'var(--loss)',
       tip: 'Profit & Loss heute'
     },
     {
       label: 'Win-Rate',
-      value: `${data.stats.winRate.toFixed(1)}%`,
+      value: `${winRate.toFixed(1)}%`,
       color: 'var(--win)',
-      tip: `${data.stats.wins}W / ${data.stats.losses}L`
+      tip: `${data.stats?.wins ?? 0}W / ${data.stats?.losses ?? 0}L`
     },
   ];
 
