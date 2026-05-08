@@ -218,7 +218,7 @@ async function processSignal(env, signal) {
     'OPEN'
   ).run();
 
-  if (analysis.score >= 65) {
+  if (analysis.score >= 55) {
     const telegramMessage = formatSignalForTelegram({
       ...signal,
       ai_score: analysis.score,
@@ -594,6 +594,94 @@ async function getUsers(env) {
   }
 }
 
+async function getTotalPnL(env) {
+  try {
+    const trades = await env.DB.prepare(`
+      SELECT ai_entry, exit_price, outcome, direction FROM signals
+      WHERE outcome IN ('WIN', 'LOSS') AND exit_price IS NOT NULL AND ai_entry IS NOT NULL
+    `).all();
+
+    let pnl = 0;
+    (trades.results || []).forEach(trade => {
+      const diff = trade.exit_price - trade.ai_entry;
+      pnl += trade.direction === 'LONG' ? diff : -diff;
+    });
+    return pnl;
+  } catch (_) { return 0; }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AUTO-EVALUATION — runs via cron every 4h
+// ═══════════════════════════════════════════════════════════════
+
+async function evaluateOpenTrades(env) {
+  try {
+    const open = await env.DB.prepare(`
+      SELECT * FROM signals
+      WHERE outcome = 'OPEN' AND ai_tp IS NOT NULL AND ai_sl IS NOT NULL
+      ORDER BY created_at ASC
+    `).all();
+
+    for (const signal of (open.results || [])) {
+      const snap = await getSnapshot(env, signal.symbol, '5m');
+      if (!snap?.price) continue;
+
+      const price = snap.price;
+      const isLong = signal.direction === 'LONG';
+      let outcome = null;
+
+      if (isLong) {
+        if (price >= signal.ai_tp) outcome = 'WIN';
+        else if (price <= signal.ai_sl) outcome = 'LOSS';
+      } else {
+        if (price <= signal.ai_tp) outcome = 'WIN';
+        else if (price >= signal.ai_sl) outcome = 'LOSS';
+      }
+
+      if (outcome) {
+        await env.DB.prepare(`
+          UPDATE signals SET outcome = ?, exit_price = ?, updated_at = ? WHERE id = ?
+        `).bind(outcome, price, Date.now(), signal.id).run();
+
+        const emoji = outcome === 'WIN' ? '✅' : '❌';
+        await sendTelegramMessage(env,
+          `${emoji} <b>Trade geschlossen</b>\n\n` +
+          `${signal.direction === 'LONG' ? '🟢' : '🔴'} ${signal.symbol} ${signal.direction}\n` +
+          `📊 Ergebnis: <b>${outcome}</b>\n` +
+          `💰 Exit: $${price.toFixed(2)}\n` +
+          `📈 Entry war: $${signal.ai_entry?.toFixed(2) || '?'}`
+        );
+      }
+    }
+    console.log('✅ evaluateOpenTrades done');
+  } catch (err) {
+    console.error('evaluateOpenTrades error:', err);
+  }
+}
+
+async function sendDailySummary(env) {
+  try {
+    const stats = await getStats(env);
+    const history = await getHistory(env, 5);
+
+    const recentList = history.length > 0
+      ? history.map(s => `• ${s.symbol} ${s.direction} · Score ${s.ai_score} · ${s.outcome}`).join('\n')
+      : 'Keine aktuellen Trades';
+
+    await sendTelegramMessage(env,
+      `📊 <b>WAVESCOUT Tagesbericht</b>\n\n` +
+      `📈 Statistiken:\n` +
+      `• Total: ${stats.total} Trades\n` +
+      `• Wins: ${stats.wins} | Losses: ${stats.losses} | Offen: ${stats.open}\n` +
+      `• Win-Rate: ${stats.winRate}%\n\n` +
+      `🕐 Letzte Signale:\n${recentList}\n\n` +
+      `⏰ ${new Date().toLocaleString('de-DE')}`
+    );
+  } catch (err) {
+    console.error('sendDailySummary error:', err);
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // MAIN WORKER
 // ═══════════════════════════════════════════════════════════════
@@ -659,9 +747,15 @@ export default {
           getTodayPnL(env)
         ]);
 
+        const startingCapital = parseFloat(env.STARTING_CAPITAL || '10000');
+        const totalPnL = await getTotalPnL(env);
+        const equity = startingCapital + totalPnL;
+
         return jsonResponse({
           stats: {
-            equity: 12473.50,
+            equity: parseFloat(equity.toFixed(2)),
+            startingCapital,
+            totalPnL: parseFloat(totalPnL.toFixed(2)),
             todayPnL: parseFloat(todayPnL.toFixed(2)),
             winRate: stats.winRate,
             totalTrades: stats.total,
@@ -994,7 +1088,8 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/webhook") {
         const secret = url.searchParams.get("secret");
-        if (!env.WEBHOOK_SECRET || secret !== env.WEBHOOK_SECRET) {
+        // If WEBHOOK_SECRET is not configured, accept all. If set, enforce it.
+        if (env.WEBHOOK_SECRET && secret !== env.WEBHOOK_SECRET) {
           return jsonResponse({ error: "Unauthorized" }, 401);
         }
 
@@ -1012,11 +1107,11 @@ export default {
         return jsonResponse({
           status: "ok",
           time: new Date().toISOString(),
-          version: "3.3.1-production"
+          version: "3.4.0-production"
         });
       }
 
-      return new Response("WAVESCOUT v3.3 Production ✅", { headers: CORS_HEADERS });
+      return new Response("WAVESCOUT v3.4 Production ✅", { headers: CORS_HEADERS });
 
     } catch (error) {
       console.error('❌ Worker error:', error);
@@ -1025,6 +1120,18 @@ export default {
         message: error.message,
         stack: error.stack
       }, 500);
+    }
+  },
+
+  async scheduled(event, env, ctx) {
+    console.log('⏰ Cron triggered:', event.cron);
+
+    // Every 4h: auto-evaluate open trades against latest snapshot prices
+    await evaluateOpenTrades(env);
+
+    // Daily at 7am UTC: send summary to Telegram
+    if (event.cron === "0 7 * * *") {
+      await sendDailySummary(env);
     }
   }
 };
