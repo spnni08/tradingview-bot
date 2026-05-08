@@ -74,9 +74,12 @@ const DashboardPage = ({ user, navigate }) => {
     </div>
   );
 
-  const { stats, bestSignal, latestSignals, marketBias } = data;
-  const todayPnL = stats?.todayPnL ?? 0;
-  const winRate  = stats?.winRate  ?? 0;
+  const stats = data?.stats || { totalTrades: 0, wins: 0, losses: 0, open: 0, todayPnL: 0, winRate: 0 };
+  const bestSignal = data?.bestSignal || null;
+  const latestSignals = Array.isArray(data?.latestSignals) ? data.latestSignals : [];
+  const marketBias = data?.marketBias || null;
+  const todayPnL = stats.todayPnL ?? 0;
+  const winRate  = stats.winRate  ?? 0;
 
   const greeting = (() => {
     const h = new Date().getHours();
