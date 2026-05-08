@@ -838,6 +838,19 @@ export default {
         return jsonResponse(result);
       }
 
+      if (request.method === "DELETE" && url.pathname.startsWith("/checklist/")) {
+        const sessionId = request.headers.get("X-Session-ID");
+        const session = await validateSession(env, sessionId);
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+
+        const entryId = url.pathname.slice("/checklist/".length);
+        await env.DB.prepare(
+          `DELETE FROM checklists WHERE id = ? AND user = ?`
+        ).bind(entryId, session.username).run();
+
+        return jsonResponse({ success: true });
+      }
+
       // ══════════════════════════════════════════════════════════
       // ADMIN ROUTES
       // ══════════════════════════════════════════════════════════
