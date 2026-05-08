@@ -682,6 +682,125 @@ async function sendDailySummary(env) {
   }
 }
 
+
+async function ensureSnapshotsTable(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT,
+      timeframe TEXT,
+      price REAL,
+      rsi REAL,
+      ema50 REAL,
+      ema200 REAL,
+      support REAL,
+      resistance REAL,
+      trend TEXT,
+      trend_1h TEXT,
+      trend_4h TEXT,
+      created_at TEXT
+    )
+  `).run();
+}
+
+async function ensurePracticeTradesTable(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS practice_trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      signal_id TEXT,
+      symbol TEXT,
+      timeframe TEXT,
+      direction TEXT,
+      entry_price REAL,
+      take_profit REAL,
+      stop_loss REAL,
+      status TEXT DEFAULT 'OPEN',
+      exit_price REAL,
+      result_pct REAL,
+      created_at TEXT,
+      closed_at TEXT
+    )
+  `).run();
+}
+
+async function saveSnapshot(env, payload) {
+  await ensureSnapshotsTable(env);
+  const createdAt = new Date(Number(payload.timestamp || Date.now()) * (String(payload.timestamp || '').length <= 10 ? 1000 : 1)).toISOString();
+  await env.DB.prepare(`
+    INSERT INTO snapshots (symbol, timeframe, price, rsi, ema50, ema200, support, resistance, trend, trend_1h, trend_4h, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    payload.symbol || null,
+    String(payload.timeframe || '5'),
+    Number(payload.price || 0),
+    payload.rsi != null ? Number(payload.rsi) : null,
+    payload.ema50 != null ? Number(payload.ema50) : null,
+    payload.ema200 != null ? Number(payload.ema200) : null,
+    payload.support != null ? Number(payload.support) : null,
+    payload.resistance != null ? Number(payload.resistance) : null,
+    payload.trend || null,
+    payload.trend_1h || null,
+    payload.trend_4h || null,
+    createdAt
+  ).run();
+}
+
+function computePracticeTargets(signal) {
+  const entry = Number(signal.ai_entry || signal.price || 0);
+  const direction = (signal.direction || 'LONG').toUpperCase();
+  const rr = 2;
+  const slPct = 0.008;
+  const tp = direction === 'LONG' ? entry * (1 + slPct * rr) : entry * (1 - slPct * rr);
+  const sl = direction === 'LONG' ? entry * (1 - slPct) : entry * (1 + slPct);
+  return { entry, tp, sl, direction };
+}
+
+async function createPracticeTradeFromSignal(env, signalId, signal) {
+  await ensurePracticeTradesTable(env);
+  const { entry, tp, sl, direction } = computePracticeTargets(signal);
+  if (!entry || direction === 'NONE') return null;
+  const nowIso = new Date().toISOString();
+  const res = await env.DB.prepare(`
+    INSERT INTO practice_trades (signal_id, symbol, timeframe, direction, entry_price, take_profit, stop_loss, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'OPEN', ?)
+  `).bind(signalId, signal.symbol || 'UNKNOWN', String(signal.timeframe || '5'), direction, entry, Number(signal.ai_tp || tp), Number(signal.ai_sl || sl), nowIso).run();
+  return res?.meta?.last_row_id || null;
+}
+
+async function evaluateOpenPracticeTrades(env, symbol = null, latestPrice = null) {
+  await ensurePracticeTradesTable(env);
+  const open = symbol
+    ? await env.DB.prepare(`SELECT * FROM practice_trades WHERE status = 'OPEN' AND symbol = ? ORDER BY id ASC`).bind(symbol).all()
+    : await env.DB.prepare(`SELECT * FROM practice_trades WHERE status = 'OPEN' ORDER BY id ASC`).all();
+
+  for (const t of (open.results || [])) {
+    let price = latestPrice;
+    if (!price || t.symbol !== symbol) {
+      const snap = await getSnapshot(env, t.symbol, t.timeframe || '5m');
+      price = snap?.price;
+    }
+    if (!price) continue;
+
+    const isLong = t.direction === 'LONG';
+    let status = null;
+    if (isLong) {
+      if (price >= t.take_profit) status = 'WIN';
+      else if (price <= t.stop_loss) status = 'LOSS';
+    } else {
+      if (price <= t.take_profit) status = 'WIN';
+      else if (price >= t.stop_loss) status = 'LOSS';
+    }
+    if (!status) continue;
+
+    const resultPct = isLong ? ((price - t.entry_price) / t.entry_price) * 100 : ((t.entry_price - price) / t.entry_price) * 100;
+    await env.DB.prepare(`
+      UPDATE practice_trades
+      SET status = ?, exit_price = ?, result_pct = ?, closed_at = ?
+      WHERE id = ?
+    `).bind(status, Number(price), Number(resultPct.toFixed(4)), new Date().toISOString(), t.id).run();
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // MAIN WORKER
 // ═══════════════════════════════════════════════════════════════
@@ -1095,21 +1214,68 @@ export default {
         return jsonResponse({ success: true });
       }
 
+      
+      if (request.method === "GET" && url.pathname === "/practice-trades") {
+        const sessionId = request.headers.get("X-Session-ID");
+        const session = await validateSession(env, sessionId);
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        await ensurePracticeTradesTable(env);
+        const rows = await env.DB.prepare(`SELECT * FROM practice_trades ORDER BY id DESC LIMIT 500`).all();
+        return jsonResponse(rows.results || []);
+      }
+
+      if (request.method === "GET" && url.pathname === "/practice-trades/stats") {
+        const sessionId = request.headers.get("X-Session-ID");
+        const session = await validateSession(env, sessionId);
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        await ensurePracticeTradesTable(env);
+        const rows = await env.DB.prepare(`SELECT * FROM practice_trades`).all();
+        const data = rows.results || [];
+        const wins = data.filter(t => t.status === 'WIN');
+        const losses = data.filter(t => t.status === 'LOSS');
+        const open = data.filter(t => t.status === 'OPEN');
+        const closed = wins.length + losses.length;
+        const winRate = closed ? (wins.length / closed) * 100 : 0;
+        const avgWin = wins.length ? wins.reduce((a,b)=>a+(b.result_pct||0),0)/wins.length : 0;
+        const avgLoss = losses.length ? losses.reduce((a,b)=>a+(b.result_pct||0),0)/losses.length : 0;
+        return jsonResponse({ total: data.length, wins: wins.length, losses: losses.length, open: open.length, winRate: Number(winRate.toFixed(2)), avgWin: Number(avgWin.toFixed(2)), avgLoss: Number(avgLoss.toFixed(2)) });
+      }
+
       // ══════════════════════════════════════════════════════════
       // WEBHOOK (TradingView)
       // ══════════════════════════════════════════════════════════
 
       if (request.method === "POST" && url.pathname === "/webhook") {
         const secret = url.searchParams.get("secret");
-        // If WEBHOOK_SECRET is not configured, accept all. If set, enforce it.
         if (env.WEBHOOK_SECRET && secret !== env.WEBHOOK_SECRET) {
-          return jsonResponse({ error: "Unauthorized" }, 401);
+          return jsonResponse({ success: false, error: "Unauthorized" }, 401);
         }
 
-        const signal = await request.json();
-        const result = await processSignal(env, signal);
+        let rawBody = '';
+        try {
+          rawBody = await request.text();
+          console.log('[webhook] raw body:', rawBody);
+          const payload = rawBody ? JSON.parse(rawBody) : {};
+          console.log('[webhook] parsed payload:', JSON.stringify(payload));
 
-        return jsonResponse(result);
+          const eventType = String(payload.event_type || '').toUpperCase();
+          const action = String(payload.action || '').toUpperCase();
+
+          if (eventType === 'SNAPSHOT' || action === 'NONE') {
+            await saveSnapshot(env, payload);
+            await evaluateOpenPracticeTrades(env, payload.symbol, Number(payload.price || 0));
+            return jsonResponse({ success: true, type: 'SNAPSHOT', message: 'Snapshot gespeichert' }, 200);
+          }
+
+          const result = await processSignal(env, payload);
+          await createPracticeTradeFromSignal(env, result.signalId || result.id || payload.id || crypto.randomUUID(), { ...payload, ...result });
+          await evaluateOpenPracticeTrades(env, payload.symbol, Number(payload.price || 0));
+          return jsonResponse({ success: true, type: 'SIGNAL', result }, 200);
+        } catch (error) {
+          console.error('[webhook] error:', error?.message);
+          console.error('[webhook] stack:', error?.stack || 'no-stack');
+          return jsonResponse({ success: false, error: 'Webhook processing failed', message: error?.message || 'unknown', stack: error?.stack || null, rawBody }, 200);
+        }
       }
 
       // ══════════════════════════════════════════════════════════

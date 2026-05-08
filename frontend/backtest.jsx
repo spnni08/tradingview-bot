@@ -6,8 +6,15 @@ const BacktestPage = ({ user }) => {
   const [loading, setLoading]           = useState(true);
   const [history, setHistory]           = useState([]);
   const [stats, setStats]               = useState(null);
+  const [practiceTrades, setPracticeTrades] = useState([]);
+  const [practiceStats, setPracticeStats] = useState(null);
+  const [showStrategy, setShowStrategy] = useState(false);
   const [filterOutcome, setFilterOutcome] = useState('all');
   const [filterSymbol, setFilterSymbol] = useState('all');
+  const [filterTimeframe, setFilterTimeframe] = useState('all');
+  const [filterDirection, setFilterDirection] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   useEffect(() => {
     const sessionId = localStorage.getItem('wavescout_session');
@@ -16,13 +23,17 @@ const BacktestPage = ({ user }) => {
 
   const loadData = async (sessionId) => {
     try {
-      const [histRes, statsRes] = await Promise.all([
+      const [histRes, statsRes, practiceRes, practiceStatsRes] = await Promise.all([
         fetch(`${API_URL}/history?limit=200`, { headers: { 'X-Session-ID': sessionId } }),
-        fetch(`${API_URL}/stats`,             { headers: { 'X-Session-ID': sessionId } })
+        fetch(`${API_URL}/stats`,             { headers: { 'X-Session-ID': sessionId } }),
+        fetch(`${API_URL}/practice-trades`,   { headers: { 'X-Session-ID': sessionId } }),
+        fetch(`${API_URL}/practice-trades/stats`, { headers: { 'X-Session-ID': sessionId } })
       ]);
       if (histRes.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       setHistory(histRes.ok ? await histRes.json() : []);
       setStats(statsRes.ok   ? await statsRes.json() : null);
+      setPracticeTrades(practiceRes.ok ? await practiceRes.json() : []);
+      setPracticeStats(practiceStatsRes.ok ? await practiceStatsRes.json() : null);
     } catch (err) {
       console.error('Backtest load error:', err);
     } finally {
@@ -52,11 +63,32 @@ const BacktestPage = ({ user }) => {
 
   const totalClosed = (stats?.wins || 0) + (stats?.losses || 0);
   const winRate = totalClosed > 0 ? (stats.wins / totalClosed) * 100 : 0;
-  const symbols = ['all', ...new Set(history.map(h => h.symbol).filter(Boolean))];
 
-  const filtered = history.filter(h => {
-    if (filterOutcome !== 'all' && h.outcome !== filterOutcome) return false;
+  const strategy = {
+    name: 'Top-Down Daytrading v1.0',
+    focus: 'BTC/ETH · 5–15min Entry mit 1H/4H Bias',
+    steps: [
+      'Bias morgens auf 4H/1H prüfen (EMA200 über/unter Preis)',
+      'Nur in markierten 15m Key-Zonen aktiv werden',
+      'Entry auf 5–10m nach Strukturbruch + Trendkerze + RSI-Filter',
+      'TP mindestens 1:1.5, Ziel 1:2 · SL logisch über/unter Struktur',
+      'Ausschluss: Gegen Bias, flache EMA200, Chop/Wicks, FOMO'
+    ]
+  };
+
+  const successProgress = Math.max(0, Math.min(100, winRate));
+
+  const symbols = ['all', ...new Set(practiceTrades.map(h => h.symbol).filter(Boolean))];
+  const timeframes = ['all', ...new Set(practiceTrades.map(h => h.timeframe).filter(Boolean))];
+
+  const filtered = practiceTrades.filter(h => {
+    if (filterOutcome !== 'all' && h.status !== filterOutcome) return false;
     if (filterSymbol !== 'all' && h.symbol !== filterSymbol) return false;
+    if (filterTimeframe !== 'all' && String(h.timeframe) !== String(filterTimeframe)) return false;
+    if (filterDirection !== 'all' && h.direction !== filterDirection) return false;
+    const created = new Date(h.created_at).getTime();
+    if (dateFrom && created < new Date(`${dateFrom}T00:00:00`).getTime()) return false;
+    if (dateTo && created > new Date(`${dateTo}T23:59:59`).getTime()) return false;
     return true;
   });
 
@@ -77,16 +109,13 @@ const BacktestPage = ({ user }) => {
       </div>
 
       {/* Overview */}
-      <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        <StatCard label="Total Signale" value={history.length.toString()} sub="Alle empfangenen Webhooks"/>
-        <StatCard label="Abgeschlossen" value={totalClosed.toString()} sub={`${stats?.wins || 0}W · ${stats?.losses || 0}L`}/>
-        <StatCard
-          label="Win-Rate"
-          value={`${winRate.toFixed(1)}%`}
-          sub={winRate >= 50 ? 'Profitabel' : 'Unprofitabel'}
-          subTone={winRate >= 50 ? 'win' : 'loss'}
-        />
-        <StatCard label="Offen" value={(stats?.open || 0).toString()} sub="Warten auf Auswertung"/>
+      <div className="grid" style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
+        <StatCard label="Übungstrades" value={`${practiceStats?.total || 0}`} sub="Paper Trades"/>
+        <StatCard label="Winrate" value={`${(practiceStats?.winRate || 0).toFixed(1)}%`} subTone={(practiceStats?.winRate || 0) >= 50 ? 'win' : 'loss'} sub={(practiceStats?.winRate || 0) >= 50 ? 'Profitabel' : 'Ausbaufähig'}/>
+        <StatCard label="Offen" value={`${practiceStats?.open || 0}`} sub="Noch aktiv"/>
+        <StatCard label="Gewinner" value={`${practiceStats?.wins || 0}`} sub="TP erreicht" subTone="win"/>
+        <StatCard label="Verlierer" value={`${practiceStats?.losses || 0}`} sub="SL erreicht" subTone="loss"/>
+        <StatCard label="Ø Gewinn/Verlust" value={`${(practiceStats?.avgWin || 0).toFixed(2)}% / ${(practiceStats?.avgLoss || 0).toFixed(2)}%`} sub="Nur geschlossene Trades"/>
       </div>
 
       {/* PnL Sparkline */}
@@ -107,6 +136,25 @@ const BacktestPage = ({ user }) => {
         </div>
       )}
 
+
+      <div className="card">
+        <div className="card-head">
+          <Icon name="book" className="ico"/>
+          <h3>Strategie-Regeln</h3>
+          <div className="actions">
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowStrategy(v => !v)}>{showStrategy ? 'Ausblenden' : 'Anzeigen'}</button>
+          </div>
+        </div>
+        {showStrategy && (
+          <div className="card-body" style={{ display: 'grid', gap: 10 }}>
+            <p className="muted" style={{ margin: 0 }}>{strategy.focus}</p>
+            <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--text-secondary)', lineHeight: 1.65, fontSize: 13 }}>
+              {strategy.steps.map((step, idx) => <li key={idx}>{step}</li>)}
+            </ul>
+          </div>
+        )}
+      </div>
+
       {/* Filters */}
       <div className="card">
         <div className="card-head">
@@ -126,10 +174,10 @@ const BacktestPage = ({ user }) => {
               <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500 }}>Ergebnis</label>
               <select value={filterOutcome} onChange={(e) => setFilterOutcome(e.target.value)} className="input" style={{ minWidth: 140 }}>
                 <option value="all">Alle</option>
-                <option value="WIN">Wins</option>
-                <option value="LOSS">Losses</option>
-                <option value="OPEN">Offen</option>
-                <option value="IGNORED">Ignoriert</option>
+                <option value="WIN">WIN</option>
+                <option value="LOSS">LOSS</option>
+                <option value="OPEN">OPEN</option>
+                <option value="SKIPPED">SKIPPED</option>
               </select>
             </div>
             <div>
@@ -140,6 +188,10 @@ const BacktestPage = ({ user }) => {
                 ))}
               </select>
             </div>
+            <div><label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500 }}>Timeframe</label><select value={filterTimeframe} onChange={(e) => setFilterTimeframe(e.target.value)} className="input" style={{ minWidth: 110 }}>{timeframes.map(tf => <option key={tf} value={tf}>{tf === 'all' ? 'Alle' : tf}</option>)}</select></div>
+            <div><label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500 }}>Richtung</label><select value={filterDirection} onChange={(e) => setFilterDirection(e.target.value)} className="input" style={{ minWidth: 110 }}><option value="all">Alle</option><option value="LONG">LONG</option><option value="SHORT">SHORT</option></select></div>
+            <div><label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500 }}>Von</label><input type="date" value={dateFrom} onChange={(e)=>setDateFrom(e.target.value)} className="input"/></div>
+            <div><label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500 }}>Bis</label><input type="date" value={dateTo} onChange={(e)=>setDateTo(e.target.value)} className="input"/></div>
           </div>
         </div>
       </div>
@@ -148,7 +200,7 @@ const BacktestPage = ({ user }) => {
       <div className="card">
         <div className="card-head">
           <Icon name="signal" className="ico"/>
-          <h3>Trade History</h3>
+          <h3>Übungstrades</h3>
           <div className="actions">
             <span className="badge badge-tag">{filtered.length} Trades</span>
           </div>
@@ -166,8 +218,8 @@ const BacktestPage = ({ user }) => {
               <thead>
                 <tr>
                   <th>Datum</th><th>Symbol</th><th>Richtung</th>
-                  <th>Entry</th><th>Exit</th><th>PnL</th>
-                  <th>Score</th><th>Risiko</th><th>Ergebnis</th>
+                  <th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>PnL</th>
+                  <th>Status</th><th>Ergebnis %</th><th>Closed</th>
                 </tr>
               </thead>
               <tbody>
@@ -186,24 +238,14 @@ const BacktestPage = ({ user }) => {
                           {trade.direction}
                         </span>
                       </td>
-                      <td className="mono">${(trade.ai_entry || trade.price || 0).toFixed(2)}</td>
+                      <td className="mono">${Number(trade.entry_price || 0).toFixed(2)}</td>
+                      <td className="mono win">{trade.take_profit ? `$${Number(trade.take_profit).toFixed(2)}` : '—'}</td>
+                      <td className="mono loss">{trade.stop_loss ? `$${Number(trade.stop_loss).toFixed(2)}` : '—'}</td>
                       <td className="mono">{trade.exit_price ? `$${trade.exit_price.toFixed(2)}` : '—'}</td>
-                      <td className={`mono ${pnl > 0 ? 'win' : pnl < 0 ? 'loss' : ''}`}>
-                        {pnl !== 0 ? `${pnl > 0 ? '+' : ''}${pnl.toFixed(2)}%` : '—'}
-                      </td>
-                      <td className="mono">{trade.ai_score || 0}</td>
-                      <td>
-                        <span className={`badge ${trade.ai_risk === 'LOW' ? 'badge-win' : trade.ai_risk === 'HIGH' ? 'badge-loss' : 'badge-wait'}`}>
-                          {trade.ai_risk || 'MED'}
-                        </span>
-                      </td>
-                      <td>
-                        <OutcomeSelector
-                          tradeId={trade.id}
-                          current={trade.outcome}
-                          onChange={updateOutcome}
-                        />
-                      </td>
+                      <td className={`mono ${pnl > 0 ? 'win' : pnl < 0 ? 'loss' : ''}`}>{pnl !== 0 ? `${pnl > 0 ? '+' : ''}${pnl.toFixed(2)}%` : '—'}</td>
+                      <td><span className={`badge ${trade.status === 'WIN' ? 'badge-win' : trade.status === 'LOSS' ? 'badge-loss' : 'badge-wait'}`}>{trade.status || 'OPEN'}</span></td>
+                      <td className={`mono ${(trade.result_pct || 0) >= 0 ? 'win' : 'loss'}`}>{trade.result_pct != null ? `${trade.result_pct > 0 ? '+' : ''}${Number(trade.result_pct).toFixed(2)}%` : '—'}</td>
+                      <td className="mono muted">{trade.closed_at ? new Date(trade.closed_at).toLocaleString('de-DE') : '—'}</td>
                     </tr>
                   );
                 })}
@@ -307,9 +349,9 @@ const PnLChart = ({ points }) => {
 // ─── Helpers ─────────────────────────────────────────────────
 
 function calculatePnL(trade) {
-  if (!trade.exit_price || !trade.ai_entry || trade.ai_entry === 0) return 0;
-  const diff = trade.exit_price - trade.ai_entry;
-  const pct = (diff / trade.ai_entry) * 100;
+  if (!trade.exit_price || !trade.entry_price || trade.entry_price === 0) return 0;
+  const diff = trade.exit_price - trade.entry_price;
+  const pct = (diff / trade.entry_price) * 100;
   return trade.direction === 'LONG' ? pct : -pct;
 }
 

@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 const App = () => {
-  const [page, setPage] = useState('backtest');
+  const [page, setPage] = useState('dashboard');
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
 
@@ -69,8 +69,8 @@ const App = () => {
       case 'admin':
         return user?.role === 'admin'
           ? <AdminPage key="admin" {...props}/>
-          : <BacktestPage key="backtest" {...props}/>;
-      default:              return <BacktestPage      key="backtest"      {...props}/>;
+          : <DashboardPage key="dashboard" {...props}/>;
+      default:              return <DashboardPage     key="dashboard"     {...props}/>;
     }
   };
 
