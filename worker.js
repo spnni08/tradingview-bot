@@ -918,26 +918,55 @@ async function fetchRssItems(feed) {
   }
 }
 
-async function getMarketRadar(env) {
+function safeIdPart(input = '') {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) - hash) + input.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+async function getMarketRadar(env, session = null) {
   await ensureTables(env);
   const now = Date.now();
+  const debug = {
+    feeds_total: MARKET_RADAR_FEEDS.length,
+    feeds_success: 0,
+    feeds_failed: 0,
+    items_loaded: 0,
+    items_relevant: 0,
+    db_saved: 0,
+    error_message: null
+  };
+  const isAdmin = session?.role === 'admin';
+  const withDebug = (payload) => isAdmin ? { ...payload, debug } : payload;
+
+  try {
   const freshCache = await env.DB.prepare(
     `SELECT * FROM market_events WHERE status = 'ACTIVE' AND updated_at >= ? ORDER BY impact DESC, event_time DESC LIMIT ?`
   ).bind(now - MARKET_RADAR_CACHE_TTL_MS, MARKET_RADAR_MAX_EVENTS).all();
 
   if (freshCache.results?.length) {
     const events = freshCache.results.map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
-    return { status: computeRadarStatus(events), updated_at: now, summary: "BTC/Krypto-Markt mit erhöhter Event-Aktivität.", events, disclaimer: RADAR_DISCLAIMER, source: 'CACHE' };
+    return withDebug({ status: computeRadarStatus(events), updated_at: now, summary: "BTC/Krypto-Markt mit erhöhter Event-Aktivität.", events, disclaimer: RADAR_DISCLAIMER, source: 'CACHE' });
   }
 
-  const rssResults = (await Promise.all(MARKET_RADAR_FEEDS.map(fetchRssItems))).flat();
+  const feedArrays = await Promise.all(MARKET_RADAR_FEEDS.map(async (feed) => {
+    const items = await fetchRssItems(feed);
+    if (items.length > 0) debug.feeds_success += 1;
+    else debug.feeds_failed += 1;
+    return items;
+  }));
+  const rssResults = feedArrays.flat();
+  debug.items_loaded = rssResults.length;
   const relevant = rssResults
     .filter(item => /bitcoin|btc|crypto|etf|sec|stablecoin|binance|bybit|mexc|blofin|fed|cpi|nfp|liquidation|hack|regulation/i.test(`${item.title} ${item.description}`))
     .slice(0, MARKET_RADAR_MAX_EVENTS)
     .map(item => {
       const text = `${item.title} ${item.description}`;
       return {
-        id: `mradar_${item.eventTime}_${btoa(item.title).replace(/[^a-z0-9]/gi, '').slice(0, 16)}`,
+        id: `mradar_${item.eventTime}_${safeIdPart(item.title)}`,
         event_time: item.eventTime,
         title: item.title,
         category: mapEventCategory(text),
@@ -948,6 +977,7 @@ async function getMarketRadar(env) {
         summary: item.description.slice(0, 180) || 'Relevantes Krypto-Markt-Event.',
       };
     });
+  debug.items_relevant = relevant.length;
 
   const status = computeRadarStatus(relevant);
   for (const event of relevant) {
@@ -959,19 +989,31 @@ async function getMarketRadar(env) {
       event.id, event.id, now, now, event.event_time, event.title, event.category, event.impact,
       JSON.stringify(event.affected_markets), event.source, event.source_url, event.summary, status, JSON.stringify(event)
     ).run();
+    debug.db_saved += 1;
   }
 
   const outputEvents = relevant.length ? relevant : (await env.DB.prepare(
     `SELECT * FROM market_events WHERE status = 'ACTIVE' ORDER BY updated_at DESC LIMIT ?`
   ).bind(MARKET_RADAR_MAX_EVENTS).all()).results.map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
 
-  return {
+  return withDebug({
     status: computeRadarStatus(outputEvents),
     updated_at: now,
     summary: outputEvents.length ? "BTC/Krypto-Markt mit erhöhter Event-Aktivität." : "Keine relevanten Markt-Events gefunden.",
     events: outputEvents,
     disclaimer: RADAR_DISCLAIMER
-  };
+  });
+  } catch (error) {
+    console.error('❌ market-radar error:', error?.message || error);
+    debug.error_message = String(error?.message || error || 'market-radar failed');
+    return withDebug({
+      status: 'NORMAL',
+      updated_at: now,
+      summary: 'Radar-Daten aktuell nicht verfügbar. Letzte Daten konnten nicht geladen werden.',
+      events: [],
+      disclaimer: RADAR_DISCLAIMER
+    });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1405,7 +1447,7 @@ export default {
       if (request.method === "GET" && url.pathname === "/market-radar") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
-        return jsonResponse(await getMarketRadar(env));
+        return jsonResponse(await getMarketRadar(env, session));
       }
 
       // ── DATA ─────────────────────────────────────────────────
