@@ -63,10 +63,31 @@ ${signal.ai_reason || 'Signal von TradingView'}
 }
 
 // ═══════════════════════════════════════════════════════════════
+// STRATEGY SYSTEM
+// ═══════════════════════════════════════════════════════════════
+
+const DEFAULT_STRATEGY_CONFIG = {
+  rules: {
+    rsi:                { enabled: true, weight: 18 },
+    ema:                { enabled: true, weight: 12 },
+    trend:              { enabled: true, weight: 10 },
+    wave_bias:          { enabled: true, weight: 10 },
+    support_resistance: { enabled: true, weight: 8  },
+    timeframe:          { enabled: true, weight: 8  },
+    confidence:         { enabled: true, weight: 10 }
+  },
+  thresholds: {
+    min_trade_score:    70,
+    min_telegram_score: 55,
+    max_risk:           'MEDIUM'
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════
 // AI ANALYSIS
 // ═══════════════════════════════════════════════════════════════
 
-async function analyzeSignalWithAI(env, signal) {
+async function analyzeSignalWithAI(env, signal, strategyConfig = null) {
   if (!env.ANTHROPIC_API_KEY) {
     console.log('⚠️ No AI API key, using rule-based analysis');
     return analyzeWithRules(signal);
@@ -122,88 +143,108 @@ Format as JSON:
   } catch (error) {
     console.error('AI analysis error:', error);
   }
-  return analyzeWithRules(signal);
+  return analyzeWithRules(signal, strategyConfig);
 }
 
-function analyzeWithRules(signal) {
-  const dir = (signal.direction || signal.side || signal.signal || '').toUpperCase();
+function analyzeWithRules(signal, strategyConfig = null) {
+  const cfg     = strategyConfig || DEFAULT_STRATEGY_CONFIG;
+  const dir     = (signal.direction || signal.side || signal.signal || '').toUpperCase();
   const isLong  = dir === 'LONG';
   const isShort = dir === 'SHORT';
 
+  // Extract weights from config (0 = disabled)
+  const rW  = cfg.rules?.rsi?.enabled                !== false ? (cfg.rules?.rsi?.weight                ?? 18) : 0;
+  const eW  = cfg.rules?.ema?.enabled                !== false ? (cfg.rules?.ema?.weight                ?? 12) : 0;
+  const tW  = cfg.rules?.trend?.enabled              !== false ? (cfg.rules?.trend?.weight              ?? 10) : 0;
+  const wW  = cfg.rules?.wave_bias?.enabled          !== false ? (cfg.rules?.wave_bias?.weight          ?? 10) : 0;
+  const srW = cfg.rules?.support_resistance?.enabled !== false ? (cfg.rules?.support_resistance?.weight ?? 8)  : 0;
+  const tfW = cfg.rules?.timeframe?.enabled          !== false ? (cfg.rules?.timeframe?.weight          ?? 8)  : 0;
+  const cW  = cfg.rules?.confidence?.enabled         !== false ? (cfg.rules?.confidence?.weight         ?? 10) : 0;
+
   let score = 50;
 
-  // ── RSI ─────────────────────────────────────────────────────
+  // ── RSI ──────────────────────────────────────────────────────
   const rsi = parseFloat(signal.rsi ?? 50);
-  if (isLong) {
-    if      (rsi < 30) score += 18;  // very oversold
-    else if (rsi < 40) score += 10;
-    else if (rsi < 50) score += 4;
-    else if (rsi > 70) score -= 18;  // overbought → bad long
-    else if (rsi > 60) score -= 6;
-  } else if (isShort) {
-    if      (rsi > 70) score += 18;  // very overbought
-    else if (rsi > 60) score += 10;
-    else if (rsi > 50) score += 4;
-    else if (rsi < 30) score -= 18;  // oversold → bad short
-    else if (rsi < 40) score -= 6;
+  if (rW > 0) {
+    if (isLong) {
+      if      (rsi < 30) score += rW;
+      else if (rsi < 40) score += Math.round(rW * 0.56);
+      else if (rsi < 50) score += Math.round(rW * 0.22);
+      else if (rsi > 70) score -= rW;
+      else if (rsi > 60) score -= Math.round(rW * 0.33);
+    } else if (isShort) {
+      if      (rsi > 70) score += rW;
+      else if (rsi > 60) score += Math.round(rW * 0.56);
+      else if (rsi > 50) score += Math.round(rW * 0.22);
+      else if (rsi < 30) score -= rW;
+      else if (rsi < 40) score -= Math.round(rW * 0.33);
+    }
   }
 
   // ── EMA trend alignment ──────────────────────────────────────
   const ema50  = parseFloat(signal.ema50  ?? 0);
   const ema200 = parseFloat(signal.ema200 ?? 0);
-  if (ema50 && ema200) {
+  if (eW > 0 && ema50 && ema200) {
     const bullish = ema50 > ema200;
-    if (isLong  && bullish)  score += 12;
-    if (isShort && !bullish) score += 12;
-    if (isLong  && !bullish) score -= 12;
-    if (isShort && bullish)  score -= 12;
+    if (isLong  && bullish)  score += eW;
+    if (isShort && !bullish) score += eW;
+    if (isLong  && !bullish) score -= eW;
+    if (isShort && bullish)  score -= eW;
   }
 
   // ── Trend label ──────────────────────────────────────────────
   const trend = (signal.trend || '').toUpperCase();
-  if (trend === 'BULLISH' || trend === 'UP') {
-    score += isLong ? 10 : -10;
-  } else if (trend === 'BEARISH' || trend === 'DOWN') {
-    score += isShort ? 10 : -10;
+  if (tW > 0) {
+    if (trend === 'BULLISH' || trend === 'UP')     score += isLong  ? tW : -tW;
+    else if (trend === 'BEARISH' || trend === 'DOWN') score += isShort ? tW : -tW;
   }
 
   // ── Wave bias ────────────────────────────────────────────────
   const waveBias = (signal.wave_bias || '').toUpperCase();
-  if (waveBias === 'LONG')  score += isLong  ? 10 : -5;
-  if (waveBias === 'SHORT') score += isShort ? 10 : -5;
+  if (wW > 0) {
+    if (waveBias === 'LONG')  score += isLong  ? wW : -Math.round(wW * 0.5);
+    if (waveBias === 'SHORT') score += isShort ? wW : -Math.round(wW * 0.5);
+  }
 
   // ── Timeframe ────────────────────────────────────────────────
-  const tf = String(signal.timeframe || '').replace('m','').replace('h','H');
-  if (['60','240','1H','4H'].includes(tf))  score += 8;
-  else if (['15','30'].includes(tf))         score += 4;
+  if (tfW > 0) {
+    const tf = String(signal.timeframe || '').replace('m','').replace('h','H');
+    if      (['60','240','1H','4H'].includes(tf)) score += tfW;
+    else if (['15','30'].includes(tf))             score += Math.round(tfW * 0.5);
+  }
 
-  // ── Confidence from signal source ────────────────────────────
-  const confidence = parseFloat(signal.confidence ?? 0);
-  if      (confidence >= 80) score += 10;
-  else if (confidence >= 60) score += 5;
+  // ── Confidence ───────────────────────────────────────────────
+  if (cW > 0) {
+    const confidence = parseFloat(signal.confidence ?? 0);
+    if      (confidence >= 80) score += cW;
+    else if (confidence >= 60) score += Math.round(cW * 0.5);
+  }
 
-  // ── Support / Resistance proximity ──────────────────────────
+  // ── Support / Resistance proximity ───────────────────────────
   const price      = parseFloat(signal.price ?? 0);
   const support    = parseFloat(signal.support ?? 0);
   const resistance = parseFloat(signal.resistance ?? 0);
-  if (price && support && isLong && price > support) {
-    const pct = (price - support) / price;
-    if (pct < 0.02) score += 8;  // within 2% of support
-  }
-  if (price && resistance && isShort && price < resistance) {
-    const pct = (resistance - price) / price;
-    if (pct < 0.02) score += 8;
+  if (srW > 0) {
+    if (price && support && isLong && price > support) {
+      if ((price - support) / price < 0.02) score += srW;
+    }
+    if (price && resistance && isShort && price < resistance) {
+      if ((resistance - price) / price < 0.02) score += srW;
+    }
   }
 
-  // ── Clamp ─────────────────────────────────────────────────
+  // ── Clamp ────────────────────────────────────────────────────
   score = Math.max(0, Math.min(100, Math.round(score)));
 
-  // ── Recommendation ──────────────────────────────────────────
+  // ── Recommendation (uses config thresholds) ──────────────────
+  const minTrade    = cfg.thresholds?.min_trade_score    ?? 70;
+  const minTelegram = cfg.thresholds?.min_telegram_score ?? 55;
+
   let recommendation, risk;
-  if (score >= 70) {
+  if (score >= minTrade) {
     recommendation = dir || 'RECOMMENDED';
-    risk = score >= 82 ? 'LOW' : 'MEDIUM';
-  } else if (score >= 55) {
+    risk = score >= minTrade + 12 ? 'LOW' : 'MEDIUM';
+  } else if (score >= minTelegram) {
     recommendation = 'WAIT';
     risk = 'MEDIUM';
   } else {
@@ -220,8 +261,8 @@ function analyzeWithRules(signal) {
   const reasons = [];
   if (rsi && (rsi < 35 || rsi > 65)) reasons.push(`RSI ${rsi}`);
   if (ema50 && ema200) reasons.push(`EMA ${ema50 > ema200 ? 'bullish' : 'bearish'}`);
-  if (trend)     reasons.push(`Trend: ${trend}`);
-  if (waveBias)  reasons.push(`Bias: ${waveBias}`);
+  if (trend)    reasons.push(`Trend: ${trend}`);
+  if (waveBias) reasons.push(`Bias: ${waveBias}`);
   const reason = reasons.length > 0 ? reasons.join(' · ') : 'Rule-based analysis';
 
   return { recommendation, score, risk, entry, tp, sl, reason, direction: dir };
@@ -330,8 +371,76 @@ async function ensureTables(env) {
       )
     `).run();
 
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS strategies (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        version TEXT DEFAULT 'v1.0',
+        active INTEGER DEFAULT 0,
+        is_default INTEGER DEFAULT 0,
+        protected INTEGER DEFAULT 0,
+        created_at INTEGER,
+        updated_at INTEGER,
+        config_json TEXT
+      )
+    `).run();
+
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS signal_loss_reasons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        signal_id TEXT NOT NULL,
+        strategy_id TEXT,
+        reason TEXT NOT NULL,
+        note TEXT,
+        created_at INTEGER,
+        created_by TEXT
+      )
+    `).run();
+
+    // Migrate signals table for strategy tracking columns
+    const stratCols = [
+      ['strategy_id',      'TEXT'],
+      ['strategy_name',    'TEXT'],
+      ['strategy_version', 'TEXT'],
+    ];
+    for (const [col, type] of stratCols) {
+      try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); }
+      catch (_) {}
+    }
+
   } catch (error) {
     console.error('❌ ensureTables error:', error.message);
+  }
+}
+
+// ─── Strategy helpers ────────────────────────────────────────
+
+async function getActiveStrategy(env) {
+  try {
+    const strategy = await env.DB.prepare(
+      `SELECT * FROM strategies WHERE active = 1 ORDER BY updated_at DESC LIMIT 1`
+    ).first();
+    if (!strategy) return null;
+    return { ...strategy, config: strategy.config_json ? JSON.parse(strategy.config_json) : DEFAULT_STRATEGY_CONFIG };
+  } catch (_) { return null; }
+}
+
+async function initDefaultStrategy(env) {
+  try {
+    const id = 'strategy_default';
+    const existing = await env.DB.prepare(`SELECT id FROM strategies WHERE id = ?`).bind(id).first();
+    if (existing) {
+      await env.DB.prepare(`UPDATE strategies SET active = 1 WHERE id = ?`).bind(id).run();
+      return { id, name: 'WAVESCOUT Standard', version: 'v1.0', config: DEFAULT_STRATEGY_CONFIG };
+    }
+    await env.DB.prepare(`
+      INSERT INTO strategies (id, name, version, active, is_default, protected, created_at, updated_at, config_json)
+      VALUES (?, 'WAVESCOUT Standard', 'v1.0', 1, 1, 1, ?, ?, ?)
+    `).bind(id, Date.now(), Date.now(), JSON.stringify(DEFAULT_STRATEGY_CONFIG)).run();
+    return { id, name: 'WAVESCOUT Standard', version: 'v1.0', config: DEFAULT_STRATEGY_CONFIG };
+  } catch (e) {
+    console.error('initDefaultStrategy error:', e.message);
+    return null;
   }
 }
 
@@ -534,13 +643,18 @@ function normalizeAction(payload) {
 async function processSignal(env, signal) {
   const direction = normalizeDirection(signal);
   const action    = normalizeAction(signal);
-  signal.direction = direction; // normalize for analyzeWithRules
+  signal.direction = direction;
 
   console.log('📊 Processing signal:', signal.symbol, direction, '| action:', action, '| rsi:', signal.rsi);
 
   await ensureTables(env);
 
-  const analysis = await analyzeSignalWithAI(env, signal);
+  // Resolve active strategy (auto-init default if none)
+  let strategy = await getActiveStrategy(env);
+  if (!strategy) strategy = await initDefaultStrategy(env);
+  const strategyConfig = strategy?.config || null;
+
+  const analysis = await analyzeSignalWithAI(env, signal, strategyConfig);
   const signalId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
   await env.DB.prepare(`
@@ -549,8 +663,10 @@ async function processSignal(env, signal) {
       rsi, ema50, ema200, trend, support, resistance, wave_bias,
       ai_recommendation, ai_direction, ai_score, ai_risk, ai_confidence,
       ai_entry, ai_tp, ai_sl, ai_reason,
-      rule_score, rule_reason, created_at, outcome
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      rule_score, rule_reason,
+      strategy_id, strategy_name, strategy_version,
+      created_at, outcome
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     signalId,
     signal.symbol  || 'UNKNOWN',
@@ -577,6 +693,9 @@ async function processSignal(env, signal) {
     analysis.reason,
     analysis.score,
     analysis.reason,
+    strategy?.id      || null,
+    strategy?.name    || 'WAVESCOUT Standard',
+    strategy?.version || 'v1.0',
     Date.now(),
     'OPEN'
   ).run();
@@ -1407,7 +1526,207 @@ export default {
           catch (_) { results.push(`signals.${col}: already exists`); }
         }
 
+        // Strategy tracking columns
+        const stratCols = [
+          ['strategy_id',      'TEXT'],
+          ['strategy_name',    'TEXT'],
+          ['strategy_version', 'TEXT'],
+        ];
+        for (const [col, type] of stratCols) {
+          try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); results.push(`signals.${col}: added`); }
+          catch (_) { results.push(`signals.${col}: already exists`); }
+        }
+
+        // Ensure default strategy exists
+        await initDefaultStrategy(env);
+        results.push('strategies: default initialised');
+
         return jsonResponse({ success: true, results });
+      }
+
+      // ── STRATEGIES ──────────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/strategies") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        await ensureTables(env);
+        const existing = await env.DB.prepare(`SELECT COUNT(*) as c FROM strategies`).first();
+        if (!existing?.c) await initDefaultStrategy(env);
+        const rows = await env.DB.prepare(`SELECT * FROM strategies ORDER BY is_default DESC, created_at DESC`).all();
+        return jsonResponse((rows.results || []).map(s => ({
+          ...s, config: s.config_json ? JSON.parse(s.config_json) : DEFAULT_STRATEGY_CONFIG
+        })));
+      }
+
+      if (request.method === "POST" && url.pathname === "/strategies") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const { name, version, config } = await request.json();
+        if (!name || !config) return jsonResponse({ error: "name and config required" }, 400);
+        const id = `strategy_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const now = Date.now();
+        await env.DB.prepare(`
+          INSERT INTO strategies (id, name, version, active, is_default, protected, created_at, updated_at, config_json)
+          VALUES (?, ?, ?, 0, 0, 0, ?, ?, ?)
+        `).bind(id, name, version || 'v1.0', now, now, JSON.stringify(config)).run();
+        return jsonResponse({ success: true, id });
+      }
+
+      if (request.method === "PUT" && url.pathname.startsWith("/strategies/") && !url.pathname.endsWith("/activate") && url.pathname !== "/strategies/reset-to-default" && url.pathname !== "/strategies/compare" && url.pathname !== "/strategies/ab-backtest" && url.pathname !== "/strategies/suggestions") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const stratId = url.pathname.slice("/strategies/".length);
+        const existing = await env.DB.prepare(`SELECT * FROM strategies WHERE id = ?`).bind(stratId).first();
+        if (!existing) return jsonResponse({ error: "Nicht gefunden" }, 404);
+        if (existing.protected) return jsonResponse({ error: "Standardstrategie kann nicht geändert werden" }, 403);
+        const { name, version, config } = await request.json();
+        const sets = [], binds = [];
+        if (name)   { sets.push("name = ?");        binds.push(name); }
+        if (version){ sets.push("version = ?");     binds.push(version); }
+        if (config) { sets.push("config_json = ?"); binds.push(JSON.stringify(config)); }
+        sets.push("updated_at = ?"); binds.push(Date.now());
+        binds.push(stratId);
+        await env.DB.prepare(`UPDATE strategies SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
+        return jsonResponse({ success: true });
+      }
+
+      if (request.method === "DELETE" && url.pathname.startsWith("/strategies/")) {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const stratId = url.pathname.slice("/strategies/".length);
+        const existing = await env.DB.prepare(`SELECT * FROM strategies WHERE id = ?`).bind(stratId).first();
+        if (!existing) return jsonResponse({ error: "Nicht gefunden" }, 404);
+        if (existing.is_default || existing.protected) return jsonResponse({ error: "Standardstrategie kann nicht gelöscht werden" }, 403);
+        await env.DB.prepare(`DELETE FROM strategies WHERE id = ?`).bind(stratId).run();
+        return jsonResponse({ success: true });
+      }
+
+      if (request.method === "POST" && url.pathname.endsWith("/activate") && url.pathname.startsWith("/strategies/")) {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const stratId = url.pathname.replace("/activate", "").slice("/strategies/".length);
+        await env.DB.prepare(`UPDATE strategies SET active = 0`).run();
+        await env.DB.prepare(`UPDATE strategies SET active = 1, updated_at = ? WHERE id = ?`).bind(Date.now(), stratId).run();
+        return jsonResponse({ success: true });
+      }
+
+      if (request.method === "POST" && url.pathname === "/strategies/reset-to-default") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        await env.DB.prepare(`UPDATE strategies SET active = 0`).run();
+        await env.DB.prepare(`UPDATE strategies SET active = 1, updated_at = ? WHERE is_default = 1`).bind(Date.now()).run();
+        return jsonResponse({ success: true });
+      }
+
+      if (request.method === "GET" && url.pathname === "/strategies/compare") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const rows = await env.DB.prepare(`
+            SELECT strategy_id, strategy_name, strategy_version,
+              COUNT(*) as total,
+              SUM(CASE WHEN outcome='WIN'  THEN 1 ELSE 0 END) as wins,
+              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses,
+              SUM(CASE WHEN outcome='OPEN' THEN 1 ELSE 0 END) as open_count,
+              SUM(CASE WHEN ai_recommendation='WAIT' THEN 1 ELSE 0 END) as wait_count,
+              SUM(CASE WHEN ai_recommendation='SKIP' THEN 1 ELSE 0 END) as skip_count,
+              AVG(ai_score) as avg_score
+            FROM signals WHERE strategy_id IS NOT NULL
+            GROUP BY strategy_id ORDER BY total DESC
+          `).all();
+          return jsonResponse((rows.results || []).map(r => ({
+            ...r,
+            winRate: (r.wins + r.losses) > 0 ? parseFloat(((r.wins / (r.wins + r.losses)) * 100).toFixed(1)) : 0,
+            avg_score: r.avg_score ? parseFloat(r.avg_score.toFixed(1)) : 0
+          })));
+        } catch (e) { return jsonResponse([]); }
+      }
+
+      if (request.method === "POST" && url.pathname === "/strategies/ab-backtest") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const { strategyIds } = await request.json();
+        if (!strategyIds?.length) return jsonResponse({ error: "strategyIds required" }, 400);
+        const signals = await env.DB.prepare(`SELECT * FROM signals ORDER BY created_at DESC LIMIT 100`).all();
+        const results = [];
+        for (const stratId of strategyIds) {
+          const strat = await env.DB.prepare(`SELECT * FROM strategies WHERE id = ?`).bind(stratId).first();
+          if (!strat) continue;
+          const config = strat.config_json ? JSON.parse(strat.config_json) : DEFAULT_STRATEGY_CONFIG;
+          let wins = 0, losses = 0, waitCount = 0, skipCount = 0, totalScore = 0;
+          for (const sig of (signals.results || [])) {
+            const analysis = analyzeWithRules(sig, config);
+            totalScore += analysis.score;
+            if (analysis.recommendation === 'WAIT') waitCount++;
+            else if (analysis.recommendation === 'SKIP') skipCount++;
+            if (sig.outcome === 'WIN') wins++;
+            else if (sig.outcome === 'LOSS') losses++;
+          }
+          const total = (signals.results || []).length;
+          const closed = wins + losses;
+          results.push({
+            strategyId: stratId, strategyName: strat.name, strategyVersion: strat.version,
+            total, wins, losses, waitCount, skipCount,
+            winRate: closed > 0 ? parseFloat(((wins / closed) * 100).toFixed(1)) : 0,
+            avgScore: total > 0 ? parseFloat((totalScore / total).toFixed(1)) : 0
+          });
+        }
+        return jsonResponse({ results, signalCount: (signals.results || []).length });
+      }
+
+      if (request.method === "GET" && url.pathname === "/strategies/suggestions") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const suggestions = [];
+          const lowScoreLosses = await env.DB.prepare(`SELECT COUNT(*) as c FROM signals WHERE outcome='LOSS' AND ai_score < 70`).first();
+          const lowScoreWins   = await env.DB.prepare(`SELECT COUNT(*) as c FROM signals WHERE outcome='WIN'  AND ai_score < 70`).first();
+          if ((lowScoreLosses?.c || 0) > (lowScoreWins?.c || 0) && (lowScoreLosses?.c || 0) > 2) {
+            suggestions.push({ type: 'score_threshold', priority: 'high', title: 'Min. Score erhöhen', message: `${lowScoreLosses.c} Losses hatten Score < 70. Erwäge min_trade_score auf 75+ zu erhöhen.`, action: 'Schwellenwert anpassen' });
+          }
+          const symRows = await env.DB.prepare(`
+            SELECT symbol, COUNT(*) as total,
+              SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
+              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses
+            FROM signals WHERE outcome IN ('WIN','LOSS')
+            GROUP BY symbol HAVING (wins+losses) >= 3
+            ORDER BY (wins*1.0/(wins+losses)) ASC LIMIT 3
+          `).all();
+          for (const sym of (symRows.results || [])) {
+            const wr = (sym.wins + sym.losses) > 0 ? (sym.wins / (sym.wins + sym.losses)) * 100 : 0;
+            if (wr < 35) suggestions.push({ type: 'symbol_filter', priority: 'medium', title: `${sym.symbol} performat schlecht`, message: `${sym.symbol}: ${wr.toFixed(0)}% Win-Rate bei ${sym.wins + sym.losses} Trades`, action: 'Symbol-Filter prüfen' });
+          }
+          const lrRows = await env.DB.prepare(`SELECT reason, COUNT(*) as cnt FROM signal_loss_reasons GROUP BY reason ORDER BY cnt DESC LIMIT 5`).all();
+          for (const r of (lrRows.results || [])) {
+            suggestions.push({ type: 'rule_weight', priority: 'low', title: `Häufiger Loss-Grund: ${r.reason}`, message: `"${r.reason}" wurde ${r.cnt}× als Verlustgrund markiert`, action: 'Regel-Gewicht anpassen' });
+          }
+          if (suggestions.length === 0) suggestions.push({ type: 'info', priority: 'low', title: 'Zu wenig Daten', message: 'Für aussagekräftige Vorschläge werden mehr abgeschlossene Trades benötigt.', action: null });
+          return jsonResponse(suggestions);
+        } catch (e) { return jsonResponse([{ type: 'error', priority: 'low', title: 'Fehler', message: e.message, action: null }]); }
+      }
+
+      // ── SIGNAL LOSS REASONS ──────────────────────────────────
+
+      if (request.method === "POST" && url.pathname.startsWith("/signals/") && url.pathname.endsWith("/loss-reason")) {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const signalId = url.pathname.slice("/signals/".length, -"/loss-reason".length);
+        const { reason, note, strategyId } = await request.json();
+        if (!reason) return jsonResponse({ error: "reason required" }, 400);
+        await ensureTables(env);
+        await env.DB.prepare(`INSERT INTO signal_loss_reasons (signal_id, strategy_id, reason, note, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)`)
+          .bind(signalId, strategyId || null, reason, note || null, Date.now(), session.username).run();
+        return jsonResponse({ success: true });
+      }
+
+      if (request.method === "GET" && url.pathname.startsWith("/signals/") && url.pathname.endsWith("/loss-reasons")) {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const signalId = url.pathname.slice("/signals/".length, -"/loss-reasons".length);
+        try {
+          const rows = await env.DB.prepare(`SELECT * FROM signal_loss_reasons WHERE signal_id = ? ORDER BY created_at DESC`).bind(signalId).all();
+          return jsonResponse(rows.results || []);
+        } catch (_) { return jsonResponse([]); }
       }
 
       // ── WEBHOOK (TradingView) ────────────────────────────────

@@ -925,3 +925,150 @@ label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
 
 .sidebar-bottom { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); }
 .sidebar-foot   { font-size: 10px; color: var(--text-quaternary); margin-top: 10px; padding: 0 4px; line-height: 1.6; }
+
+/* ═══════════════════════════════════════════════════════════════
+   STRATEGIE-LABOR — iOS-inspired Components
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── iOS Toggle Switch ───────────────────────────────────────── */
+
+.ios-toggle {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background: var(--bg-4);
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 0.22s ease;
+  outline: none;
+}
+.ios-toggle::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.ios-toggle.on               { background: var(--win); }
+.ios-toggle.on::after        { transform: translateX(18px); }
+.ios-toggle:disabled         { opacity: 0.35; cursor: not-allowed; }
+.ios-toggle:focus-visible    { box-shadow: 0 0 0 3px rgba(59,130,246,0.35); }
+
+[data-theme="light"] .ios-toggle { background: rgba(0,0,0,0.15); }
+
+/* ── Settings Row (iOS-style list item) ──────────────────────── */
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+}
+.settings-row:last-child { border-bottom: none; }
+
+/* ── KPI Cards ───────────────────────────────────────────────── */
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+}
+.kpi-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+.kpi-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.kpi-val {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  margin-bottom: 3px;
+  line-height: 1;
+}
+.kpi-lbl {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+[data-theme="light"] .kpi-card { background: var(--bg-1); box-shadow: var(--shadow-sm); }
+
+/* ── Toast Bar ───────────────────────────────────────────────── */
+
+.toast-bar {
+  padding: 11px 18px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+}
+.toast-bar.success { background: rgba(16,185,129,0.18); border: 1px solid rgba(16,185,129,0.3); color: var(--win); }
+.toast-bar.error   { background: rgba(240,79,79,0.18);  border: 1px solid rgba(240,79,79,0.3);  color: var(--loss); }
+
+/* ── Modal Overlay & Box ─────────────────────────────────────── */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 20px;
+}
+.modal-box {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.5), 0 4px 16px rgba(0,0,0,0.3);
+  animation: modal-pop 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes modal-pop {
+  from { opacity: 0; transform: scale(0.9) translateY(20px); }
+  to   { opacity: 1; transform: scale(1)   translateY(0); }
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+}
+
+[data-theme="light"] .modal-box { background: var(--bg-1); }
+[data-theme="light"] .modal-overlay { background: rgba(0,0,0,0.3); }
