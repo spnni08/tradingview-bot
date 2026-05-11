@@ -875,7 +875,10 @@ function LossAnalysisTab({ sessionId }) {
   const loadReasons = async signalId => {
     try {
       const res = await fetch(`${API_URL}/signals/${signalId}/loss-reasons`, { headers: { 'X-Session-ID': sessionId } });
-      if (res.ok) setReasons(prev => ({ ...prev, [signalId]: await res.json() }));
+      if (res.ok) {
+        const reasonData = await res.json();
+        setReasons(prev => ({ ...prev, [signalId]: reasonData }));
+      }
     } catch (e) { console.error(e); }
   };
 

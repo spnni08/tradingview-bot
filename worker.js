@@ -44,6 +44,8 @@ const MARKET_RADAR_FEEDS = [
 ];
 
 const RADAR_DISCLAIMER = "Nur Marktübersicht. Keine Finanzberatung. Keine Garantie für Gewinne.";
+const AI_TIMEOUT_MS = 8000;
+const TELEGRAM_TIMEOUT_MS = 5000;
 
 // ═══════════════════════════════════════════════════════════════
 // TELEGRAM
@@ -68,6 +70,16 @@ async function sendTelegramMessage(env, message) {
     console.error('❌ Telegram error:', error);
     return false;
   }
+}
+
+async function withTimeout(promise, ms, fallbackValue = null) {
+  let timeoutId;
+  const timeoutPromise = new Promise(resolve => {
+    timeoutId = setTimeout(() => resolve(fallbackValue), ms);
+  });
+  const result = await Promise.race([promise, timeoutPromise]);
+  clearTimeout(timeoutId);
+  return result;
 }
 
 function formatSignalForTelegram(signal) {
@@ -768,7 +780,12 @@ async function processSignal(env, signal) {
   if (!strategy) strategy = await initDefaultStrategy(env);
   const strategyConfig = strategy?.config || null;
 
-  const analysis = await analyzeSignalWithAI(env, signal, strategyConfig);
+  const fallbackAnalysis = analyzeWithRules(signal, strategyConfig);
+  const analysis = await withTimeout(
+    analyzeSignalWithAI(env, signal, strategyConfig),
+    AI_TIMEOUT_MS,
+    fallbackAnalysis
+  ) || fallbackAnalysis;
   const signalId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
   // Determine Telegram notification
@@ -790,7 +807,7 @@ async function processSignal(env, signal) {
       ai_sl:     analysis.sl,
       ai_reason: analysis.reason
     });
-    const sent = await sendTelegramMessage(env, telegramMessage);
+    const sent = await withTimeout(sendTelegramMessage(env, telegramMessage), TELEGRAM_TIMEOUT_MS, false);
     if (sent) telegramSent = 1;
   }
 
@@ -846,6 +863,20 @@ async function processSignal(env, signal) {
 
   console.log('✅ Signal processed:', signalId, '| Score:', analysis.score, '| Rec:', analysis.recommendation, '| Telegram:', telegramSent ? telegramReason : 'no');
   return { status: 'ok', signalId, analysis };
+}
+
+async function handlePriceUpdate(env, payload) {
+  try {
+    const symbol = payload.symbol;
+    const price = parseFloat(payload.price ?? payload.close ?? 0);
+    if (!symbol || !price) return { success: true, type: 'PRICE_UPDATE', message: 'Price update accepted (no symbol/price)' };
+    await ensureTables(env);
+    await checkPracticeTrades(env, symbol, price);
+    return { success: true, type: 'PRICE_UPDATE', message: 'Price update processed', symbol, price };
+  } catch (error) {
+    console.error('❌ PRICE_UPDATE error:', error?.message || error);
+    return { success: true, type: 'PRICE_UPDATE', message: 'Price update accepted (processing failed)' };
+  }
 }
 
 function decodeXml(value = '') {
@@ -2205,29 +2236,37 @@ export default {
 
         try {
           if (eventType === 'SNAPSHOT') {
-            return jsonResponse(await saveSnapshot(env, payload));
+            ctx.waitUntil(
+              saveSnapshot(env, payload).catch(err => console.error('❌ SNAPSHOT async save failed:', err?.message || err))
+            );
+            return jsonResponse({ success: true, type: 'SNAPSHOT', message: 'Snapshot accepted' });
           }
 
-          const direction = normalizeDirection(payload);
-          const action    = normalizeAction(payload);
-
-          if (!direction) {
-            console.log('⏭️ Signal skipped — no recognisable direction in payload:', JSON.stringify(payload).substring(0, 300));
-            return jsonResponse({ status: 'skipped', reason: 'no_actionable_direction', direction, action });
+          if (eventType === 'PRICE_UPDATE') {
+            ctx.waitUntil(
+              handlePriceUpdate(env, payload).catch(err => console.error('❌ PRICE_UPDATE async failed:', err?.message || err))
+            );
+            return jsonResponse({ success: true, type: 'PRICE_UPDATE', message: 'Price update accepted' });
           }
 
-          return jsonResponse(await processSignal(env, payload));
+          if (eventType === 'SIGNAL_NEW' || eventType === 'SIGNAL') {
+            const direction = normalizeDirection(payload);
+            const action    = normalizeAction(payload);
+            if (!direction) {
+              console.log('⏭️ SIGNAL_NEW skipped — no recognisable direction:', JSON.stringify(payload).substring(0, 300));
+              return jsonResponse({ success: true, type: 'SIGNAL_NEW', status: 'skipped', reason: 'no_actionable_direction', direction, action });
+            }
+            return jsonResponse(await processSignal(env, payload));
+          }
 
+          return jsonResponse({ success: true, type: eventType, message: 'Unsupported event_type accepted' });
         } catch (processingErr) {
-          console.error('❌ Webhook processing error:', processingErr.message);
-          console.error('Stack:', processingErr.stack);
+          console.error('❌ Webhook processing error:', processingErr?.message || processingErr);
           return jsonResponse({
-            error: 'Processing failed',
-            message: processingErr.message,
-            stack: processingErr.stack,
-            eventType,
-            symbol: payload?.symbol
-          }, 500);
+            success: true,
+            type: eventType,
+            message: 'Accepted with processing error (logged)'
+          });
         }
       }
 
