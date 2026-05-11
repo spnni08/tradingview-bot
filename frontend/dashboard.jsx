@@ -9,6 +9,7 @@ const DashboardPage = ({ user, navigate }) => {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [toast, setToast]         = useState(null);
   const [todayBias, setTodayBias] = useState(null);
+  const [radar, setRadar]         = useState(null);
 
   const showToast = (msg, type = 'info') => {
     setToast({ msg, type });
@@ -26,8 +27,10 @@ const DashboardPage = ({ user, navigate }) => {
     const sessionId = localStorage.getItem('wavescout_session');
     loadLiveData(sessionId);
     loadTodayBias(sessionId);
+    loadMarketRadar(sessionId);
     const interval = setInterval(() => loadLiveData(sessionId), 30000);
-    return () => clearInterval(interval);
+    const radarInterval = setInterval(() => loadMarketRadar(sessionId), 5 * 60 * 1000);
+    return () => { clearInterval(interval); clearInterval(radarInterval); };
   }, []);
 
   const loadLiveData = async (sessionId) => {
@@ -48,6 +51,17 @@ const DashboardPage = ({ user, navigate }) => {
     } catch (err) {
       setError(err.message);
       setLoading(false);
+    }
+  };
+
+  const loadMarketRadar = async (sessionId) => {
+    try {
+      const response = await fetch(`${API_URL}/market-radar`, {
+        headers: { 'X-Session-ID': sessionId }
+      });
+      if (response.ok) setRadar(await response.json());
+    } catch (err) {
+      console.warn('Market radar unavailable:', err?.message || err);
     }
   };
 
@@ -213,6 +227,8 @@ const DashboardPage = ({ user, navigate }) => {
         <MarketBiasCard marketBias={marketBias}/>
       </div>
 
+      <CryptoMarketRadar radar={radar}/>
+
       <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <StatCard
           label="Trades gesamt"
@@ -241,6 +257,55 @@ const DashboardPage = ({ user, navigate }) => {
       </div>
 
       <LatestTradesCard signals={latestSignals} onViewAll={() => navigate('backtest')}/>
+    </div>
+  );
+};
+
+const CryptoMarketRadar = ({ radar }) => {
+  const status = radar?.status || 'NORMAL';
+  const statusMeta = status === 'RISK_OFF'
+    ? { icon: '🔴', label: 'RISK-OFF', color: 'var(--loss)' }
+    : status === 'CAUTION'
+      ? { icon: '🟡', label: 'VORSICHT', color: 'var(--wait)' }
+      : { icon: '🟢', label: 'NORMAL', color: 'var(--win)' };
+  const events = Array.isArray(radar?.events) ? radar.events.slice(0, 6) : [];
+
+  return (
+    <div className="card" style={{ marginTop: 'var(--gap)' }}>
+      <div className="card-head">
+        <Icon name="chart" className="ico"/>
+        <h3>Crypto Market Radar</h3>
+        <div className="actions">
+          <span className="badge" style={{ borderColor: statusMeta.color, color: statusMeta.color }}>
+            {statusMeta.icon} {statusMeta.label}
+          </span>
+        </div>
+      </div>
+      <div className="card-body">
+        <p style={{ color: 'var(--text-secondary)', marginBottom: 12 }}>
+          {radar?.summary || 'Lade BTC- und Krypto-Markt-Events…'}
+        </p>
+        {events.length === 0 ? (
+          <p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>Keine relevanten Events gefunden.</p>
+        ) : events.map((event, idx) => (
+          <div key={`${event.id || event.title}_${idx}`} style={{
+            padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 10, marginBottom: 8,
+            background: 'rgba(255,255,255,.01)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{event.title}</div>
+              <span className={`badge ${event.impact === 'HIGH' ? 'badge-short' : event.impact === 'MEDIUM' ? 'badge-tag' : ''}`}>{event.impact}</span>
+            </div>
+            <div style={{ color: 'var(--text-tertiary)', fontSize: 12, marginTop: 4 }}>
+              {event.category} · {(event.affected_markets || []).join(' / ')} · {event.source}
+            </div>
+          </div>
+        ))}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, color: 'var(--text-quaternary)', fontSize: 11 }}>
+          <span>Aktualisiert: {radar?.updated_at ? new Date(radar.updated_at).toLocaleTimeString('de-DE') : '–'}</span>
+          <span>{radar?.disclaimer || 'Nur Marktübersicht. Keine Finanzberatung.'}</span>
+        </div>
+      </div>
     </div>
   );
 };
