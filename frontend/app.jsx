@@ -46,6 +46,7 @@ const App = () => {
   const [page, setPage] = useState('dashboard');
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     const sessionId = localStorage.getItem('wavescout_session');
@@ -114,9 +115,16 @@ const App = () => {
   };
 
   return (
-    <div className="app">
-      <Navbar page={page} setPage={setPage} user={user} onLogout={handleLogout}/>
-      <main className="main">
+    <div className="app-with-sidebar">
+      <Sidebar
+        page={page}
+        setPage={setPage}
+        user={user}
+        onLogout={handleLogout}
+        collapsed={sidebarCollapsed}
+        setCollapsed={setSidebarCollapsed}
+      />
+      <main className={`app-main${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
         <PageErrorBoundary key={page}>
           {renderPage()}
         </PageErrorBoundary>

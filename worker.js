@@ -437,6 +437,97 @@ async function ensureTables(env) {
       catch (_) {}
     }
 
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS morning_routines (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        date TEXT NOT NULL,
+        bias TEXT NOT NULL,
+        chart_opened INTEGER DEFAULT 0,
+        ema200_checked INTEGER DEFAULT 0,
+        ema_direction TEXT,
+        key_zones_marked INTEGER DEFAULT 0,
+        zone_notes TEXT,
+        bias_reason TEXT,
+        completed_at INTEGER,
+        created_at INTEGER
+      )
+    `).run();
+
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS pre_trade_checklists (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        signal_id TEXT,
+        date TEXT NOT NULL,
+        bias_match INTEGER DEFAULT 0,
+        in_key_zone INTEGER DEFAULT 0,
+        structure_confirmed INTEGER DEFAULT 0,
+        no_chop INTEGER DEFAULT 0,
+        trend_candle INTEGER DEFAULT 0,
+        break_confirmed INTEGER DEFAULT 0,
+        rsi_ok INTEGER DEFAULT 0,
+        rsi_not_extreme INTEGER DEFAULT 0,
+        sl_logical INTEGER DEFAULT 0,
+        rr_ok INTEGER DEFAULT 0,
+        can_explain INTEGER DEFAULT 0,
+        clear_minded INTEGER DEFAULT 0,
+        no_fomo INTEGER DEFAULT 0,
+        notes TEXT,
+        created_at INTEGER
+      )
+    `).run();
+
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS trade_reviews (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        signal_id TEXT,
+        date TEXT NOT NULL,
+        instrument TEXT,
+        direction TEXT,
+        entry REAL,
+        stop_loss REAL,
+        take_profit REAL,
+        exit_price REAL,
+        outcome TEXT,
+        realized_rr TEXT,
+        bias_clear INTEGER DEFAULT 0,
+        bias_direction INTEGER DEFAULT 0,
+        in_key_zone INTEGER DEFAULT 0,
+        structure_hl_lh INTEGER DEFAULT 0,
+        trend_candle_clean INTEGER DEFAULT 0,
+        break_confirmed INTEGER DEFAULT 0,
+        rsi_ok INTEGER DEFAULT 0,
+        sl_logical INTEGER DEFAULT 0,
+        rr_acceptable INTEGER DEFAULT 0,
+        what_went_well TEXT,
+        what_went_wrong TEXT,
+        discipline TEXT,
+        mood_before TEXT,
+        no_fomo INTEGER DEFAULT 0,
+        sl_not_moved INTEGER DEFAULT 0,
+        tp_not_closed_early INTEGER DEFAULT 0,
+        no_revenge INTEGER DEFAULT 0,
+        lesson TEXT,
+        would_take_again INTEGER DEFAULT 0,
+        created_at INTEGER,
+        updated_at INTEGER
+      )
+    `).run();
+
+    // Migrate signals table — bias/routine columns
+    const biasCols = [
+      ['morning_routine_id',    'TEXT'],
+      ['daily_bias',            'TEXT'],
+      ['before_morning_routine','INTEGER DEFAULT 0'],
+      ['bias_match',            'TEXT'],
+      ['counts_for_strategy',   'INTEGER DEFAULT 1'],
+    ];
+    for (const [col, type] of biasCols) {
+      try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); } catch (_) {}
+    }
+
   } catch (error) {
     console.error('❌ ensureTables error:', error.message);
   }
@@ -893,6 +984,10 @@ async function validateSession(env, sessionId) {
     return null;
   }
 }
+
+function isAdmin(session) { return session?.role === 'admin'; }
+function isTraderOrAdmin(session) { return session?.role === 'admin' || session?.role === 'trader'; }
+function canViewDashboard(session) { return session && !session.blocked; } // admin/trader/viewer/extern all can view
 
 async function logout(env, sessionId) {
   try {
@@ -1782,7 +1877,7 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/strategies") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const { name, version, config } = await request.json();
         if (!name || !config) return jsonResponse({ error: "name and config required" }, 400);
         const id = `strategy_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -1796,7 +1891,7 @@ export default {
 
       if (request.method === "PUT" && url.pathname.startsWith("/strategies/") && !url.pathname.endsWith("/activate") && url.pathname !== "/strategies/reset-to-default" && url.pathname !== "/strategies/compare" && url.pathname !== "/strategies/ab-backtest" && url.pathname !== "/strategies/suggestions") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const stratId = url.pathname.slice("/strategies/".length);
         const existing = await env.DB.prepare(`SELECT * FROM strategies WHERE id = ?`).bind(stratId).first();
         if (!existing) return jsonResponse({ error: "Nicht gefunden" }, 404);
@@ -1814,7 +1909,7 @@ export default {
 
       if (request.method === "DELETE" && url.pathname.startsWith("/strategies/")) {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const stratId = url.pathname.slice("/strategies/".length);
         const existing = await env.DB.prepare(`SELECT * FROM strategies WHERE id = ?`).bind(stratId).first();
         if (!existing) return jsonResponse({ error: "Nicht gefunden" }, 404);
@@ -1825,7 +1920,7 @@ export default {
 
       if (request.method === "POST" && url.pathname.endsWith("/activate") && url.pathname.startsWith("/strategies/")) {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const stratId = url.pathname.replace("/activate", "").slice("/strategies/".length);
         await env.DB.prepare(`UPDATE strategies SET active = 0`).run();
         await env.DB.prepare(`UPDATE strategies SET active = 1, updated_at = ? WHERE id = ?`).bind(Date.now(), stratId).run();
@@ -1834,7 +1929,7 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/strategies/reset-to-default") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         await env.DB.prepare(`UPDATE strategies SET active = 0`).run();
         await env.DB.prepare(`UPDATE strategies SET active = 1, updated_at = ? WHERE is_default = 1`).bind(Date.now()).run();
         return jsonResponse({ success: true });
@@ -1866,7 +1961,7 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/strategies/ab-backtest") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const { strategyIds } = await request.json();
         if (!strategyIds?.length) return jsonResponse({ error: "strategyIds required" }, 400);
         const signals = await env.DB.prepare(`SELECT * FROM signals ORDER BY created_at DESC LIMIT 100`).all();
@@ -1949,6 +2044,173 @@ export default {
           const rows = await env.DB.prepare(`SELECT * FROM signal_loss_reasons WHERE signal_id = ? ORDER BY created_at DESC`).bind(signalId).all();
           return jsonResponse(rows.results || []);
         } catch (_) { return jsonResponse([]); }
+      }
+
+      // ── ADMIN: ROLE CHANGE ──────────────────────────────────
+
+      if (request.method === "PATCH" && url.pathname.startsWith("/admin/users/") && url.pathname.endsWith("/role")) {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!isAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
+        const userId = url.pathname.split("/")[3];
+        const { role } = await request.json();
+        const validRoles = ['admin', 'trader', 'viewer', 'extern'];
+        if (!validRoles.includes(role)) return jsonResponse({ error: "Ungültige Rolle" }, 400);
+        await env.DB.prepare(`UPDATE users SET role = ?, updated_at = ? WHERE id = ?`)
+          .bind(role, Date.now(), userId).run();
+        try {
+          await env.DB.prepare(`UPDATE sessions SET role = ? WHERE user_id = ?`).bind(role, userId).run();
+        } catch (_) {}
+        return jsonResponse({ success: true });
+      }
+
+      // ── MORNING ROUTINE ──────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/morning-routine") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+        const routine = await env.DB.prepare(
+          `SELECT * FROM morning_routines WHERE user_id = ? AND date = ? ORDER BY created_at DESC LIMIT 1`
+        ).bind(session.userId, date).first();
+        return jsonResponse(routine || null);
+      }
+
+      if (request.method === "POST" && url.pathname === "/morning-routine") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const body = await request.json();
+        const date = body.date || new Date().toISOString().slice(0, 10);
+        const id = body.id || `mr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const now = Date.now();
+        await env.DB.prepare(`
+          INSERT INTO morning_routines (id, user_id, date, bias, chart_opened, ema200_checked, ema_direction, key_zones_marked, zone_notes, bias_reason, completed_at, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET bias = excluded.bias, chart_opened = excluded.chart_opened, ema200_checked = excluded.ema200_checked, ema_direction = excluded.ema_direction, key_zones_marked = excluded.key_zones_marked, zone_notes = excluded.zone_notes, bias_reason = excluded.bias_reason, completed_at = excluded.completed_at
+        `).bind(
+          id, session.userId, date, body.bias || 'KEIN_TRADE',
+          body.chartOpened ? 1 : 0, body.ema200Checked ? 1 : 0,
+          body.emaDirection || null, body.keyZonesMarked ? 1 : 0,
+          body.zoneNotes || null, body.biasReason || null,
+          body.completed ? now : null, now
+        ).run();
+        return jsonResponse({ success: true, id });
+      }
+
+      // ── TODAY BIAS ───────────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/today-bias") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const date = new Date().toISOString().slice(0, 10);
+        const routine = await env.DB.prepare(
+          `SELECT bias, completed_at FROM morning_routines WHERE user_id = ? AND date = ? AND completed_at IS NOT NULL ORDER BY created_at DESC LIMIT 1`
+        ).bind(session.userId, date).first();
+        return jsonResponse({ date, bias: routine?.bias || null, routineDone: !!routine });
+      }
+
+      // ── PRE-TRADE CHECKLIST ──────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/pre-trade-checklist") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+        const rows = await env.DB.prepare(
+          `SELECT * FROM pre_trade_checklists WHERE user_id = ? AND date = ? ORDER BY created_at DESC`
+        ).bind(session.userId, date).all();
+        return jsonResponse(rows.results || []);
+      }
+
+      if (request.method === "POST" && url.pathname === "/pre-trade-checklist") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const body = await request.json();
+        const id = body.id || `ptc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const now = Date.now();
+        await env.DB.prepare(`
+          INSERT INTO pre_trade_checklists (id, user_id, signal_id, date, bias_match, in_key_zone, structure_confirmed, no_chop, trend_candle, break_confirmed, rsi_ok, rsi_not_extreme, sl_logical, rr_ok, can_explain, clear_minded, no_fomo, notes, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET bias_match=excluded.bias_match, in_key_zone=excluded.in_key_zone, structure_confirmed=excluded.structure_confirmed, no_chop=excluded.no_chop, trend_candle=excluded.trend_candle, break_confirmed=excluded.break_confirmed, rsi_ok=excluded.rsi_ok, rsi_not_extreme=excluded.rsi_not_extreme, sl_logical=excluded.sl_logical, rr_ok=excluded.rr_ok, can_explain=excluded.can_explain, clear_minded=excluded.clear_minded, no_fomo=excluded.no_fomo, notes=excluded.notes
+        `).bind(
+          id, session.userId, body.signalId || null,
+          body.date || new Date().toISOString().slice(0, 10),
+          body.biasMatch ? 1 : 0, body.inKeyZone ? 1 : 0,
+          body.structureConfirmed ? 1 : 0, body.noChop ? 1 : 0,
+          body.trendCandle ? 1 : 0, body.breakConfirmed ? 1 : 0,
+          body.rsiOk ? 1 : 0, body.rsiNotExtreme ? 1 : 0,
+          body.slLogical ? 1 : 0, body.rrOk ? 1 : 0,
+          body.canExplain ? 1 : 0, body.clearMinded ? 1 : 0,
+          body.noFomo ? 1 : 0, body.notes || null, now
+        ).run();
+        return jsonResponse({ success: true, id });
+      }
+
+      // ── TRADE REVIEW ─────────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/trade-review") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+        const rows = await env.DB.prepare(
+          `SELECT * FROM trade_reviews WHERE user_id = ? AND date = ? ORDER BY created_at DESC`
+        ).bind(session.userId, date).all();
+        return jsonResponse(rows.results || []);
+      }
+
+      if (request.method === "POST" && url.pathname === "/trade-review") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const body = await request.json();
+        const id = body.id || `tr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const now = Date.now();
+        await env.DB.prepare(`
+          INSERT INTO trade_reviews (id, user_id, signal_id, date, instrument, direction, entry, stop_loss, take_profit, exit_price, outcome, realized_rr, bias_clear, bias_direction, in_key_zone, structure_hl_lh, trend_candle_clean, break_confirmed, rsi_ok, sl_logical, rr_acceptable, what_went_well, what_went_wrong, discipline, mood_before, no_fomo, sl_not_moved, tp_not_closed_early, no_revenge, lesson, would_take_again, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET instrument=excluded.instrument, direction=excluded.direction, entry=excluded.entry, stop_loss=excluded.stop_loss, take_profit=excluded.take_profit, exit_price=excluded.exit_price, outcome=excluded.outcome, realized_rr=excluded.realized_rr, bias_clear=excluded.bias_clear, bias_direction=excluded.bias_direction, in_key_zone=excluded.in_key_zone, structure_hl_lh=excluded.structure_hl_lh, trend_candle_clean=excluded.trend_candle_clean, break_confirmed=excluded.break_confirmed, rsi_ok=excluded.rsi_ok, sl_logical=excluded.sl_logical, rr_acceptable=excluded.rr_acceptable, what_went_well=excluded.what_went_well, what_went_wrong=excluded.what_went_wrong, discipline=excluded.discipline, mood_before=excluded.mood_before, no_fomo=excluded.no_fomo, sl_not_moved=excluded.sl_not_moved, tp_not_closed_early=excluded.tp_not_closed_early, no_revenge=excluded.no_revenge, lesson=excluded.lesson, would_take_again=excluded.would_take_again, updated_at=excluded.updated_at
+        `).bind(
+          id, session.userId, body.signalId || null,
+          body.date || new Date().toISOString().slice(0, 10),
+          body.instrument || null, body.direction || null,
+          body.entry || null, body.stopLoss || null, body.takeProfit || null, body.exitPrice || null,
+          body.outcome || null, body.realizedRR || null,
+          body.biasClear ? 1 : 0, body.biasDirection ? 1 : 0,
+          body.inKeyZone ? 1 : 0, body.structureHlLh ? 1 : 0,
+          body.trendCandleClean ? 1 : 0, body.breakConfirmed ? 1 : 0,
+          body.rsiOk ? 1 : 0, body.slLogical ? 1 : 0, body.rrAcceptable ? 1 : 0,
+          body.whatWentWell || null, body.whatWentWrong || null,
+          body.discipline || null, body.moodBefore || null,
+          body.noFomo ? 1 : 0, body.slNotMoved ? 1 : 0,
+          body.tpNotClosedEarly ? 1 : 0, body.noRevenge ? 1 : 0,
+          body.lesson || null, body.wouldTakeAgain ? 1 : 0,
+          now, now
+        ).run();
+        return jsonResponse({ success: true, id });
+      }
+
+      // ── BIAS STATS ───────────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/bias-stats") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const all = await env.DB.prepare(
+            `SELECT outcome, daily_bias, before_morning_routine, counts_for_strategy FROM signals WHERE outcome IN ('WIN','LOSS')`
+          ).all();
+          const rows = all.results || [];
+          const calc = (filter) => {
+            const s = rows.filter(filter);
+            const w = s.filter(r => r.outcome === 'WIN').length;
+            const l = s.filter(r => r.outcome === 'LOSS').length;
+            return { total: s.length, wins: w, losses: l, winRate: (w + l) > 0 ? parseFloat(((w / (w + l)) * 100).toFixed(1)) : 0 };
+          };
+          return jsonResponse({
+            official:   calc(r => r.counts_for_strategy === 1),
+            all:        calc(() => true),
+            biasConform: calc(r => r.bias_match === 'conform'),
+            againstBias: calc(r => r.bias_match === 'against'),
+            beforeRoutine: calc(r => r.before_morning_routine === 1),
+            noTradeDay:  calc(r => r.daily_bias === 'KEIN_TRADE'),
+          });
+        } catch (e) { return jsonResponse({ error: e.message }, 500); }
       }
 
       // ── WEBHOOK (TradingView) ────────────────────────────────
