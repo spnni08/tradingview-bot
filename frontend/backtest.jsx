@@ -98,125 +98,15 @@ function PnLChart({ points }) {
   );
 }
 
-// ─── Outcome Selector ──────────────────────────────────────────
-
-function LegacyOutcomeSelector({ tradeId, current, onChange }) {
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [menuStyle, setMenuStyle] = useState(null);
-  const ref = useRef(null);
-  const btnRef = useRef(null);
-  const OUTCOMES = ['WIN','LOSS','BE','OPEN','IGNORED'];
-
-  const updateMenuPosition = useCallback(() => {
-    if (!btnRef.current) return;
-    const rect = btnRef.current.getBoundingClientRect();
-    const estimatedHeight = 5 * 34 + 14;
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const openUp = spaceBelow < estimatedHeight && rect.top > estimatedHeight;
-    const top = openUp ? Math.max(8, rect.top - estimatedHeight - 6) : Math.min(window.innerHeight - estimatedHeight - 8, rect.bottom + 6);
-    const left = Math.min(window.innerWidth - 140, Math.max(8, rect.right - 128));
-    setMenuStyle({
-      position: 'fixed',
-      top,
-      left,
-      zIndex: 9999,
-      minWidth: 128,
-      maxHeight: Math.min(estimatedHeight, window.innerHeight - 16),
-      overflowY: 'auto',
-      background: 'var(--bg-1)',
-      border: '1px solid var(--border)',
-      borderRadius: 10,
-      boxShadow: '0 12px 28px rgba(0,0,0,0.42)',
-      padding: '6px 0',
-      animation: 'fadeIn .15s ease'
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    updateMenuPosition();
-    const onDocClick = e => {
-      const menuEl = document.getElementById(`outcome-menu-${tradeId}`);
-      if (ref.current && !ref.current.contains(e.target) && (!menuEl || !menuEl.contains(e.target))) setOpen(false);
-    };
-    const onEsc = e => { if (e.key === 'Escape') setOpen(false); };
-    const onMove = () => updateMenuPosition();
-    document.addEventListener('mousedown', onDocClick);
-    document.addEventListener('keydown', onEsc);
-    window.addEventListener('scroll', onMove, true);
-    window.addEventListener('resize', onMove);
-    return () => {
-      document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('keydown', onEsc);
-      window.removeEventListener('scroll', onMove, true);
-      window.removeEventListener('resize', onMove);
-    };
-  }, [open, updateMenuPosition, tradeId]);
-  const cls = current === 'WIN' ? 'badge-win' : current === 'LOSS' ? 'badge-loss' : 'badge-wait';
-
-  const onSelect = async (outcome) => {
-    if (loading) return;
-    setLoading(true);
-    try { await onChange(tradeId, outcome); }
-    finally { setLoading(false); setOpen(false); }
-  };
-
-  const menu = open && menuStyle ? ReactDOM.createPortal(
-    <div id={`outcome-menu-${tradeId}`} style={menuStyle}>
-      {OUTCOMES.map(o => (
-        <button
-          key={o}
-          style={{
-            display: 'block',
-            width: '100%',
-            padding: '8px 12px',
-            border: 'none',
-            cursor: loading ? 'not-allowed' : 'pointer',
-            fontSize: 12,
-            fontWeight: 600,
-            textAlign: 'left',
-            fontFamily: 'var(--font-main)',
-            color: o === current ? 'var(--blue-400)' : 'var(--text-secondary)',
-            background: o === current ? 'rgba(59,130,246,0.12)' : 'transparent',
-            transition: 'background .15s ease, color .15s ease, transform .15s ease'
-          }}
-          onMouseEnter={(e) => { if (o !== current) e.currentTarget.style.background = 'rgba(59,130,246,0.08)'; }}
-          onMouseLeave={(e) => { if (o !== current) e.currentTarget.style.background = 'transparent'; }}
-          disabled={loading}
-          onClick={() => onSelect(o)}
-        >
-          {o}
-        </button>
-      ))}
-    </div>, document.body
-  ) : null;
-
-  return (
-    <div style={{ position: 'relative' }} ref={ref}>
-      <button
-        ref={btnRef}
-        className={`badge ${cls}`}
-        style={{ cursor: loading ? 'wait' : 'pointer', border: 'none', fontFamily: 'var(--font-main)', transition: 'all .15s ease' }}
-        onClick={() => !loading && setOpen(o => !o)}
-        disabled={loading}
-      >
-        {loading ? '…' : (current || 'OPEN')}
-      </button>
-      {menu}
-    </div>
-  );
-}
-const OutcomeSelector = window.OutcomeEditor
-  ? ({ tradeId, current, onChange }) => (
-      <window.OutcomeEditor
-        id={tradeId}
-        currentOutcome={current}
-        type={String(tradeId).startsWith('signal_') ? 'signal' : 'practice'}
-        onUpdated={(next) => onChange(tradeId, next)}
-      />
-    )
-  : LegacyOutcomeSelector;
+// ─── Outcome Selector (shared) ────────────────────────────────
+const OutcomeSelector = ({ tradeId, current, onChange }) => (
+  <window.OutcomeEditor
+    id={tradeId}
+    currentOutcome={current}
+    type={String(tradeId).startsWith('signal_') ? 'signal' : 'practice'}
+    onUpdated={(next) => onChange(tradeId, next)}
+  />
+);
 
 // ─── Loss Reason Modal ─────────────────────────────────────────
 
