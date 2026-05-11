@@ -581,6 +581,7 @@ async function ensureTables(env) {
     ];
     for (const [col, type] of biasCols) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); } catch (_) {}
+    }
     // Migrate snapshots table (compat with unique symbol snapshots)
     const snapshotCols = [
       ['timeframe',  'TEXT'],
