@@ -100,7 +100,7 @@ function PnLChart({ points }) {
 
 // ─── Outcome Selector ──────────────────────────────────────────
 
-function OutcomeSelector({ tradeId, current, onChange }) {
+function LegacyOutcomeSelector({ tradeId, current, onChange }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [menuStyle, setMenuStyle] = useState(null);
@@ -207,6 +207,16 @@ function OutcomeSelector({ tradeId, current, onChange }) {
     </div>
   );
 }
+const OutcomeSelector = window.OutcomeEditor
+  ? ({ tradeId, current, onChange }) => (
+      <window.OutcomeEditor
+        id={tradeId}
+        currentOutcome={current}
+        type={String(tradeId).startsWith('signal_') ? 'signal' : 'practice'}
+        onUpdated={(next) => onChange(tradeId, next)}
+      />
+    )
+  : LegacyOutcomeSelector;
 
 // ─── Loss Reason Modal ─────────────────────────────────────────
 
@@ -475,14 +485,7 @@ function SignalHistoryTab({ sessionId }) {
   };
 
   const updateOutcome = async (tradeId, outcome) => {
-    try {
-      await fetch(`${API_URL}/signals/${tradeId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
-        body: JSON.stringify({ outcome })
-      });
-      setHistory(prev => prev.map(t => t.id === tradeId ? { ...t, outcome } : t));
-    } catch (e) { console.error(e); }
+    setHistory(prev => prev.map(t => t.id === tradeId ? { ...t, outcome } : t));
   };
 
   const totalClosed = (stats?.wins || 0) + (stats?.losses || 0);
