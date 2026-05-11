@@ -723,6 +723,14 @@ async function ensurePracticeTradesTable(env) {
   `).run();
 }
 
+
+function normalizeTimeframe(tf, fallback = '5m') {
+  const raw = String(tf || '').trim().toLowerCase();
+  if (!raw) return fallback;
+  if (/^\d+$/.test(raw)) return `${raw}m`;
+  return raw;
+}
+
 async function saveSnapshot(env, payload) {
   await ensureSnapshotsTable(env);
   const createdAt = new Date(Number(payload.timestamp || Date.now()) * (String(payload.timestamp || '').length <= 10 ? 1000 : 1)).toISOString();
@@ -731,7 +739,7 @@ async function saveSnapshot(env, payload) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     payload.symbol || null,
-    String(payload.timeframe || '5'),
+    normalizeTimeframe(payload.timeframe, '5m'),
     Number(payload.price || 0),
     payload.rsi != null ? Number(payload.rsi) : null,
     payload.ema50 != null ? Number(payload.ema50) : null,
@@ -763,7 +771,7 @@ async function createPracticeTradeFromSignal(env, signalId, signal) {
   const res = await env.DB.prepare(`
     INSERT INTO practice_trades (signal_id, symbol, timeframe, direction, entry_price, take_profit, stop_loss, status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'OPEN', ?)
-  `).bind(signalId, signal.symbol || 'UNKNOWN', String(signal.timeframe || '5'), direction, entry, Number(signal.ai_tp || tp), Number(signal.ai_sl || sl), nowIso).run();
+  `).bind(signalId, signal.symbol || 'UNKNOWN', normalizeTimeframe(signal.timeframe, '5m'), direction, entry, Number(signal.ai_tp || tp), Number(signal.ai_sl || sl), nowIso).run();
   return res?.meta?.last_row_id || null;
 }
 
@@ -776,7 +784,7 @@ async function evaluateOpenPracticeTrades(env, symbol = null, latestPrice = null
   for (const t of (open.results || [])) {
     let price = latestPrice;
     if (!price || t.symbol !== symbol) {
-      const snap = await getSnapshot(env, t.symbol, t.timeframe || '5m');
+      const snap = await getSnapshot(env, t.symbol, normalizeTimeframe(t.timeframe, '5m'));
       price = snap?.price;
     }
     if (!price) continue;
