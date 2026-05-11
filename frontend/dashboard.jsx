@@ -280,12 +280,19 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-            <div className="score-ring" style={{ '--pct': signal.ai_score || 0 }}>
-              <div className="score-text">{signal.ai_score || 0}</div>
-              <div className="score-sub">SCORE</div>
-            </div>
+            {(() => {
+              const sc = signal.ai_score || 0;
+              const scoreColor = sc >= 75 ? 'var(--win)' : sc >= 60 ? 'var(--wait)' : 'var(--loss)';
+              const scoreClass = sc >= 75 ? 'score-high' : sc >= 60 ? 'score-med' : 'score-low';
+              return (
+                <div className={`score-ring ${scoreClass}`} style={{ '--pct': sc, '--score-color': scoreColor }}>
+                  <div className="score-text" style={{ color: scoreColor }}>{sc}</div>
+                  <div className="score-sub">SCORE</div>
+                </div>
+              );
+            })()}
             <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'center', maxWidth: 110 }}>
-              {signal.ai_score >= 75 ? 'Sehr starkes Setup' : signal.ai_score >= 65 ? 'Gutes Setup' : 'Moderates Setup'}
+              {(signal.ai_score || 0) >= 75 ? 'Sehr starkes Setup' : (signal.ai_score || 0) >= 65 ? 'Gutes Setup' : 'Moderates Setup'}
             </div>
             {signal.ai_risk && (
               <span className={`badge ${signal.ai_risk === 'LOW' ? 'badge-win' : signal.ai_risk === 'HIGH' ? 'badge-loss' : 'badge-wait'}`}>

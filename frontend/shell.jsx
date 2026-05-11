@@ -148,7 +148,7 @@ const Navbar = ({ page, setPage, user, onLogout }) => {
           onClick={() => setLightMode(m => !m)}
           title={lightMode ? 'Dark Mode' : 'Light Mode'}
         >
-          <Icon name={lightMode ? 'sun' : 'moon'} size={15}/>
+          <Icon name={lightMode ? 'moon' : 'sun'} size={15}/>
         </button>
 
         {user && (
