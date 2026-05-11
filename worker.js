@@ -21,6 +21,30 @@ function jsonResponse(data, status = 200) {
   });
 }
 
+const MARKET_RADAR_CACHE_TTL_MS = 20 * 60 * 1000;
+const MARKET_RADAR_MAX_EVENTS = 20;
+const MARKET_RADAR_FEEDS = [
+  { name: 'CoinDesk', url: 'https://www.coindesk.com/arc/outboundfeeds/rss/' },
+  { name: 'Cointelegraph', url: 'https://cointelegraph.com/rss' },
+  { name: 'Decrypt', url: 'https://decrypt.co/feed' },
+  { name: 'Bitcoin Magazine', url: 'https://bitcoinmagazine.com/.rss/full/' },
+  { name: 'CryptoSlate', url: 'https://cryptoslate.com/feed/' },
+  { name: 'Google News - Bitcoin', url: 'https://news.google.com/rss/search?q=Bitcoin+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - BTC', url: 'https://news.google.com/rss/search?q=BTC+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Crypto Regulation', url: 'https://news.google.com/rss/search?q=crypto+regulation+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Bitcoin ETF', url: 'https://news.google.com/rss/search?q=Bitcoin+ETF+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - SEC Crypto', url: 'https://news.google.com/rss/search?q=SEC+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Stablecoin', url: 'https://news.google.com/rss/search?q=stablecoin+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Crypto Hack', url: 'https://news.google.com/rss/search?q=crypto+hack+exploit+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Binance', url: 'https://news.google.com/rss/search?q=Binance+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Bybit', url: 'https://news.google.com/rss/search?q=Bybit+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - MEXC', url: 'https://news.google.com/rss/search?q=MEXC+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - BloFin', url: 'https://news.google.com/rss/search?q=BloFin+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Fed CPI Bitcoin', url: 'https://news.google.com/rss/search?q=Fed+CPI+Bitcoin+when:7d&hl=en-US&gl=US&ceid=US:en' }
+];
+
+const RADAR_DISCLAIMER = "Nur Marktübersicht. Keine Finanzberatung. Keine Garantie für Gewinne.";
+
 // ═══════════════════════════════════════════════════════════════
 // TELEGRAM
 // ═══════════════════════════════════════════════════════════════
@@ -402,6 +426,25 @@ async function ensureTables(env) {
         key TEXT PRIMARY KEY,
         value TEXT,
         updated_at INTEGER
+      )
+    `).run();
+
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS market_events (
+        id TEXT PRIMARY KEY,
+        created_at INTEGER,
+        updated_at INTEGER,
+        event_time INTEGER,
+        title TEXT,
+        category TEXT,
+        impact TEXT,
+        affected_markets TEXT,
+        source TEXT,
+        source_url TEXT,
+        summary TEXT,
+        radar_status TEXT,
+        raw_json TEXT,
+        status TEXT DEFAULT 'ACTIVE'
       )
     `).run();
 
@@ -803,6 +846,132 @@ async function processSignal(env, signal) {
 
   console.log('✅ Signal processed:', signalId, '| Score:', analysis.score, '| Rec:', analysis.recommendation, '| Telegram:', telegramSent ? telegramReason : 'no');
   return { status: 'ok', signalId, analysis };
+}
+
+function decodeXml(value = '') {
+  return value
+    .replace(/<!\[CDATA\[(.*?)\]\]>/gs, '$1')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function mapEventCategory(text = '') {
+  const t = text.toLowerCase();
+  if (/(etf|blackrock|fidelity|approval|denial)/.test(t) && /bitcoin|btc|crypto/.test(t)) return 'BTC_ETF';
+  if (/(sec|mica|regulation|lawsuit|ban|compliance)/.test(t) && /bitcoin|btc/.test(t)) return 'BTC_REGULATION';
+  if (/(mining|miner|halving|hashrate)/.test(t)) return 'BTC_MINING_HALVING';
+  if (/(whale|wallet|on-chain transfer|reserve)/.test(t) && /btc|bitcoin/.test(t)) return 'BTC_WHALE';
+  if (/(fed|cpi|inflation|nfp|fomc|rate decision|interest rate)/.test(t)) return 'MACRO';
+  if (/(binance|bybit|mexc|blofin|exchange)/.test(t)) return 'EXCHANGE_NEWS';
+  if (/(stablecoin|usdt|usdc|depeg)/.test(t)) return 'STABLECOIN';
+  if (/(hack|exploit|breach|drain|outage)/.test(t)) return 'SECURITY_INCIDENT';
+  if (/(liquidation|volatility|dominance)/.test(t)) return 'MARKET_STRUCTURE';
+  return 'CRYPTO_GENERAL';
+}
+
+function mapImpact(text = '') {
+  const t = text.toLowerCase();
+  if (/(hack|exploit|sec lawsuit|lawsuit|etf approval|etf denied|etf denial|rate decision|cpi surprise|depeg|exchange outage)/.test(t)) return 'HIGH';
+  if (/(etf flow|regulation|liquidation|fed|cpi|nfp|political|election|sec)/.test(t)) return 'MEDIUM';
+  return 'LOW';
+}
+
+function mapAffectedMarkets(text = '') {
+  const t = text.toLowerCase();
+  const out = new Set();
+  if (/(btc|bitcoin|etf|mining|halving)/.test(t)) out.add('BTC');
+  if (/(eth|ethereum)/.test(t)) out.add('ETH');
+  if (/(altcoin|alts|sol|xrp|ada)/.test(t)) out.add('ALTCOINS');
+  if (/(fed|cpi|nfp|liquidation|market|exchange|stablecoin|sec|regulation)/.test(t)) out.add('TOTAL_MARKET');
+  if (out.size === 0) out.add('BTC');
+  return Array.from(out);
+}
+
+function computeRadarStatus(events = []) {
+  const highCount = events.filter(e => e.impact === 'HIGH').length;
+  const mediumCount = events.filter(e => e.impact === 'MEDIUM').length;
+  if (highCount >= 1) return 'RISK_OFF';
+  if (mediumCount >= 2) return 'CAUTION';
+  return 'NORMAL';
+}
+
+async function fetchRssItems(feed) {
+  try {
+    const res = await fetch(feed.url, { cf: { cacheTtl: 300, cacheEverything: true } });
+    if (!res.ok) return [];
+    const xml = await res.text();
+    const items = [...xml.matchAll(/<item[\s\S]*?<\/item>/g)].slice(0, 10);
+    return items.map(m => {
+      const chunk = m[0];
+      const title = decodeXml((chunk.match(/<title>([\s\S]*?)<\/title>/i) || [,''])[1]).trim();
+      const link = decodeXml((chunk.match(/<link>([\s\S]*?)<\/link>/i) || [,''])[1]).trim();
+      const description = decodeXml((chunk.match(/<description>([\s\S]*?)<\/description>/i) || [,''])[1]).replace(/<[^>]*>/g, ' ').trim();
+      const pubDate = (chunk.match(/<pubDate>([\s\S]*?)<\/pubDate>/i) || [,''])[1];
+      const eventTime = Date.parse(pubDate || '') || Date.now();
+      return { title, link, description, eventTime, sourceFeed: feed.name };
+    });
+  } catch (_) {
+    return [];
+  }
+}
+
+async function getMarketRadar(env) {
+  await ensureTables(env);
+  const now = Date.now();
+  const freshCache = await env.DB.prepare(
+    `SELECT * FROM market_events WHERE status = 'ACTIVE' AND updated_at >= ? ORDER BY impact DESC, event_time DESC LIMIT ?`
+  ).bind(now - MARKET_RADAR_CACHE_TTL_MS, MARKET_RADAR_MAX_EVENTS).all();
+
+  if (freshCache.results?.length) {
+    const events = freshCache.results.map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
+    return { status: computeRadarStatus(events), updated_at: now, summary: "BTC/Krypto-Markt mit erhöhter Event-Aktivität.", events, disclaimer: RADAR_DISCLAIMER, source: 'CACHE' };
+  }
+
+  const rssResults = (await Promise.all(MARKET_RADAR_FEEDS.map(fetchRssItems))).flat();
+  const relevant = rssResults
+    .filter(item => /bitcoin|btc|crypto|etf|sec|stablecoin|binance|bybit|mexc|blofin|fed|cpi|nfp|liquidation|hack|regulation/i.test(`${item.title} ${item.description}`))
+    .slice(0, MARKET_RADAR_MAX_EVENTS)
+    .map(item => {
+      const text = `${item.title} ${item.description}`;
+      return {
+        id: `mradar_${item.eventTime}_${btoa(item.title).replace(/[^a-z0-9]/gi, '').slice(0, 16)}`,
+        event_time: item.eventTime,
+        title: item.title,
+        category: mapEventCategory(text),
+        impact: mapImpact(text),
+        affected_markets: mapAffectedMarkets(text),
+        source: 'RSS',
+        source_url: item.link,
+        summary: item.description.slice(0, 180) || 'Relevantes Krypto-Markt-Event.',
+      };
+    });
+
+  const status = computeRadarStatus(relevant);
+  for (const event of relevant) {
+    await env.DB.prepare(`
+      INSERT OR REPLACE INTO market_events
+      (id, created_at, updated_at, event_time, title, category, impact, affected_markets, source, source_url, summary, radar_status, raw_json, status)
+      VALUES (?, COALESCE((SELECT created_at FROM market_events WHERE id = ?), ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+    `).bind(
+      event.id, event.id, now, now, event.event_time, event.title, event.category, event.impact,
+      JSON.stringify(event.affected_markets), event.source, event.source_url, event.summary, status, JSON.stringify(event)
+    ).run();
+  }
+
+  const outputEvents = relevant.length ? relevant : (await env.DB.prepare(
+    `SELECT * FROM market_events WHERE status = 'ACTIVE' ORDER BY updated_at DESC LIMIT ?`
+  ).bind(MARKET_RADAR_MAX_EVENTS).all()).results.map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
+
+  return {
+    status: computeRadarStatus(outputEvents),
+    updated_at: now,
+    summary: outputEvents.length ? "BTC/Krypto-Markt mit erhöhter Event-Aktivität." : "Keine relevanten Markt-Events gefunden.",
+    events: outputEvents,
+    disclaimer: RADAR_DISCLAIMER
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1231,6 +1400,12 @@ export default {
           marketBias,
           user: { username: session.username, role: session.role }
         });
+      }
+
+      if (request.method === "GET" && url.pathname === "/market-radar") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        return jsonResponse(await getMarketRadar(env));
       }
 
       // ── DATA ─────────────────────────────────────────────────
