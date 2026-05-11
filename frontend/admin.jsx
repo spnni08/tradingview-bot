@@ -425,9 +425,10 @@ function DBMaintenanceCard({ onStatusRefresh }) {
   const [result, setResult]   = useState(null);
   const [setupResult, setSetupResult] = useState(null);
   const [setupLoading, setSetupLoading] = useState(false);
+  const [confirmCleanup, setConfirmCleanup] = useState(false);
 
   const handleCleanup = async () => {
-    if (!window.confirm('Datenbank bereinigen?\n\n• Snapshots: max 500 pro Symbol\n• Abgelaufene Sessions löschen\n• Practice Trades >90 Tage schließen')) return;
+    setConfirmCleanup(false);
     setLoading(true); setResult(null);
     try {
       const res = await fetch(`${API_URL}/admin/db-cleanup`, {
@@ -485,9 +486,21 @@ function DBMaintenanceCard({ onStatusRefresh }) {
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
               Löscht alte Snapshots (max 500 behalten), abgelaufene Sessions und Practice Trades älter als 90 Tage.
             </p>
-            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--loss)' }} onClick={handleCleanup} disabled={loading}>
-              {loading ? <><div className="spinner-sm"/> Bereinige…</> : '🗑 DB bereinigen'}
-            </button>
+            {confirmCleanup ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <p style={{ fontSize: 12, color: 'var(--loss)' }}>Wirklich bereinigen?</p>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-sm" style={{ color: 'var(--loss)', borderColor: 'var(--loss)' }} onClick={handleCleanup} disabled={loading}>
+                    Ja, bereinigen
+                  </button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setConfirmCleanup(false)}>Abbrechen</button>
+                </div>
+              </div>
+            ) : (
+              <button className="btn btn-ghost btn-sm" style={{ color: 'var(--loss)' }} onClick={() => setConfirmCleanup(true)} disabled={loading}>
+                {loading ? <><div className="spinner-sm"/> Bereinige…</> : '🗑 DB bereinigen'}
+              </button>
+            )}
             {result && (
               <div style={{ marginTop: 10 }}>
                 {(result.results || []).map((r, i) => (
@@ -597,6 +610,46 @@ function SessionsCard() {
   );
 }
 
+// ─── Toast ───────────────────────────────────────────────────
+
+function useAdminToast() {
+  const [toast, setToast] = useState(null);
+  const show = (msg, type = 'ok') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+  const ToastEl = toast ? (
+    <div style={{
+      position: 'fixed', top: 64, right: 20, zIndex: 9999,
+      padding: '12px 18px', borderRadius: 10, fontSize: 13, fontWeight: 500,
+      background: toast.type === 'ok' ? 'var(--bg-success)' : 'var(--bg-error)',
+      border: `1px solid ${toast.type === 'ok' ? 'rgba(16,185,129,.4)' : 'rgba(239,68,68,.4)'}`,
+      color: toast.type === 'ok' ? 'var(--win)' : 'var(--loss)',
+      boxShadow: '0 4px 16px rgba(0,0,0,.25)',
+      animation: 'fadeIn .2s ease'
+    }}>
+      {toast.type === 'ok' ? '✅ ' : '❌ '}{toast.msg}
+    </div>
+  ) : null;
+  return { show, ToastEl };
+}
+
+// ─── Confirm Modal ────────────────────────────────────────────
+
+function ConfirmModal({ message, onConfirm, onCancel }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }} onClick={onCancel}>
+      <div style={{ background: 'var(--bg-1)', borderRadius: 14, padding: 28, maxWidth: 380, width: '90%', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
+        <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 20 }}>{message}</p>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button className="btn btn-ghost" onClick={onCancel}>Abbrechen</button>
+          <button className="btn btn-primary" onClick={onConfirm}>Bestätigen</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Admin Page ─────────────────────────────────────────
 
 const AdminPage = ({ user }) => {
@@ -607,9 +660,11 @@ const AdminPage = ({ user }) => {
   const [showCreateUser, setShowCreateUser]   = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
+  const [confirm, setConfirm]         = useState(null);
+  const { show: showToast, ToastEl }   = useAdminToast();
 
   useEffect(() => {
-    if (user?.role !== 'admin') { window.location.href = 'index.html'; return; }
+    if (user?.role !== 'admin') return;
     loadAll();
     const iv = setInterval(loadAll, 30000);
     return () => clearInterval(iv);
@@ -641,33 +696,45 @@ const AdminPage = ({ user }) => {
         headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
         body: JSON.stringify(userData)
       });
-      if (res.ok) { setShowCreateUser(false); loadAll(); }
-      else { const e = await res.json(); window.alert('Fehler: ' + (e.error || 'Unbekannt')); }
-    } catch (e) { window.alert('Fehler: ' + e.message); }
+      if (res.ok) { setShowCreateUser(false); loadAll(); showToast('User erstellt'); }
+      else { const e = await res.json(); showToast(e.error || 'Fehler', 'err'); }
+    } catch (e) { showToast(e.message, 'err'); }
   };
 
-  const handleBlockUser = async (userId, block) => {
-    if (!window.confirm(`User wirklich ${block ? 'sperren' : 'entsperren'}?`)) return;
-    try {
-      await fetch(`${API_URL}/admin/block-user`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
-        body: JSON.stringify({ userId, blocked: block })
-      });
-      loadAll();
-    } catch (_) {}
+  const handleBlockUser = (userId, block) => {
+    setConfirm({
+      message: `User wirklich ${block ? 'sperren' : 'entsperren'}?`,
+      onConfirm: async () => {
+        setConfirm(null);
+        try {
+          await fetch(`${API_URL}/admin/block-user`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+            body: JSON.stringify({ userId, blocked: block })
+          });
+          loadAll();
+          showToast(block ? 'User gesperrt' : 'User entsperrt');
+        } catch (_) {}
+      }
+    });
   };
 
-  const handleLogoutUser = async (userId) => {
-    if (!window.confirm('User wirklich ausloggen?')) return;
-    try {
-      await fetch(`${API_URL}/admin/logout-user`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
-        body: JSON.stringify({ userId })
-      });
-      loadAll();
-    } catch (_) {}
+  const handleLogoutUser = (userId) => {
+    setConfirm({
+      message: 'User wirklich ausloggen?',
+      onConfirm: async () => {
+        setConfirm(null);
+        try {
+          await fetch(`${API_URL}/admin/logout-user`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+            body: JSON.stringify({ userId })
+          });
+          loadAll();
+          showToast('User ausgeloggt');
+        } catch (_) {}
+      }
+    });
   };
 
   const handleChangePassword = async (userId, newPassword) => {
@@ -677,8 +744,8 @@ const AdminPage = ({ user }) => {
         headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
         body: JSON.stringify({ userId, newPassword })
       });
-      if (res.ok) { setShowChangePassword(false); setSelectedUser(null); }
-      else window.alert('Fehler beim Ändern des Passworts');
+      if (res.ok) { setShowChangePassword(false); setSelectedUser(null); showToast('Passwort geändert'); }
+      else showToast('Fehler beim Ändern des Passworts', 'err');
     } catch (_) {}
   };
 
@@ -692,6 +759,14 @@ const AdminPage = ({ user }) => {
 
   return (
     <div className="content page-enter">
+      {ToastEl}
+      {confirm && (
+        <ConfirmModal
+          message={confirm.message}
+          onConfirm={confirm.onConfirm}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
       <div className="page-header">
         <h2>Administration</h2>
         <p className="subtitle">{users.length} Benutzer · {onlineCount} online</p>
@@ -824,10 +899,13 @@ const AdminPage = ({ user }) => {
 
 const CreateUserModal = ({ onClose, onCreate }) => {
   const [formData, setFormData] = useState({ username: '', email: '', password: '', role: 'user' });
+  const [err, setErr] = useState('');
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!formData.username || !formData.email || !formData.password) { window.alert('Bitte alle Felder ausfüllen'); return; }
+    if (!formData.username || !formData.email || !formData.password) { setErr('Bitte alle Felder ausfüllen'); return; }
+    if (formData.password.length < 8) { setErr('Passwort muss mindestens 8 Zeichen haben'); return; }
+    setErr('');
     onCreate(formData);
   };
 
@@ -836,6 +914,11 @@ const CreateUserModal = ({ onClose, onCreate }) => {
       <div style={{ background: 'var(--bg-1)', borderRadius: 14, padding: 28, maxWidth: 440, width: '90%', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
         <h2 style={{ marginBottom: 20 }}>Neuen User anlegen</h2>
         <form onSubmit={handleSubmit}>
+          {err && (
+            <div style={{ padding: '10px 14px', borderRadius: 8, background: 'var(--bg-error)', border: '1px solid rgba(239,68,68,.3)', fontSize: 13, color: 'var(--loss)', marginBottom: 14 }}>
+              {err}
+            </div>
+          )}
           {[
             { label: 'Benutzername', key: 'username', type: 'text', placeholder: 'z.B. peter' },
             { label: 'Email', key: 'email', type: 'email', placeholder: 'peter@example.com' },
@@ -867,12 +950,23 @@ const CreateUserModal = ({ onClose, onCreate }) => {
 
 const ChangePasswordModal = ({ user, onClose, onSave }) => {
   const [pw, setPw] = useState('');
+  const [pwErr, setPwErr] = useState('');
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={onClose}>
       <div style={{ background: 'var(--bg-1)', borderRadius: 14, padding: 28, maxWidth: 400, width: '90%', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
         <h2 style={{ marginBottom: 6 }}>Passwort ändern</h2>
         <p style={{ color: 'var(--text-tertiary)', fontSize: 13, marginBottom: 20 }}>Für: <strong>{user.username}</strong></p>
-        <form onSubmit={e => { e.preventDefault(); if (pw.length < 8) { window.alert('Mindestens 8 Zeichen'); return; } onSave(user.id, pw); }}>
+        {pwErr && (
+          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'var(--bg-error)', border: '1px solid rgba(239,68,68,.3)', fontSize: 13, color: 'var(--loss)', marginBottom: 14 }}>
+            {pwErr}
+          </div>
+        )}
+        <form onSubmit={e => {
+          e.preventDefault();
+          if (pw.length < 8) { setPwErr('Mindestens 8 Zeichen'); return; }
+          setPwErr('');
+          onSave(user.id, pw);
+        }}>
           <div style={{ marginBottom: 20 }}>
             <label style={{ display: 'block', marginBottom: 6, fontSize: 13 }}>Neues Passwort</label>
             <input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="Mindestens 8 Zeichen" className="input" style={{ width: '100%' }} autoFocus/>

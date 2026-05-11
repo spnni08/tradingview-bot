@@ -906,12 +906,59 @@ export default {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const stats = await getStats(env);
-        const history = await getHistory(env, 100);
+        const history = await getHistory(env, 200);
         const closedTrades = history.filter(t => t.outcome !== 'OPEN' && t.updated_at);
         const avgHoldTime = closedTrades.length > 0
           ? closedTrades.reduce((sum, t) => sum + (t.updated_at - t.created_at), 0) / closedTrades.length
           : 0;
-        return jsonResponse({ ...stats, avgHoldTimeMs: avgHoldTime, totalSignals: history.length });
+        return jsonResponse({ ...stats, avgHoldTimeMs: avgHoldTime, totalSignals: stats.total });
+      }
+
+      if (request.method === "GET" && url.pathname === "/stats/breakdown") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+
+        try {
+          const tableCheck = await env.DB.prepare(
+            `SELECT name FROM sqlite_master WHERE type='table' AND name='signals'`
+          ).first();
+          if (!tableCheck) return jsonResponse({ timeframes: [], directions: [] });
+
+          const tfRows = await env.DB.prepare(`
+            SELECT timeframe,
+              COUNT(*) as total,
+              SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
+              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses
+            FROM signals GROUP BY timeframe ORDER BY total DESC
+          `).all();
+
+          const dirRows = await env.DB.prepare(`
+            SELECT direction,
+              COUNT(*) as total,
+              SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
+              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses
+            FROM signals WHERE direction IN ('LONG','SHORT')
+            GROUP BY direction
+          `).all();
+
+          const symbolRows = await env.DB.prepare(`
+            SELECT symbol,
+              COUNT(*) as total,
+              SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
+              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses
+            FROM signals GROUP BY symbol ORDER BY total DESC LIMIT 10
+          `).all();
+
+          const calcWR = r => (r.wins + r.losses) > 0 ? parseFloat(((r.wins / (r.wins + r.losses)) * 100).toFixed(1)) : 0;
+
+          return jsonResponse({
+            timeframes: (tfRows.results || []).map(r => ({ ...r, winRate: calcWR(r) })),
+            directions: (dirRows.results || []).map(r => ({ ...r, winRate: calcWR(r) })),
+            symbols:    (symbolRows.results || []).map(r => ({ ...r, winRate: calcWR(r) }))
+          });
+        } catch (e) {
+          return jsonResponse({ timeframes: [], directions: [], symbols: [] });
+        }
       }
 
       // ── SIGNALS PATCH ────────────────────────────────────────
