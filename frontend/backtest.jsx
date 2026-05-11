@@ -369,6 +369,11 @@ function PracticeTradesTab({ sessionId }) {
   });
 
   const updatePracticeStatus = async (tradeId, status) => {
+    await fetch(`${API_URL}/practice-trades/${tradeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+      body: JSON.stringify({ status })
+    });
     setTrades(prev => prev.map(t => String(t.id) === String(tradeId) ? { ...t, status } : t));
   };
 
