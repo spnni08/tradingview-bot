@@ -9,7 +9,7 @@ function hashPassword(password) {
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID",
   "Access-Control-Allow-Credentials": "true"
 };
@@ -20,6 +20,32 @@ function jsonResponse(data, status = 200) {
     headers: { "Content-Type": "application/json", ...CORS_HEADERS }
   });
 }
+
+const MARKET_RADAR_CACHE_TTL_MS = 20 * 60 * 1000;
+const MARKET_RADAR_MAX_EVENTS = 20;
+const MARKET_RADAR_FEEDS = [
+  { name: 'CoinDesk', url: 'https://www.coindesk.com/arc/outboundfeeds/rss/' },
+  { name: 'Cointelegraph', url: 'https://cointelegraph.com/rss' },
+  { name: 'Decrypt', url: 'https://decrypt.co/feed' },
+  { name: 'Bitcoin Magazine', url: 'https://bitcoinmagazine.com/.rss/full/' },
+  { name: 'CryptoSlate', url: 'https://cryptoslate.com/feed/' },
+  { name: 'Google News - Bitcoin', url: 'https://news.google.com/rss/search?q=Bitcoin+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - BTC', url: 'https://news.google.com/rss/search?q=BTC+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Crypto Regulation', url: 'https://news.google.com/rss/search?q=crypto+regulation+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Bitcoin ETF', url: 'https://news.google.com/rss/search?q=Bitcoin+ETF+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - SEC Crypto', url: 'https://news.google.com/rss/search?q=SEC+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Stablecoin', url: 'https://news.google.com/rss/search?q=stablecoin+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Crypto Hack', url: 'https://news.google.com/rss/search?q=crypto+hack+exploit+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Binance', url: 'https://news.google.com/rss/search?q=Binance+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Bybit', url: 'https://news.google.com/rss/search?q=Bybit+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - MEXC', url: 'https://news.google.com/rss/search?q=MEXC+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - BloFin', url: 'https://news.google.com/rss/search?q=BloFin+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
+  { name: 'Google News - Fed CPI Bitcoin', url: 'https://news.google.com/rss/search?q=Fed+CPI+Bitcoin+when:7d&hl=en-US&gl=US&ceid=US:en' }
+];
+
+const RADAR_DISCLAIMER = "Nur Marktübersicht. Keine Finanzberatung. Keine Garantie für Gewinne.";
+const AI_TIMEOUT_MS = 8000;
+const TELEGRAM_TIMEOUT_MS = 5000;
 
 // ═══════════════════════════════════════════════════════════════
 // TELEGRAM
@@ -44,6 +70,16 @@ async function sendTelegramMessage(env, message) {
     console.error('❌ Telegram error:', error);
     return false;
   }
+}
+
+async function withTimeout(promise, ms, fallbackValue = null) {
+  let timeoutId;
+  const timeoutPromise = new Promise(resolve => {
+    timeoutId = setTimeout(() => resolve(fallbackValue), ms);
+  });
+  const result = await Promise.race([promise, timeoutPromise]);
+  clearTimeout(timeoutId);
+  return result;
 }
 
 function formatSignalForTelegram(signal) {
@@ -405,6 +441,25 @@ async function ensureTables(env) {
       )
     `).run();
 
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS market_events (
+        id TEXT PRIMARY KEY,
+        created_at INTEGER,
+        updated_at INTEGER,
+        event_time INTEGER,
+        title TEXT,
+        category TEXT,
+        impact TEXT,
+        affected_markets TEXT,
+        source TEXT,
+        source_url TEXT,
+        summary TEXT,
+        radar_status TEXT,
+        raw_json TEXT,
+        status TEXT DEFAULT 'ACTIVE'
+      )
+    `).run();
+
     // Migrate signals table
     const stratCols = [
       ['strategy_id',           'TEXT'],
@@ -725,7 +780,12 @@ async function processSignal(env, signal) {
   if (!strategy) strategy = await initDefaultStrategy(env);
   const strategyConfig = strategy?.config || null;
 
-  const analysis = await analyzeSignalWithAI(env, signal, strategyConfig);
+  const fallbackAnalysis = analyzeWithRules(signal, strategyConfig);
+  const analysis = await withTimeout(
+    analyzeSignalWithAI(env, signal, strategyConfig),
+    AI_TIMEOUT_MS,
+    fallbackAnalysis
+  ) || fallbackAnalysis;
   const signalId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
   // Determine Telegram notification
@@ -747,7 +807,7 @@ async function processSignal(env, signal) {
       ai_sl:     analysis.sl,
       ai_reason: analysis.reason
     });
-    const sent = await sendTelegramMessage(env, telegramMessage);
+    const sent = await withTimeout(sendTelegramMessage(env, telegramMessage), TELEGRAM_TIMEOUT_MS, false);
     if (sent) telegramSent = 1;
   }
 
@@ -803,6 +863,188 @@ async function processSignal(env, signal) {
 
   console.log('✅ Signal processed:', signalId, '| Score:', analysis.score, '| Rec:', analysis.recommendation, '| Telegram:', telegramSent ? telegramReason : 'no');
   return { status: 'ok', signalId, analysis };
+}
+
+async function handlePriceUpdate(env, payload) {
+  try {
+    const symbol = payload.symbol;
+    const price = parseFloat(payload.price ?? payload.close ?? 0);
+    if (!symbol || !price) return { success: true, type: 'PRICE_UPDATE', message: 'Price update accepted (no symbol/price)' };
+    await ensureTables(env);
+    await checkPracticeTrades(env, symbol, price);
+    return { success: true, type: 'PRICE_UPDATE', message: 'Price update processed', symbol, price };
+  } catch (error) {
+    console.error('❌ PRICE_UPDATE error:', error?.message || error);
+    return { success: true, type: 'PRICE_UPDATE', message: 'Price update accepted (processing failed)' };
+  }
+}
+
+function decodeXml(value = '') {
+  return value
+    .replace(/<!\[CDATA\[(.*?)\]\]>/gs, '$1')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function mapEventCategory(text = '') {
+  const t = text.toLowerCase();
+  if (/(etf|blackrock|fidelity|approval|denial)/.test(t) && /bitcoin|btc|crypto/.test(t)) return 'BTC_ETF';
+  if (/(sec|mica|regulation|lawsuit|ban|compliance)/.test(t) && /bitcoin|btc/.test(t)) return 'BTC_REGULATION';
+  if (/(mining|miner|halving|hashrate)/.test(t)) return 'BTC_MINING_HALVING';
+  if (/(whale|wallet|on-chain transfer|reserve)/.test(t) && /btc|bitcoin/.test(t)) return 'BTC_WHALE';
+  if (/(fed|cpi|inflation|nfp|fomc|rate decision|interest rate)/.test(t)) return 'MACRO';
+  if (/(binance|bybit|mexc|blofin|exchange)/.test(t)) return 'EXCHANGE_NEWS';
+  if (/(stablecoin|usdt|usdc|depeg)/.test(t)) return 'STABLECOIN';
+  if (/(hack|exploit|breach|drain|outage)/.test(t)) return 'SECURITY_INCIDENT';
+  if (/(liquidation|volatility|dominance)/.test(t)) return 'MARKET_STRUCTURE';
+  return 'CRYPTO_GENERAL';
+}
+
+function mapImpact(text = '') {
+  const t = text.toLowerCase();
+  if (/(hack|exploit|sec lawsuit|lawsuit|etf approval|etf denied|etf denial|rate decision|cpi surprise|depeg|exchange outage)/.test(t)) return 'HIGH';
+  if (/(etf flow|regulation|liquidation|fed|cpi|nfp|political|election|sec)/.test(t)) return 'MEDIUM';
+  return 'LOW';
+}
+
+function mapAffectedMarkets(text = '') {
+  const t = text.toLowerCase();
+  const out = new Set();
+  if (/(btc|bitcoin|etf|mining|halving)/.test(t)) out.add('BTC');
+  if (/(eth|ethereum)/.test(t)) out.add('ETH');
+  if (/(altcoin|alts|sol|xrp|ada)/.test(t)) out.add('ALTCOINS');
+  if (/(fed|cpi|nfp|liquidation|market|exchange|stablecoin|sec|regulation)/.test(t)) out.add('TOTAL_MARKET');
+  if (out.size === 0) out.add('BTC');
+  return Array.from(out);
+}
+
+function computeRadarStatus(events = []) {
+  const highCount = events.filter(e => e.impact === 'HIGH').length;
+  const mediumCount = events.filter(e => e.impact === 'MEDIUM').length;
+  if (highCount >= 1) return 'RISK_OFF';
+  if (mediumCount >= 2) return 'CAUTION';
+  return 'NORMAL';
+}
+
+async function fetchRssItems(feed) {
+  try {
+    const res = await fetch(feed.url, { cf: { cacheTtl: 300, cacheEverything: true } });
+    if (!res.ok) return [];
+    const xml = await res.text();
+    const items = [...xml.matchAll(/<item[\s\S]*?<\/item>/g)].slice(0, 10);
+    return items.map(m => {
+      const chunk = m[0];
+      const title = decodeXml((chunk.match(/<title>([\s\S]*?)<\/title>/i) || [,''])[1]).trim();
+      const link = decodeXml((chunk.match(/<link>([\s\S]*?)<\/link>/i) || [,''])[1]).trim();
+      const description = decodeXml((chunk.match(/<description>([\s\S]*?)<\/description>/i) || [,''])[1]).replace(/<[^>]*>/g, ' ').trim();
+      const pubDate = (chunk.match(/<pubDate>([\s\S]*?)<\/pubDate>/i) || [,''])[1];
+      const eventTime = Date.parse(pubDate || '') || Date.now();
+      return { title, link, description, eventTime, sourceFeed: feed.name };
+    });
+  } catch (_) {
+    return [];
+  }
+}
+
+function safeIdPart(input = '') {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) - hash) + input.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+async function getMarketRadar(env, session = null) {
+  await ensureTables(env);
+  const now = Date.now();
+  const debug = {
+    feeds_total: MARKET_RADAR_FEEDS.length,
+    feeds_success: 0,
+    feeds_failed: 0,
+    items_loaded: 0,
+    items_relevant: 0,
+    db_saved: 0,
+    error_message: null
+  };
+  const isAdmin = session?.role === 'admin';
+  const withDebug = (payload) => isAdmin ? { ...payload, debug } : payload;
+
+  try {
+  const freshCache = await env.DB.prepare(
+    `SELECT * FROM market_events WHERE status = 'ACTIVE' AND updated_at >= ? ORDER BY impact DESC, event_time DESC LIMIT ?`
+  ).bind(now - MARKET_RADAR_CACHE_TTL_MS, MARKET_RADAR_MAX_EVENTS).all();
+
+  if (freshCache.results?.length) {
+    const events = freshCache.results.map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
+    return withDebug({ status: computeRadarStatus(events), updated_at: now, summary: "BTC/Krypto-Markt mit erhöhter Event-Aktivität.", events, disclaimer: RADAR_DISCLAIMER, source: 'CACHE' });
+  }
+
+  const feedArrays = await Promise.all(MARKET_RADAR_FEEDS.map(async (feed) => {
+    const items = await fetchRssItems(feed);
+    if (items.length > 0) debug.feeds_success += 1;
+    else debug.feeds_failed += 1;
+    return items;
+  }));
+  const rssResults = feedArrays.flat();
+  debug.items_loaded = rssResults.length;
+  const relevant = rssResults
+    .filter(item => /bitcoin|btc|crypto|etf|sec|stablecoin|binance|bybit|mexc|blofin|fed|cpi|nfp|liquidation|hack|regulation/i.test(`${item.title} ${item.description}`))
+    .slice(0, MARKET_RADAR_MAX_EVENTS)
+    .map(item => {
+      const text = `${item.title} ${item.description}`;
+      return {
+        id: `mradar_${item.eventTime}_${safeIdPart(item.title)}`,
+        event_time: item.eventTime,
+        title: item.title,
+        category: mapEventCategory(text),
+        impact: mapImpact(text),
+        affected_markets: mapAffectedMarkets(text),
+        source: 'RSS',
+        source_url: item.link,
+        summary: item.description.slice(0, 180) || 'Relevantes Krypto-Markt-Event.',
+      };
+    });
+  debug.items_relevant = relevant.length;
+
+  const status = computeRadarStatus(relevant);
+  for (const event of relevant) {
+    await env.DB.prepare(`
+      INSERT OR REPLACE INTO market_events
+      (id, created_at, updated_at, event_time, title, category, impact, affected_markets, source, source_url, summary, radar_status, raw_json, status)
+      VALUES (?, COALESCE((SELECT created_at FROM market_events WHERE id = ?), ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+    `).bind(
+      event.id, event.id, now, now, event.event_time, event.title, event.category, event.impact,
+      JSON.stringify(event.affected_markets), event.source, event.source_url, event.summary, status, JSON.stringify(event)
+    ).run();
+    debug.db_saved += 1;
+  }
+
+  const outputEvents = relevant.length ? relevant : (await env.DB.prepare(
+    `SELECT * FROM market_events WHERE status = 'ACTIVE' ORDER BY updated_at DESC LIMIT ?`
+  ).bind(MARKET_RADAR_MAX_EVENTS).all()).results.map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
+
+  return withDebug({
+    status: computeRadarStatus(outputEvents),
+    updated_at: now,
+    summary: outputEvents.length ? "BTC/Krypto-Markt mit erhöhter Event-Aktivität." : "Keine relevanten Markt-Events gefunden.",
+    events: outputEvents,
+    disclaimer: RADAR_DISCLAIMER
+  });
+  } catch (error) {
+    console.error('❌ market-radar error:', error?.message || error);
+    debug.error_message = String(error?.message || error || 'market-radar failed');
+    return withDebug({
+      status: 'NORMAL',
+      updated_at: now,
+      summary: 'Radar-Daten aktuell nicht verfügbar. Letzte Daten konnten nicht geladen werden.',
+      events: [],
+      disclaimer: RADAR_DISCLAIMER
+    });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1233,6 +1475,12 @@ export default {
         });
       }
 
+      if (request.method === "GET" && url.pathname === "/market-radar") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        return jsonResponse(await getMarketRadar(env, session));
+      }
+
       // ── DATA ─────────────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/stats") {
@@ -1573,7 +1821,8 @@ export default {
             return jsonResponse({ ok: true, type: 'SIGNAL', result });
           }
         } catch (e) {
-          return jsonResponse({ ok: false, error: e.message }, 500);
+          console.error('❌ /admin/test-webhook failed:', e?.message || e);
+          return jsonResponse({ ok: false, error: e.message || 'test-webhook failed' }, 200);
         }
       }
 
@@ -1988,29 +2237,37 @@ export default {
 
         try {
           if (eventType === 'SNAPSHOT') {
-            return jsonResponse(await saveSnapshot(env, payload));
+            ctx.waitUntil(
+              saveSnapshot(env, payload).catch(err => console.error('❌ SNAPSHOT async save failed:', err?.message || err))
+            );
+            return jsonResponse({ success: true, type: 'SNAPSHOT', message: 'Snapshot accepted' });
           }
 
-          const direction = normalizeDirection(payload);
-          const action    = normalizeAction(payload);
-
-          if (!direction) {
-            console.log('⏭️ Signal skipped — no recognisable direction in payload:', JSON.stringify(payload).substring(0, 300));
-            return jsonResponse({ status: 'skipped', reason: 'no_actionable_direction', direction, action });
+          if (eventType === 'PRICE_UPDATE') {
+            ctx.waitUntil(
+              handlePriceUpdate(env, payload).catch(err => console.error('❌ PRICE_UPDATE async failed:', err?.message || err))
+            );
+            return jsonResponse({ success: true, type: 'PRICE_UPDATE', message: 'Price update accepted' });
           }
 
-          return jsonResponse(await processSignal(env, payload));
+          if (eventType === 'SIGNAL_NEW' || eventType === 'SIGNAL') {
+            const direction = normalizeDirection(payload);
+            const action    = normalizeAction(payload);
+            if (!direction) {
+              console.log('⏭️ SIGNAL_NEW skipped — no recognisable direction:', JSON.stringify(payload).substring(0, 300));
+              return jsonResponse({ success: true, type: 'SIGNAL_NEW', status: 'skipped', reason: 'no_actionable_direction', direction, action });
+            }
+            return jsonResponse(await processSignal(env, payload));
+          }
 
+          return jsonResponse({ success: true, type: eventType, message: 'Unsupported event_type accepted' });
         } catch (processingErr) {
-          console.error('❌ Webhook processing error:', processingErr.message);
-          console.error('Stack:', processingErr.stack);
+          console.error('❌ Webhook processing error:', processingErr?.message || processingErr);
           return jsonResponse({
-            error: 'Processing failed',
-            message: processingErr.message,
-            stack: processingErr.stack,
-            eventType,
-            symbol: payload?.symbol
-          }, 500);
+            success: true,
+            type: eventType,
+            message: 'Accepted with processing error (logged)'
+          });
         }
       }
 
