@@ -2,7 +2,7 @@
 // WAVESCOUT v3.5 - BACKTESTING & STRATEGIE-LABOR
 // ═══════════════════════════════════════════════════════════════
 
-const { useState, useEffect, useRef } = React;
+const { useState, useEffect, useRef, useCallback } = React;
 
 const API_URL = 'https://tradingview-bot.spnn08.workers.dev';
 
@@ -259,6 +259,11 @@ function PracticeTradesTab({ sessionId }) {
   });
 
   const updatePracticeStatus = async (tradeId, status) => {
+    await fetch(`${API_URL}/practice-trades/${tradeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+      body: JSON.stringify({ status })
+    });
     setTrades(prev => prev.map(t => String(t.id) === String(tradeId) ? { ...t, status } : t));
   };
 
