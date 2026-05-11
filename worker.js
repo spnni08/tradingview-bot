@@ -492,6 +492,22 @@ async function ensureTables(env) {
       catch (_) {}
     }
 
+    // Migrate snapshots table (compat with unique symbol snapshots)
+    const snapshotCols = [
+      ['timeframe',  'TEXT'],
+      ['direction',  'TEXT'],
+      ['trigger',    'TEXT'],
+      ['strength',   'TEXT'],
+      ['timestamp',  'INTEGER'],
+      ['raw_signal', 'TEXT'],
+      ['created_at', 'INTEGER'],
+      ['updated_at', 'INTEGER'],
+    ];
+    for (const [col, type] of snapshotCols) {
+      try { await env.DB.prepare(`ALTER TABLE snapshots ADD COLUMN ${col} ${type}`).run(); }
+      catch (_) {}
+    }
+
   } catch (error) {
     console.error('❌ ensureTables error:', error.message);
   }
@@ -578,14 +594,51 @@ async function saveSnapshot(env, data) {
   console.log('📸 Saving snapshot:', data.symbol, data.timeframe, 'price:', data.price);
 
   await ensureTables(env);
+  const now = Date.now();
+  const symbol = data.symbol || 'UNKNOWN';
+  const rawSignal = JSON.stringify(data);
 
   await env.DB.prepare(`
     INSERT INTO snapshots (
-      symbol, timeframe, price, rsi, ema50, ema200,
-      support, resistance, trend, trend_1h, trend_4h, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      symbol,
+      timeframe,
+      price,
+      rsi,
+      ema50,
+      ema200,
+      support,
+      resistance,
+      trend,
+      trend_1h,
+      trend_4h,
+      direction,
+      trigger,
+      strength,
+      timestamp,
+      raw_signal,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(symbol) DO UPDATE SET
+      timeframe = excluded.timeframe,
+      price = excluded.price,
+      rsi = excluded.rsi,
+      ema50 = excluded.ema50,
+      ema200 = excluded.ema200,
+      support = excluded.support,
+      resistance = excluded.resistance,
+      trend = excluded.trend,
+      trend_1h = excluded.trend_1h,
+      trend_4h = excluded.trend_4h,
+      direction = excluded.direction,
+      trigger = excluded.trigger,
+      strength = excluded.strength,
+      timestamp = excluded.timestamp,
+      raw_signal = excluded.raw_signal,
+      updated_at = excluded.updated_at
   `).bind(
-    data.symbol || 'UNKNOWN',
+    symbol,
     String(data.timeframe || '5'),
     data.price || 0,
     data.rsi ?? null,
@@ -596,15 +649,21 @@ async function saveSnapshot(env, data) {
     data.trend || null,
     data.trend_1h || null,
     data.trend_4h || null,
-    new Date().toISOString()
+    data.direction || null,
+    data.trigger || null,
+    data.strength || null,
+    data.timestamp || now,
+    rawSignal,
+    now,
+    now
   ).run();
 
   if (data.price && data.symbol) {
     await checkPracticeTrades(env, data.symbol, data.price);
   }
 
-  console.log('✅ Snapshot saved:', data.symbol);
-  return { status: 'ok', type: 'snapshot', symbol: data.symbol, price: data.price };
+  console.log('✅ Snapshot saved:', symbol);
+  return { ok: true, type: 'SNAPSHOT', message: 'Snapshot saved', symbol };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1811,7 +1870,7 @@ export default {
               support: 79000, resistance: 81000,
               trend: 'bullish', trend_1h: 'GREEN', trend_4h: 'GREEN'
             });
-            return jsonResponse({ ok: true, type: 'SNAPSHOT', result });
+            return jsonResponse(result);
           } else {
             const result = await processSignal(env, {
               symbol: 'BTCUSDT', event_type: 'SIGNAL', timeframe: '5',
