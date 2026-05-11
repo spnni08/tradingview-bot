@@ -545,8 +545,8 @@ const BacktestPage = ({ user }) => {
   const sessionId = localStorage.getItem('wavescout_session');
 
   const tabs = [
-    { id: 'practice', label: '📊 Übungstrades' },
-    { id: 'history',  label: '📈 Signal-Historie' }
+    { id: 'practice', label: 'Übungstrades' },
+    { id: 'history',  label: 'Signal-Historie' }
   ];
 
   return (

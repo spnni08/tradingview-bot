@@ -18,6 +18,12 @@ const JournalPage = ({ user }) => {
   const [showChecklist, setShowChecklist] = useState(false);
   const [showNotes, setShowNotes]     = useState(false);
   const [checklist, setChecklist]     = useState({ ...EMPTY_CHECKLIST });
+  const [toast, setToast]             = useState(null);
+
+  const showToast = (msg, type = 'info') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 2800);
+  };
 
   useEffect(() => {
     const sessionId = localStorage.getItem('wavescout_session');
@@ -77,9 +83,10 @@ const JournalPage = ({ user }) => {
         setShowChecklist(false);
         setChecklist({ ...EMPTY_CHECKLIST });
         refresh();
+        showToast('Checkliste gespeichert', 'success');
       }
     } catch (err) {
-      console.error('Error saving checklist:', err);
+      showToast('Fehler beim Speichern', 'error');
     }
   };
 
@@ -91,9 +98,13 @@ const JournalPage = ({ user }) => {
         headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
         body: JSON.stringify({ date, type: 'journal', checklistData: { text: noteText, timestamp: Date.now() } })
       });
-      if (res.ok) { setShowNotes(false); refresh(); }
+      if (res.ok) {
+        setShowNotes(false);
+        refresh();
+        showToast('Notiz gespeichert', 'success');
+      }
     } catch (err) {
-      console.error('Error saving notes:', err);
+      showToast('Fehler beim Speichern', 'error');
     }
   };
 
@@ -117,6 +128,18 @@ const JournalPage = ({ user }) => {
 
   return (
     <div className="content page-enter">
+      {toast && (
+        <div style={{
+          position: 'fixed', top: 64, right: 20, zIndex: 9999,
+          padding: '12px 18px', borderRadius: 10, fontSize: 13, fontWeight: 500,
+          background: toast.type === 'error' ? 'var(--bg-error)' : 'var(--bg-success)',
+          border: `1px solid ${toast.type === 'error' ? 'rgba(240,68,68,.4)' : 'rgba(16,185,129,.4)'}`,
+          color: toast.type === 'error' ? 'var(--loss)' : 'var(--win)',
+          boxShadow: '0 4px 16px rgba(0,0,0,.25)', maxWidth: 320, animation: 'fadeIn .2s ease'
+        }}>
+          {toast.msg}
+        </div>
+      )}
       <div className="page-header">
         <h2>Trading Journal</h2>
         <p className="subtitle">{dateLabel} · {entries.length} Einträge</p>
@@ -170,7 +193,7 @@ const JournalPage = ({ user }) => {
         </div>
       ) : (
         entries.map((entry, i) => (
-          <EntryCard key={entry.id || i} entry={entry} date={date} onUpdate={refresh}/>
+          <EntryCard key={entry.id || i} entry={entry} date={date} onUpdate={refresh} onToast={showToast}/>
         ))
       )}
     </div>
@@ -179,11 +202,12 @@ const JournalPage = ({ user }) => {
 
 // ─── Entry Card ──────────────────────────────────────────────
 
-const EntryCard = ({ entry, date, onUpdate }) => {
-  const [editing, setEditing]     = useState(false);
-  const [saving, setSaving]       = useState(false);
-  const [deleting, setDeleting]   = useState(false);
-  const [editData, setEditData]   = useState(null);
+const EntryCard = ({ entry, date, onUpdate, onToast }) => {
+  const [editing, setEditing]         = useState(false);
+  const [saving, setSaving]           = useState(false);
+  const [deleting, setDeleting]       = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [editData, setEditData]       = useState(null);
   const isStrategy = entry.type === 'strategy';
 
   const startEdit = () => {
@@ -213,16 +237,17 @@ const EntryCard = ({ entry, date, onUpdate }) => {
       setEditing(false);
       setEditData(null);
       onUpdate();
+      onToast?.('Eintrag gespeichert', 'success');
     } catch (err) {
-      console.error('Error saving edit:', err);
+      onToast?.('Fehler beim Speichern', 'error');
     } finally {
       setSaving(false);
     }
   };
 
   const deleteEntry = async () => {
-    if (!window.confirm('Diesen Eintrag wirklich löschen?')) return;
     setDeleting(true);
+    setDeleteConfirm(false);
     const sessionId = localStorage.getItem('wavescout_session');
     try {
       await fetch(`${API_URL}/checklist/${entry.id}`, {
@@ -231,7 +256,7 @@ const EntryCard = ({ entry, date, onUpdate }) => {
       });
       onUpdate();
     } catch (err) {
-      console.error('Error deleting entry:', err);
+      onToast?.('Fehler beim Löschen', 'error');
       setDeleting(false);
     }
   };
@@ -279,15 +304,23 @@ const EntryCard = ({ entry, date, onUpdate }) => {
               <button className="btn btn-ghost btn-sm" onClick={startEdit}>
                 <Icon name="edit" size={13}/> Bearbeiten
               </button>
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={deleteEntry}
-                disabled={deleting}
-                style={{ color: 'var(--loss)' }}
-                title="Eintrag löschen"
-              >
-                <Icon name="trash" size={13}/>
-              </button>
+              {!deleteConfirm ? (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setDeleteConfirm(true)}
+                  disabled={deleting}
+                  style={{ color: 'var(--loss)' }}
+                  title="Eintrag löschen"
+                >
+                  {deleting ? <div className="spinner-sm"/> : <Icon name="trash" size={13}/>}
+                </button>
+              ) : (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <span style={{ fontSize: 11, color: 'var(--loss)', fontWeight: 600 }}>Löschen?</span>
+                  <button className="btn btn-danger btn-sm" onClick={deleteEntry}>Ja</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setDeleteConfirm(false)}>Nein</button>
+                </span>
+              )}
             </>
           )}
         </div>

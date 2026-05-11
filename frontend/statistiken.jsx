@@ -271,7 +271,7 @@ const StatistikenPage = ({ user }) => {
                     <td className="mono">{t.ai_score || 0}/100</td>
                     <td>
                       <span className={`badge ${t.outcome === 'WIN' ? 'badge-win' : t.outcome === 'LOSS' ? 'badge-loss' : 'badge-wait'}`}>
-                        {t.outcome}
+                        {t.outcome || 'OPEN'}
                       </span>
                     </td>
                   </tr>
