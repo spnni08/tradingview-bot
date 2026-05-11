@@ -1821,7 +1821,8 @@ export default {
             return jsonResponse({ ok: true, type: 'SIGNAL', result });
           }
         } catch (e) {
-          return jsonResponse({ ok: false, error: e.message }, 500);
+          console.error('❌ /admin/test-webhook failed:', e?.message || e);
+          return jsonResponse({ ok: false, error: e.message || 'test-webhook failed' }, 200);
         }
       }
 
