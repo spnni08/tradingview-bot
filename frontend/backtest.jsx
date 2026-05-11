@@ -740,6 +740,31 @@ function StrategyLabTab({ sessionId, userRole }) {
 
 // ─── Strategy Compare Tab ──────────────────────────────────────
 
+function CompareTable({ rows, keyPrefix }) {
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table className="tbl">
+        <thead><tr><th>Strategie</th><th>Version</th><th>Total</th><th>Wins</th><th>Losses</th><th>Win-Rate</th><th>WAIT</th><th>SKIP</th><th>Ø Score</th></tr></thead>
+        <tbody>
+          {rows.map((s, i) => (
+            <tr key={`${keyPrefix}-${i}`}>
+              <td style={{ fontWeight: 500 }}>{s.strategy_name || s.strategyName || '–'}</td>
+              <td className="mono muted" style={{ fontSize: 11 }}>{s.strategy_version || s.strategyVersion || '–'}</td>
+              <td className="mono">{s.total}</td>
+              <td className="mono" style={{ color: 'var(--win)' }}>{s.wins}</td>
+              <td className="mono" style={{ color: 'var(--loss)' }}>{s.losses}</td>
+              <td className={`mono ${(s.winRate) >= 50 ? 'win' : 'loss'}`}>{s.winRate}%</td>
+              <td className="mono muted">{s.wait_count || s.waitCount || 0}</td>
+              <td className="mono muted">{s.skip_count || s.skipCount || 0}</td>
+              <td className="mono">{s.avg_score || s.avgScore || 0}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function StrategyCompareTab({ sessionId }) {
   const [compareData, setCompareData] = useState([]);
   const [allStrats,   setAllStrats]   = useState([]);
@@ -775,29 +800,6 @@ function StrategyCompareTab({ sessionId }) {
   };
 
   if (loading) return <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}><div className="spinner-lg" style={{ margin: '0 auto 16px' }}/>Lade…</div>;
-
-  const CompareTable = ({ rows, keyPrefix }) => (
-    <div style={{ overflowX: 'auto' }}>
-      <table className="tbl">
-        <thead><tr><th>Strategie</th><th>Version</th><th>Total</th><th>Wins</th><th>Losses</th><th>Win-Rate</th><th>WAIT</th><th>SKIP</th><th>Ø Score</th></tr></thead>
-        <tbody>
-          {rows.map((s, i) => (
-            <tr key={`${keyPrefix}-${i}`}>
-              <td style={{ fontWeight: 500 }}>{s.strategy_name || s.strategyName || '–'}</td>
-              <td className="mono muted" style={{ fontSize: 11 }}>{s.strategy_version || s.strategyVersion || '–'}</td>
-              <td className="mono">{s.total}</td>
-              <td className="mono" style={{ color: 'var(--win)' }}>{s.wins}</td>
-              <td className="mono" style={{ color: 'var(--loss)' }}>{s.losses}</td>
-              <td className={`mono ${(s.winRate) >= 50 ? 'win' : 'loss'}`}>{s.winRate}%</td>
-              <td className="mono muted">{s.wait_count || s.waitCount || 0}</td>
-              <td className="mono muted">{s.skip_count || s.skipCount || 0}</td>
-              <td className="mono">{s.avg_score || s.avgScore || 0}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

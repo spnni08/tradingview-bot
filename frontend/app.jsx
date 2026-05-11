@@ -3,6 +3,45 @@
 // Single-page app: no full-page reloads on navigation
 // ═══════════════════════════════════════════════════════════════
 
+class PageErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: '60px 40px', textAlign: 'center' }}>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>⚠️</div>
+          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 8, color: 'var(--loss)' }}>
+            Fehler beim Laden der Seite
+          </div>
+          <pre style={{
+            fontSize: 12, color: 'var(--text-secondary)', background: 'var(--bg-2)',
+            padding: '12px 16px', borderRadius: 8, textAlign: 'left',
+            maxWidth: 640, margin: '0 auto 20px', overflow: 'auto',
+            fontFamily: 'var(--font-mono)', lineHeight: 1.5,
+            border: '1px solid var(--border)'
+          }}>
+            {this.state.error.toString()}
+            {this.state.error.stack ? '\n\n' + this.state.error.stack : ''}
+          </pre>
+          <button
+            className="btn btn-ghost"
+            onClick={() => this.setState({ error: null })}
+          >
+            Erneut versuchen
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const App = () => {
   const [page, setPage] = useState('dashboard');
   const [user, setUser] = useState(null);
@@ -78,7 +117,9 @@ const App = () => {
     <div className="app">
       <Navbar page={page} setPage={setPage} user={user} onLogout={handleLogout}/>
       <main className="main">
-        {renderPage()}
+        <PageErrorBoundary key={page}>
+          {renderPage()}
+        </PageErrorBoundary>
       </main>
     </div>
   );
