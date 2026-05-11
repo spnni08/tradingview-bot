@@ -7,6 +7,8 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
   const [user, setUser] = useState(null);
+  const [toast, setToast] = useState(null);
+  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2200); };
 
   useEffect(() => {
     // Check auth
@@ -109,6 +111,7 @@ const Dashboard = () => {
           kpis={kpis}
         />
         <div className="content page-enter">
+          {toast && <div style={{ position: 'fixed', top: 66, right: 18, zIndex: 9999, padding: '10px 14px', borderRadius: 10, background: 'var(--bg-1)', border: '1px solid var(--border)' }}>{toast}</div>}
 
           {/* Row 1: Best Signal + Markt Bias */}
           <div className="grid grid-2" style={{gridTemplateColumns: '1.4fr 1fr'}}>
@@ -144,7 +147,11 @@ const Dashboard = () => {
           </div>
 
           {/* Row 3: Latest Signals */}
-          <RecentSignalsCard signals={data.latestSignals} />
+          <RecentSignalsCard
+            signals={data.latestSignals}
+            onOutcomeLocal={(id, outcome) => setData(prev => ({ ...prev, latestSignals: (prev.latestSignals || []).map(s => s.id === id ? { ...s, outcome } : s) }))}
+            showToast={showToast}
+          />
 
         </div>
       </main>
@@ -294,7 +301,7 @@ const MarktBiasCard = ({ marketBias }) => {
 };
 
 // ───── Recent Signals (LIVE DATA) ─────
-const RecentSignalsCard = ({ signals }) => {
+const RecentSignalsCard = ({ signals, onOutcomeLocal, showToast }) => {
   if (!signals || signals.length === 0) {
     return (
       <div className="card">
@@ -336,13 +343,15 @@ const RecentSignalsCard = ({ signals }) => {
               </td>
               <td className="mono">{s.ai_score}/100</td>
               <td>
-                <span className={`badge ${
-                  s.outcome === 'WIN' ? 'badge-win' : 
-                  s.outcome === 'LOSS' ? 'badge-loss' : 
-                  'badge-wait'
-                }`}>
-                  {s.outcome}
-                </span>
+                {window.OutcomeEditor ? (
+                  <window.OutcomeEditor
+                    id={s.id}
+                    currentOutcome={s.outcome}
+                    type="signal"
+                    onUpdated={(next) => onOutcomeLocal?.(s.id, next)}
+                    showToast={(m) => showToast?.(m)}
+                  />
+                ) : <span className={`badge ${s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : 'badge-wait'}`}>{s.outcome}</span>}
               </td>
               <td className="mono muted" style={{fontSize:11}}>{getTimeAgo(s.created_at)}</td>
             </tr>

@@ -60,6 +60,102 @@ const Icon = ({ name, size = 16, className = '', style = {} }) => {
   );
 };
 
+const OUTCOME_OPTIONS = ['WIN', 'LOSS', 'BE', 'OPEN', 'IGNORED'];
+
+async function updateOutcomeAPI({ id, outcome, type = 'signal', sessionId, exitPrice }) {
+  const route = type === 'practice' ? `/practice-trades/${id}` : `/signals/${id}`;
+  const body = type === 'practice' ? { status: outcome, exitPrice } : { outcome, exitPrice };
+  const res = await fetch(`${API_URL}${route}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId || localStorage.getItem('wavescout_session') },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+const OutcomeEditor = ({ id, currentOutcome, type = 'signal', disabled = false, onUpdated, onError, showToast }) => {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [menuStyle, setMenuStyle] = useState(null);
+  const wrapRef = useRef(null);
+  const btnRef = useRef(null);
+
+  const positionMenu = useCallback(() => {
+    if (!btnRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    const h = 5 * 34 + 14;
+    const openUp = (window.innerHeight - r.bottom) < h && r.top > h;
+    setMenuStyle({
+      position: 'fixed',
+      top: openUp ? Math.max(8, r.top - h - 6) : Math.min(window.innerHeight - h - 8, r.bottom + 6),
+      left: Math.min(window.innerWidth - 140, Math.max(8, r.right - 128)),
+      zIndex: 9999, minWidth: 128, maxHeight: Math.min(h, window.innerHeight - 16), overflowY: 'auto',
+      background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 10, padding: '6px 0',
+      boxShadow: '0 12px 28px rgba(0,0,0,.42)', animation: 'fadeIn .15s ease'
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    positionMenu();
+    const onEsc = e => e.key === 'Escape' && setOpen(false);
+    const onClick = e => {
+      const menu = document.getElementById(`outcome-editor-${id}`);
+      if (wrapRef.current && !wrapRef.current.contains(e.target) && (!menu || !menu.contains(e.target))) setOpen(false);
+    };
+    const onMove = () => positionMenu();
+    document.addEventListener('keydown', onEsc);
+    document.addEventListener('mousedown', onClick);
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    return () => {
+      document.removeEventListener('keydown', onEsc);
+      document.removeEventListener('mousedown', onClick);
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+    };
+  }, [open, id, positionMenu]);
+
+  const cls = currentOutcome === 'WIN' ? 'badge-win' : currentOutcome === 'LOSS' ? 'badge-loss' : 'badge-wait';
+  const select = async (outcome) => {
+    if (saving || disabled || outcome === currentOutcome) return setOpen(false);
+    const old = currentOutcome || 'OPEN';
+    setSaving(true);
+    try {
+      await updateOutcomeAPI({ id, outcome, type });
+      onUpdated?.(outcome, old);
+      showToast?.(`Outcome auf ${outcome} gesetzt`, 'success');
+    } catch (e) {
+      onError?.(old, e);
+      showToast?.(`Fehler beim Speichern (${e.message})`, 'error');
+    } finally {
+      setSaving(false);
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <button ref={btnRef} className={`badge ${cls}`} style={{ border: 'none', cursor: saving || disabled ? 'not-allowed' : 'pointer' }} disabled={saving || disabled} onClick={() => setOpen(v => !v)}>
+        {saving ? '…' : (currentOutcome || 'OPEN')}
+      </button>
+      {open && menuStyle && ReactDOM.createPortal(
+        <div id={`outcome-editor-${id}`} style={menuStyle}>
+          {OUTCOME_OPTIONS.map(o => (
+            <button key={o} onClick={() => select(o)} disabled={saving} style={{ width: '100%', textAlign: 'left', padding: '8px 12px', border: 'none', background: o === currentOutcome ? 'rgba(59,130,246,.12)' : 'transparent', color: o === currentOutcome ? 'var(--blue-400)' : 'var(--text-secondary)', fontWeight: 600, cursor: 'pointer', transition: 'all .15s ease' }}>
+              {o}
+            </button>
+          ))}
+        </div>, document.body
+      )}
+    </div>
+  );
+};
+
+window.OutcomeEditor = OutcomeEditor;
+window.updateOutcomeAPI = updateOutcomeAPI;
+
 // ═══════════════════════════════════════════════════════════════
 // NAVBAR
 // ═══════════════════════════════════════════════════════════════
