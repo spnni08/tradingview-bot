@@ -126,20 +126,105 @@ Format as JSON:
 }
 
 function analyzeWithRules(signal) {
+  const dir = (signal.direction || signal.side || signal.signal || '').toUpperCase();
+  const isLong  = dir === 'LONG';
+  const isShort = dir === 'SHORT';
+
   let score = 50;
-  let risk = 'MEDIUM';
-  let recommendation = 'WAIT';
 
-  if (['1H', '4H', '60', '240'].includes(signal.timeframe)) score += 10;
+  // ── RSI ─────────────────────────────────────────────────────
+  const rsi = parseFloat(signal.rsi ?? 50);
+  if (isLong) {
+    if      (rsi < 30) score += 18;  // very oversold
+    else if (rsi < 40) score += 10;
+    else if (rsi < 50) score += 4;
+    else if (rsi > 70) score -= 18;  // overbought → bad long
+    else if (rsi > 60) score -= 6;
+  } else if (isShort) {
+    if      (rsi > 70) score += 18;  // very overbought
+    else if (rsi > 60) score += 10;
+    else if (rsi > 50) score += 4;
+    else if (rsi < 30) score -= 18;  // oversold → bad short
+    else if (rsi < 40) score -= 6;
+  }
 
-  if (score >= 70) { recommendation = 'RECOMMENDED'; risk = 'LOW'; }
-  else if (score < 50) { recommendation = 'SKIP'; risk = 'HIGH'; }
+  // ── EMA trend alignment ──────────────────────────────────────
+  const ema50  = parseFloat(signal.ema50  ?? 0);
+  const ema200 = parseFloat(signal.ema200 ?? 0);
+  if (ema50 && ema200) {
+    const bullish = ema50 > ema200;
+    if (isLong  && bullish)  score += 12;
+    if (isShort && !bullish) score += 12;
+    if (isLong  && !bullish) score -= 12;
+    if (isShort && bullish)  score -= 12;
+  }
 
-  const entry = signal.price || 0;
-  const tp = signal.direction === 'LONG' ? entry * 1.02 : entry * 0.98;
-  const sl = signal.direction === 'LONG' ? entry * 0.99 : entry * 1.01;
+  // ── Trend label ──────────────────────────────────────────────
+  const trend = (signal.trend || '').toUpperCase();
+  if (trend === 'BULLISH' || trend === 'UP') {
+    score += isLong ? 10 : -10;
+  } else if (trend === 'BEARISH' || trend === 'DOWN') {
+    score += isShort ? 10 : -10;
+  }
 
-  return { recommendation, score, risk, entry, tp, sl, reason: 'Rule-based analysis' };
+  // ── Wave bias ────────────────────────────────────────────────
+  const waveBias = (signal.wave_bias || '').toUpperCase();
+  if (waveBias === 'LONG')  score += isLong  ? 10 : -5;
+  if (waveBias === 'SHORT') score += isShort ? 10 : -5;
+
+  // ── Timeframe ────────────────────────────────────────────────
+  const tf = String(signal.timeframe || '').replace('m','').replace('h','H');
+  if (['60','240','1H','4H'].includes(tf))  score += 8;
+  else if (['15','30'].includes(tf))         score += 4;
+
+  // ── Confidence from signal source ────────────────────────────
+  const confidence = parseFloat(signal.confidence ?? 0);
+  if      (confidence >= 80) score += 10;
+  else if (confidence >= 60) score += 5;
+
+  // ── Support / Resistance proximity ──────────────────────────
+  const price      = parseFloat(signal.price ?? 0);
+  const support    = parseFloat(signal.support ?? 0);
+  const resistance = parseFloat(signal.resistance ?? 0);
+  if (price && support && isLong && price > support) {
+    const pct = (price - support) / price;
+    if (pct < 0.02) score += 8;  // within 2% of support
+  }
+  if (price && resistance && isShort && price < resistance) {
+    const pct = (resistance - price) / price;
+    if (pct < 0.02) score += 8;
+  }
+
+  // ── Clamp ─────────────────────────────────────────────────
+  score = Math.max(0, Math.min(100, Math.round(score)));
+
+  // ── Recommendation ──────────────────────────────────────────
+  let recommendation, risk;
+  if (score >= 70) {
+    recommendation = dir || 'RECOMMENDED';
+    risk = score >= 82 ? 'LOW' : 'MEDIUM';
+  } else if (score >= 55) {
+    recommendation = 'WAIT';
+    risk = 'MEDIUM';
+  } else {
+    recommendation = 'SKIP';
+    risk = 'HIGH';
+  }
+
+  // ── TP / SL ──────────────────────────────────────────────────
+  const entry = price || 0;
+  const tp    = isLong  ? entry * 1.02 : entry * 0.98;
+  const sl    = isLong  ? entry * 0.99 : entry * 1.01;
+
+  // ── Reason ───────────────────────────────────────────────────
+  const reasons = [];
+  if (rsi && (rsi < 35 || rsi > 65)) reasons.push(`RSI ${rsi}`);
+  if (ema50 && ema200) reasons.push(`EMA ${ema50 > ema200 ? 'bullish' : 'bearish'}`);
+  if (trend)     reasons.push(`Trend: ${trend}`);
+  if (waveBias)  reasons.push(`Bias: ${waveBias}`);
+  const reason = reasons.length > 0 ? reasons.join(' · ') : 'Rule-based analysis';
+
+  return { recommendation, score, risk, entry, tp, sl, reason, direction: dir };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -429,8 +514,29 @@ async function getPracticeTradeStats(env) {
 // SIGNAL PROCESSING
 // ═══════════════════════════════════════════════════════════════
 
+function normalizeDirection(payload) {
+  const candidates = [payload.direction, payload.side, payload.signal, payload.action, payload.trigger];
+  for (const c of candidates) {
+    const v = String(c || '').toUpperCase();
+    if (v === 'LONG' || v === 'BUY')   return 'LONG';
+    if (v === 'SHORT' || v === 'SELL') return 'SHORT';
+  }
+  return null;
+}
+
+function normalizeAction(payload) {
+  const raw = String(payload.action || payload.trigger || '').toUpperCase();
+  if (raw === 'BUY'  || raw === 'LONG')  return 'BUY';
+  if (raw === 'SELL' || raw === 'SHORT') return 'SELL';
+  return raw || null;
+}
+
 async function processSignal(env, signal) {
-  console.log('📊 Processing signal:', signal.symbol, signal.direction, signal.trigger);
+  const direction = normalizeDirection(signal);
+  const action    = normalizeAction(signal);
+  signal.direction = direction; // normalize for analyzeWithRules
+
+  console.log('📊 Processing signal:', signal.symbol, direction, '| action:', action, '| rsi:', signal.rsi);
 
   await ensureTables(env);
 
@@ -439,20 +545,32 @@ async function processSignal(env, signal) {
 
   await env.DB.prepare(`
     INSERT INTO signals (
-      id, symbol, timeframe, price, direction, trigger,
-      ai_recommendation, ai_score, ai_risk, ai_entry, ai_tp, ai_sl, ai_reason,
+      id, symbol, timeframe, price, direction, action, trigger,
+      rsi, ema50, ema200, trend, support, resistance, wave_bias,
+      ai_recommendation, ai_direction, ai_score, ai_risk, ai_confidence,
+      ai_entry, ai_tp, ai_sl, ai_reason,
       rule_score, rule_reason, created_at, outcome
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     signalId,
-    signal.symbol || 'UNKNOWN',
+    signal.symbol  || 'UNKNOWN',
     String(signal.timeframe || '5'),
-    signal.price || 0,
-    signal.direction || 'LONG',
-    signal.trigger || 'MANUAL',
+    signal.price   || signal.close || 0,
+    direction,
+    action,
+    signal.trigger || 'WEBHOOK',
+    signal.rsi        ?? null,
+    signal.ema50      ?? null,
+    signal.ema200     ?? null,
+    signal.trend      || null,
+    signal.support    ?? null,
+    signal.resistance ?? null,
+    signal.wave_bias  || null,
     analysis.recommendation,
+    analysis.direction || direction,
     analysis.score,
     analysis.risk,
+    signal.confidence ?? null,
     analysis.entry,
     analysis.tp,
     analysis.sl,
@@ -463,21 +581,26 @@ async function processSignal(env, signal) {
     'OPEN'
   ).run();
 
-  await createPracticeTrade(env, signalId, signal, analysis);
+  await createPracticeTrade(env, signalId, { ...signal, direction }, analysis);
 
-  if (analysis.score >= 55) {
-    const telegramMessage = formatSignalForTelegram({
+  // Send Telegram: always for test signals, otherwise score >= 55
+  const shouldNotify = signal.test === true || analysis.score >= 55;
+  if (shouldNotify) {
+    const debugPrefix = (analysis.score < 70 || signal.test)
+      ? `🧪 <b>[${signal.test ? 'TEST' : 'DEBUG'}]</b>\n` : '';
+    const telegramMessage = debugPrefix + formatSignalForTelegram({
       ...signal,
+      direction,
       ai_score: analysis.score,
       ai_entry: analysis.entry,
-      ai_tp: analysis.tp,
-      ai_sl: analysis.sl,
+      ai_tp:    analysis.tp,
+      ai_sl:    analysis.sl,
       ai_reason: analysis.reason
     });
     await sendTelegramMessage(env, telegramMessage);
   }
 
-  console.log('✅ Signal processed:', signalId, 'Score:', analysis.score);
+  console.log('✅ Signal processed:', signalId, '| Score:', analysis.score, '| Rec:', analysis.recommendation);
   return { status: 'ok', signalId, analysis };
 }
 
@@ -1260,6 +1383,30 @@ export default {
         try { await env.DB.prepare(`ALTER TABLE users ADD COLUMN last_seen INTEGER`).run(); results.push('users.last_seen: added'); }
         catch (_) { results.push('users.last_seen: already exists'); }
 
+        // signals extra columns
+        const signalCols = [
+          ['action',         'TEXT'],
+          ['rsi',            'REAL'],
+          ['ema50',          'REAL'],
+          ['ema200',         'REAL'],
+          ['trend',          'TEXT'],
+          ['support',        'REAL'],
+          ['resistance',     'REAL'],
+          ['wave_bias',      'TEXT'],
+          ['ai_direction',   'TEXT'],
+          ['ai_confidence',  'REAL'],
+          ['ai_take_profit', 'REAL'],
+          ['ai_stop_loss',   'REAL'],
+          ['raw_signal',     'TEXT'],
+          ['raw_ai',         'TEXT'],
+          ['status',         'TEXT'],
+          ['timestamp',      'INTEGER'],
+        ];
+        for (const [col, type] of signalCols) {
+          try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); results.push(`signals.${col}: added`); }
+          catch (_) { results.push(`signals.${col}: already exists`); }
+        }
+
         return jsonResponse({ success: true, results });
       }
 
@@ -1303,11 +1450,11 @@ export default {
             return jsonResponse(await saveSnapshot(env, payload));
           }
 
-          const direction = (payload.direction || '').toUpperCase();
-          const action    = (payload.action    || '').toUpperCase();
+          const direction = normalizeDirection(payload);
+          const action    = normalizeAction(payload);
 
-          if (!direction || direction === 'NONE' || action === 'NONE') {
-            console.log('⏭️ Signal skipped: direction=', direction, 'action=', action);
+          if (!direction) {
+            console.log('⏭️ Signal skipped — no recognisable direction in payload:', JSON.stringify(payload).substring(0, 300));
             return jsonResponse({ status: 'skipped', reason: 'no_actionable_direction', direction, action });
           }
 
