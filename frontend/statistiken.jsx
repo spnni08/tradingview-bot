@@ -273,13 +273,15 @@ const StatistikenPage = ({ user }) => {
                     <td className="mono muted">{t.timeframe}m</td>
                     <td className="mono">{t.ai_score || 0}/100</td>
                     <td>
-                      <window.OutcomeEditor
-                        id={t.id}
-                        currentOutcome={t.outcome}
-                        type="signal"
-                        onUpdated={(next) => setHistory(prev => prev.map(x => x.id === t.id ? { ...x, outcome: next } : x))}
-                        showToast={(m) => showToast(m)}
-                      />
+                      {window.OutcomeEditor ? (
+                        <window.OutcomeEditor
+                          id={t.id}
+                          currentOutcome={t.outcome}
+                          type="signal"
+                          onUpdated={(next) => setHistory(prev => prev.map(x => x.id === t.id ? { ...x, outcome: next } : x))}
+                          showToast={(m) => showToast(m)}
+                        />
+                      ) : <span className={`badge ${t.outcome === 'WIN' ? 'badge-win' : t.outcome === 'LOSS' ? 'badge-loss' : 'badge-wait'}`}>{t.outcome || 'OPEN'}</span>}
                     </td>
                   </tr>
                 ))}
