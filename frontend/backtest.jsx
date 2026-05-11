@@ -2,7 +2,7 @@
 // WAVESCOUT v3.5 - BACKTESTING & STRATEGIE-LABOR
 // ═══════════════════════════════════════════════════════════════
 
-const { useState, useEffect, useRef } = React;
+const { useState, useEffect, useRef, useCallback } = React;
 
 const API_URL = 'https://tradingview-bot.spnn08.workers.dev';
 
@@ -42,6 +42,17 @@ function fmtDate(val) {
 function fmtPct(n) {
   if (n == null || isNaN(n)) return '–';
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
+}
+
+function fmtPrice(v, symbol = '') {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '–';
+  const s = String(symbol || '').toUpperCase();
+  if (s.includes('BTC') || s.includes('XAU') || s.includes('NAS')) return n.toFixed(2);
+  const abs = Math.abs(n);
+  if (abs < 0.01) return n.toFixed(8);
+  if (abs < 1) return n.toFixed(6);
+  return n.toFixed(4);
 }
 
 // ─── iOS Toggle ────────────────────────────────────────────────
@@ -91,29 +102,108 @@ function PnLChart({ points }) {
 
 function OutcomeSelector({ tradeId, current, onChange }) {
   const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [menuStyle, setMenuStyle] = useState(null);
   const ref = useRef(null);
+  const btnRef = useRef(null);
+  const OUTCOMES = ['WIN','LOSS','BE','OPEN','IGNORED'];
+
+  const updateMenuPosition = useCallback(() => {
+    if (!btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    const estimatedHeight = 5 * 34 + 14;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const openUp = spaceBelow < estimatedHeight && rect.top > estimatedHeight;
+    const top = openUp ? Math.max(8, rect.top - estimatedHeight - 6) : Math.min(window.innerHeight - estimatedHeight - 8, rect.bottom + 6);
+    const left = Math.min(window.innerWidth - 140, Math.max(8, rect.right - 128));
+    setMenuStyle({
+      position: 'fixed',
+      top,
+      left,
+      zIndex: 9999,
+      minWidth: 128,
+      maxHeight: Math.min(estimatedHeight, window.innerHeight - 16),
+      overflowY: 'auto',
+      background: 'var(--bg-1)',
+      border: '1px solid var(--border)',
+      borderRadius: 10,
+      boxShadow: '0 12px 28px rgba(0,0,0,0.42)',
+      padding: '6px 0',
+      animation: 'fadeIn .15s ease'
+    });
+  }, []);
+
   useEffect(() => {
     if (!open) return;
-    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, [open]);
+    updateMenuPosition();
+    const onDocClick = e => {
+      const menuEl = document.getElementById(`outcome-menu-${tradeId}`);
+      if (ref.current && !ref.current.contains(e.target) && (!menuEl || !menuEl.contains(e.target))) setOpen(false);
+    };
+    const onEsc = e => { if (e.key === 'Escape') setOpen(false); };
+    const onMove = () => updateMenuPosition();
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onEsc);
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onEsc);
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+    };
+  }, [open, updateMenuPosition, tradeId]);
   const cls = current === 'WIN' ? 'badge-win' : current === 'LOSS' ? 'badge-loss' : 'badge-wait';
+
+  const onSelect = async (outcome) => {
+    if (loading) return;
+    setLoading(true);
+    try { await onChange(tradeId, outcome); }
+    finally { setLoading(false); setOpen(false); }
+  };
+
+  const menu = open && menuStyle ? ReactDOM.createPortal(
+    <div id={`outcome-menu-${tradeId}`} style={menuStyle}>
+      {OUTCOMES.map(o => (
+        <button
+          key={o}
+          style={{
+            display: 'block',
+            width: '100%',
+            padding: '8px 12px',
+            border: 'none',
+            cursor: loading ? 'not-allowed' : 'pointer',
+            fontSize: 12,
+            fontWeight: 600,
+            textAlign: 'left',
+            fontFamily: 'var(--font-main)',
+            color: o === current ? 'var(--blue-400)' : 'var(--text-secondary)',
+            background: o === current ? 'rgba(59,130,246,0.12)' : 'transparent',
+            transition: 'background .15s ease, color .15s ease, transform .15s ease'
+          }}
+          onMouseEnter={(e) => { if (o !== current) e.currentTarget.style.background = 'rgba(59,130,246,0.08)'; }}
+          onMouseLeave={(e) => { if (o !== current) e.currentTarget.style.background = 'transparent'; }}
+          disabled={loading}
+          onClick={() => onSelect(o)}
+        >
+          {o}
+        </button>
+      ))}
+    </div>, document.body
+  ) : null;
+
   return (
     <div style={{ position: 'relative' }} ref={ref}>
-      <button className={`badge ${cls}`} style={{ cursor: 'pointer', border: 'none', fontFamily: 'var(--font-main)' }} onClick={() => setOpen(o => !o)}>
-        {current || 'OPEN'}
+      <button
+        ref={btnRef}
+        className={`badge ${cls}`}
+        style={{ cursor: loading ? 'wait' : 'pointer', border: 'none', fontFamily: 'var(--font-main)', transition: 'all .15s ease' }}
+        onClick={() => !loading && setOpen(o => !o)}
+        disabled={loading}
+      >
+        {loading ? '…' : (current || 'OPEN')}
       </button>
-      {open && (
-        <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 50, background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', minWidth: 110, boxShadow: '0 8px 24px rgba(0,0,0,0.35)' }}>
-          {['WIN','LOSS','BE','OPEN','IGNORED'].map(o => (
-            <button key={o} style={{ display: 'block', width: '100%', padding: '8px 14px', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, textAlign: 'left', fontFamily: 'var(--font-main)', color: o === current ? 'var(--blue-500)' : 'var(--text-secondary)', background: o === current ? 'var(--bg-2)' : 'none' }}
-              onClick={() => { onChange(tradeId, o); setOpen(false); }}>
-              {o}
-            </button>
-          ))}
-        </div>
-      )}
+      {menu}
     </div>
   );
 }
@@ -181,10 +271,10 @@ function SignalDetailModal({ signal, onClose, onMarkLoss }) {
     ['Richtung',    signal.direction],
     ['Datum',       fmtDate(signal.created_at)],
     ['Timeframe',   signal.timeframe ? signal.timeframe + 'm' : '–'],
-    ['Entry',       signal.ai_entry  ? '$' + signal.ai_entry.toFixed(2)  : '–'],
-    ['Take Profit', signal.ai_tp     ? '$' + signal.ai_tp.toFixed(2)     : '–'],
-    ['Stop Loss',   signal.ai_sl     ? '$' + signal.ai_sl.toFixed(2)     : '–'],
-    ['Exit',        signal.exit_price ? '$' + signal.exit_price.toFixed(2) : '–'],
+    ['Entry',       signal.ai_entry  ? '$' + fmtPrice(signal.ai_entry, signal.symbol)  : '–'],
+    ['Take Profit', signal.ai_tp     ? '$' + fmtPrice(signal.ai_tp, signal.symbol)     : '–'],
+    ['Stop Loss',   signal.ai_sl     ? '$' + fmtPrice(signal.ai_sl, signal.symbol)     : '–'],
+    ['Exit',        signal.exit_price ? '$' + fmtPrice(signal.exit_price, signal.symbol) : '–'],
     ['PnL',         pnl !== 0 ? fmtPct(pnl) : '–'],
     ['Score',       (signal.ai_score || 0) + '/100'],
     ['Risiko',      signal.ai_risk || '–'],
@@ -268,6 +358,15 @@ function PracticeTradesTab({ sessionId }) {
     return true;
   });
 
+  const updatePracticeStatus = async (tradeId, status) => {
+    await fetch(`${API_URL}/practice-trades/${tradeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+      body: JSON.stringify({ status })
+    });
+    setTrades(prev => prev.map(t => String(t.id) === String(tradeId) ? { ...t, status } : t));
+  };
+
   if (loading) return <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}><div className="spinner-lg" style={{ margin: '0 auto 16px' }}/>Lade Übungstrades…</div>;
 
   return (
@@ -333,12 +432,12 @@ function PracticeTradesTab({ sessionId }) {
                     <td><AssetChip symbol={t.symbol}/></td>
                     <td className="mono muted">{t.timeframe}</td>
                     <td><span className={`badge ${t.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{t.direction}</span></td>
-                    <td className="mono">${(t.entry_price || 0).toFixed(2)}</td>
-                    <td className="mono" style={{ color: 'var(--win)' }}>${(t.take_profit || 0).toFixed(2)}</td>
-                    <td className="mono" style={{ color: 'var(--loss)' }}>${(t.stop_loss || 0).toFixed(2)}</td>
+                    <td className="mono">${fmtPrice((t.entry_price || 0), t.symbol)}</td>
+                    <td className="mono" style={{ color: 'var(--win)' }}>${fmtPrice((t.take_profit || 0), t.symbol)}</td>
+                    <td className="mono" style={{ color: 'var(--loss)' }}>${fmtPrice((t.stop_loss || 0), t.symbol)}</td>
                     <td className="mono">{t.exit_price ? `$${t.exit_price.toFixed(2)}` : '–'}</td>
                     <td className={`mono ${t.result_pct > 0 ? 'win' : t.result_pct < 0 ? 'loss' : ''}`}>{t.result_pct != null ? fmtPct(t.result_pct) : '–'}</td>
-                    <td><span className={`badge ${t.status === 'WIN' ? 'badge-win' : t.status === 'LOSS' ? 'badge-loss' : 'badge-wait'}`}>{t.status}</span></td>
+                    <td><OutcomeSelector tradeId={t.id} current={t.status} onChange={updatePracticeStatus}/></td>
                   </tr>
                 ))}
               </tbody>
@@ -465,9 +564,9 @@ function SignalHistoryTab({ sessionId }) {
                       <td><AssetChip symbol={trade.symbol}/></td>
                       <td><span className={`badge ${trade.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{trade.direction}</span></td>
                       <td className="mono">${(trade.ai_entry || trade.price || 0).toFixed(2)}</td>
-                      <td className="mono" style={{ color: 'var(--win)' }}>{trade.ai_tp  ? `$${trade.ai_tp.toFixed(2)}`  : '—'}</td>
-                      <td className="mono" style={{ color: 'var(--loss)' }}>{trade.ai_sl ? `$${trade.ai_sl.toFixed(2)}`  : '—'}</td>
-                      <td className="mono">{trade.exit_price ? `$${trade.exit_price.toFixed(2)}` : '—'}</td>
+                      <td className="mono" style={{ color: 'var(--win)' }}>{trade.ai_tp  ? `$${fmtPrice(trade.ai_tp, trade.symbol)}`  : '—'}</td>
+                      <td className="mono" style={{ color: 'var(--loss)' }}>{trade.ai_sl ? `$${fmtPrice(trade.ai_sl, trade.symbol)}`  : '—'}</td>
+                      <td className="mono">{trade.exit_price ? `$${fmtPrice(trade.exit_price, trade.symbol)}` : '—'}</td>
                       <td className={`mono ${pnl > 0 ? 'win' : pnl < 0 ? 'loss' : ''}`}>{pnl !== 0 ? fmtPct(pnl) : '—'}</td>
                       <td className="mono">{trade.ai_score || 0}</td>
                       <td style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{trade.strategy_name || 'Standard'} <span style={{ color: 'var(--text-quaternary)' }}>{trade.strategy_version || ''}</span></td>
@@ -875,7 +974,10 @@ function LossAnalysisTab({ sessionId }) {
   const loadReasons = async signalId => {
     try {
       const res = await fetch(`${API_URL}/signals/${signalId}/loss-reasons`, { headers: { 'X-Session-ID': sessionId } });
-      if (res.ok) setReasons(prev => ({ ...prev, [signalId]: await res.json() }));
+      if (res.ok) {
+        const reasonData = await res.json();
+        setReasons(prev => ({ ...prev, [signalId]: reasonData }));
+      }
     } catch (e) { console.error(e); }
   };
 
