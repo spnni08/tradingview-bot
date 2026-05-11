@@ -13,6 +13,8 @@ const BROKERS = [
   { id: 'kucoin',   name: 'KuCoin',   logo: '🟩', features: ['Futures','Spot','Bot'],      popular: false },
 ];
 
+const WEBHOOK_URL = 'https://tradingview-bot.spnn08.workers.dev/webhook';
+
 const EinstellungenPage = ({ user }) => {
   const [settings, setSettings] = useState({
     broker: 'bybit', apiKey: '', apiSecret: '', testnet: true,
@@ -22,6 +24,7 @@ const EinstellungenPage = ({ user }) => {
   });
   const [saved, setSaved] = useState(false);
   const [showBrokerModal, setShowBrokerModal] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const s = localStorage.getItem('wavescout_settings');
@@ -34,6 +37,13 @@ const EinstellungenPage = ({ user }) => {
     setTimeout(() => setSaved(false), 2500);
   };
 
+  const handleCopyWebhook = () => {
+    navigator.clipboard.writeText(WEBHOOK_URL).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  };
+
   const selectedBroker = BROKERS.find(b => b.id === settings.broker) || BROKERS[0];
 
   return (
@@ -41,6 +51,39 @@ const EinstellungenPage = ({ user }) => {
       <div className="page-header">
         <h2>Einstellungen</h2>
         <p className="subtitle">Trading-Konfiguration &amp; Präferenzen</p>
+      </div>
+
+      {/* Webhook Info */}
+      <div className="card">
+        <div className="card-head">
+          <Icon name="signal" className="ico"/>
+          <h3>TradingView Webhook</h3>
+          <div className="actions"><span className="badge badge-win">LIVE</span></div>
+        </div>
+        <div className="card-body">
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
+            Diese URL in TradingView unter <strong>Alerts → Webhook URL</strong> eintragen.
+            Für SIGNAL-Alerts und SNAPSHOT-Alerts die gleiche URL verwenden.
+          </p>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <div style={{
+              flex: 1, padding: '10px 14px', background: 'var(--bg-0)', border: '1px solid var(--border)',
+              borderRadius: 8, fontFamily: 'var(--font-mono)', fontSize: 13,
+              color: 'var(--text-secondary)', wordBreak: 'break-all'
+            }}>
+              {WEBHOOK_URL}
+            </div>
+            <button className="btn btn-sm" onClick={handleCopyWebhook} style={{ flexShrink: 0 }}>
+              {copied ? <><Icon name="check" size={13}/> Kopiert</> : <><Icon name="save" size={13}/> Kopieren</>}
+            </button>
+          </div>
+          <div style={{ marginTop: 12, padding: '10px 14px', background: 'var(--bg-warning)', borderRadius: 8, border: '1px solid rgba(245,158,11,0.3)', fontSize: 12, color: 'var(--text-secondary)' }}>
+            <strong>Beispiel-Payload (SIGNAL):</strong>
+            <pre style={{ marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 11, whiteSpace: 'pre-wrap', color: 'var(--text-tertiary)' }}>
+{`{"symbol": "BTCUSDT", "event_type": "SIGNAL", "timeframe": "5", "price": {{close}}, "direction": "LONG", "trigger": "EMA_CROSS", "action": "BUY"}`}
+            </pre>
+          </div>
+        </div>
       </div>
 
       {/* Broker */}

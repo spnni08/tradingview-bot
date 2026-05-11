@@ -1,11 +1,18 @@
 // ═══════════════════════════════════════════════════════════════
-// WAVESCOUT v3.4 - DASHBOARD
+// WAVESCOUT v3.5 - DASHBOARD
 // ═══════════════════════════════════════════════════════════════
 
 const DashboardPage = ({ user, navigate }) => {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [data, setData] = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState(null);
+  const [data, setData]           = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [toast, setToast]         = useState(null);
+
+  const showToast = (msg, type = 'info') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3200);
+  };
 
   useEffect(() => {
     const sessionId = localStorage.getItem('wavescout_session');
@@ -28,6 +35,7 @@ const DashboardPage = ({ user, navigate }) => {
       setData(await response.json());
       setError(null);
       setLoading(false);
+      setLastUpdated(new Date());
     } catch (err) {
       setError(err.message);
       setLoading(false);
@@ -35,8 +43,7 @@ const DashboardPage = ({ user, navigate }) => {
   };
 
   const handleExecuteTrade = (signal) => {
-    // Trade execution placeholder — broker API integration needed
-    window.alert(`Trade-Ausführung für ${signal.symbol} ${signal.direction}\nDiese Funktion erfordert Broker-API-Integration.`);
+    showToast(`Trade-Ausführung für ${signal.symbol} ${signal.direction} erfordert Broker-API-Integration.`, 'warn');
   };
 
   const handleSaveToJournal = (signal) => {
@@ -45,7 +52,6 @@ const DashboardPage = ({ user, navigate }) => {
   };
 
   const handleIgnoreSignal = async (signal) => {
-    if (!window.confirm(`Signal ${signal.symbol} ${signal.direction} ignorieren?`)) return;
     const sessionId = localStorage.getItem('wavescout_session');
     try {
       await fetch(`${API_URL}/signals/${signal.id}`, {
@@ -54,6 +60,7 @@ const DashboardPage = ({ user, navigate }) => {
         body: JSON.stringify({ outcome: 'IGNORED' })
       });
       loadLiveData(sessionId);
+      showToast(`Signal ${signal.symbol} ${signal.direction} ignoriert.`, 'info');
     } catch (err) {
       console.error('Ignore error:', err);
     }
@@ -74,12 +81,15 @@ const DashboardPage = ({ user, navigate }) => {
     </div>
   );
 
-  const stats = data?.stats || { totalTrades: 0, wins: 0, losses: 0, open: 0, todayPnL: 0, winRate: 0 };
+  const stats      = data?.stats || {};
   const bestSignal = data?.bestSignal || null;
   const latestSignals = Array.isArray(data?.latestSignals) ? data.latestSignals : [];
-  const marketBias = data?.marketBias || null;
-  const todayPnL = stats.todayPnL ?? 0;
-  const winRate  = stats.winRate  ?? 0;
+  const marketBias    = data?.marketBias || null;
+  const todayPnL   = stats.todayPnL  ?? 0;
+  const totalPnL   = stats.totalPnL  ?? 0;
+  const winRate    = stats.winRate   ?? 0;
+  const equity     = stats.equity    ?? stats.startingCapital ?? 0;
+  const startCap   = stats.startingCapital ?? 10000;
 
   const greeting = (() => {
     const h = new Date().getHours();
@@ -88,13 +98,71 @@ const DashboardPage = ({ user, navigate }) => {
     return 'Abend';
   })();
 
+  const lastUpdStr = lastUpdated
+    ? lastUpdated.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : '–';
+
   return (
     <div className="content page-enter">
+      {/* Toast */}
+      {toast && (
+        <div style={{
+          position: 'fixed', top: 64, right: 20, zIndex: 9999,
+          padding: '12px 18px', borderRadius: 10, fontSize: 13, fontWeight: 500,
+          background: toast.type === 'warn' ? 'var(--bg-warning)' : toast.type === 'error' ? 'var(--bg-error)' : 'var(--bg-success)',
+          border: `1px solid ${toast.type === 'warn' ? 'rgba(245,158,11,.4)' : toast.type === 'error' ? 'rgba(239,68,68,.4)' : 'rgba(16,185,129,.4)'}`,
+          color: toast.type === 'warn' ? 'var(--wait)' : toast.type === 'error' ? 'var(--loss)' : 'var(--win)',
+          boxShadow: '0 4px 16px rgba(0,0,0,.25)',
+          maxWidth: 360,
+          animation: 'fadeIn .2s ease'
+        }}>
+          {toast.msg}
+        </div>
+      )}
+
       <div className="page-header">
         <h2>Guten {greeting}, {user?.username || 'Trader'}</h2>
         <p className="subtitle">
-          {stats.open} offene Signale · {stats.totalTrades} Total Trades · Live-Daten
+          {stats.open} offene Signale · {stats.totalTrades} Total Trades ·
+          {' '}<span style={{ color: 'var(--text-quaternary)' }}>Aktualisiert {lastUpdStr}</span>
         </p>
+      </div>
+
+      {/* Equity Strip */}
+      <div className="card" style={{ marginBottom: 'var(--gap)' }}>
+        <div className="card-body" style={{ padding: '14px 20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 32, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.07em', fontWeight: 600, marginBottom: 3 }}>Portfolio-Wert</div>
+              <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+                ${equity.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
+            <div style={{ width: 1, height: 36, background: 'var(--border)' }}/>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.07em', fontWeight: 600, marginBottom: 3 }}>Gesamt PnL</div>
+              <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--font-mono)', color: totalPnL >= 0 ? 'var(--win)' : 'var(--loss)' }}>
+                {totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}
+              </div>
+            </div>
+            <div style={{ width: 1, height: 36, background: 'var(--border)' }}/>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.07em', fontWeight: 600, marginBottom: 3 }}>Startkapital</div>
+              <div style={{ fontSize: 15, fontWeight: 600, fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>
+                ${startCap.toLocaleString('de-DE')}
+              </div>
+            </div>
+            <div style={{ marginLeft: 'auto' }}>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => { setLoading(false); loadLiveData(localStorage.getItem('wavescout_session')); }}
+                title="Daten aktualisieren"
+              >
+                <Icon name="refresh" size={14}/>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-2" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
@@ -110,8 +178,8 @@ const DashboardPage = ({ user, navigate }) => {
       <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <StatCard
           label="Trades gesamt"
-          value={stats.totalTrades.toString()}
-          sub={`${stats.wins}W · ${stats.losses}L · ${stats.open} offen`}
+          value={(stats.totalTrades || 0).toString()}
+          sub={`${stats.wins || 0}W · ${stats.losses || 0}L · ${stats.open || 0} offen`}
         />
         <StatCard
           label="Win-Rate"
@@ -219,6 +287,11 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
             <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'center', maxWidth: 110 }}>
               {signal.ai_score >= 75 ? 'Sehr starkes Setup' : signal.ai_score >= 65 ? 'Gutes Setup' : 'Moderates Setup'}
             </div>
+            {signal.ai_risk && (
+              <span className={`badge ${signal.ai_risk === 'LOW' ? 'badge-win' : signal.ai_risk === 'HIGH' ? 'badge-loss' : 'badge-wait'}`}>
+                {signal.ai_risk} RISK
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -231,7 +304,9 @@ const MarketBiasCard = ({ marketBias }) => {
     <div className="card">
       <div className="card-head"><Icon name="target" className="ico"/><h3>Markt Bias</h3></div>
       <div className="card-body" style={{ padding: 40, textAlign: 'center' }}>
+        <Icon name="signal" size={32} style={{ opacity: 0.15, marginBottom: 10 }}/>
         <p style={{ color: 'var(--text-tertiary)' }}>Keine Snapshot-Daten</p>
+        <p style={{ fontSize: 12, color: 'var(--text-quaternary)', marginTop: 6 }}>Wird befüllt sobald TradingView SNAPSHOTs sendet</p>
       </div>
     </div>
   );
@@ -250,11 +325,11 @@ const MarketBiasCard = ({ marketBias }) => {
             <div style={{ flex: 1 }}/>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5 }}>
               <span className="mono" style={{ fontSize: 14, fontWeight: 600 }}>
-                ${item.price?.toFixed(2) || 'N/A'}
+                ${item.price != null ? item.price.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'N/A'}
               </span>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <span className={`badge ${item.trend === 'bullish' ? 'badge-bullish' : item.trend === 'bearish' ? 'badge-bearish' : 'badge-neutral'}`}>
-                  {item.trend.toUpperCase()}
+                  {(item.trend || 'neutral').toUpperCase()}
                 </span>
                 {item.change !== 0 && (
                   <span style={{ fontSize: 11, color: item.change > 0 ? 'var(--win)' : 'var(--loss)' }}>
@@ -273,9 +348,11 @@ const MarketBiasCard = ({ marketBias }) => {
 const LatestTradesCard = ({ signals, onViewAll }) => {
   if (!signals || signals.length === 0) return (
     <div className="card">
-      <div className="card-head"><Icon name="signal" className="ico"/><h3>Letzte Trades</h3></div>
+      <div className="card-head"><Icon name="signal" className="ico"/><h3>Letzte Signale</h3></div>
       <div className="card-body" style={{ padding: 40, textAlign: 'center' }}>
+        <Icon name="signal" size={32} style={{ opacity: 0.15, marginBottom: 10 }}/>
         <p style={{ color: 'var(--text-tertiary)' }}>Keine Trades vorhanden</p>
+        <p style={{ fontSize: 12, color: 'var(--text-quaternary)', marginTop: 6 }}>Warten auf TradingView Webhooks…</p>
       </div>
     </div>
   );
@@ -284,35 +361,39 @@ const LatestTradesCard = ({ signals, onViewAll }) => {
     <div className="card">
       <div className="card-head">
         <Icon name="signal" className="ico"/>
-        <h3>Letzte Trades · {signals.length}</h3>
+        <h3>Letzte Signale · {signals.length}</h3>
         <div className="actions">
           <button className="btn btn-sm btn-ghost" onClick={onViewAll}>Alle anzeigen →</button>
         </div>
       </div>
-      <table className="tbl">
-        <thead>
-          <tr>
-            <th>Zeit</th><th>Asset</th><th>Richtung</th>
-            <th>Entry</th><th>Score</th><th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {signals.map((s, i) => (
-            <tr key={i}>
-              <td className="mono muted" style={{ fontSize: 11 }}>{getTimeAgo(s.created_at)}</td>
-              <td><AssetChip symbol={s.symbol}/></td>
-              <td><span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span></td>
-              <td className="mono">${(s.ai_entry || s.price || 0).toFixed(2)}</td>
-              <td className="mono">{s.ai_score || 0}/100</td>
-              <td>
-                <span className={`badge ${s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : 'badge-wait'}`}>
-                  {s.outcome}
-                </span>
-              </td>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>Zeit</th><th>Asset</th><th>Richtung</th>
+              <th>Entry</th><th>TP</th><th>SL</th><th>Score</th><th>Status</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {signals.map((s, i) => (
+              <tr key={i}>
+                <td className="mono muted" style={{ fontSize: 11 }}>{getTimeAgo(s.created_at)}</td>
+                <td><AssetChip symbol={s.symbol}/></td>
+                <td><span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span></td>
+                <td className="mono">${(s.ai_entry || s.price || 0).toFixed(2)}</td>
+                <td className="mono win">{s.ai_tp ? `$${s.ai_tp.toFixed(2)}` : '–'}</td>
+                <td className="mono loss">{s.ai_sl ? `$${s.ai_sl.toFixed(2)}` : '–'}</td>
+                <td className="mono">{s.ai_score || 0}</td>
+                <td>
+                  <span className={`badge ${s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`}>
+                    {s.outcome || 'OPEN'}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 };

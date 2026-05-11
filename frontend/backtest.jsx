@@ -565,8 +565,8 @@ const BacktestPage = ({ user }) => {
             style={{
               background: 'none', border: 'none', padding: '10px 18px', cursor: 'pointer',
               fontSize: 14, fontWeight: activeTab === tab.id ? 600 : 400,
-              color: activeTab === tab.id ? 'var(--accent)' : 'var(--text-secondary)',
-              borderBottom: activeTab === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
+              color: activeTab === tab.id ? 'var(--blue-500)' : 'var(--text-secondary)',
+              borderBottom: activeTab === tab.id ? '2px solid var(--blue-500)' : '2px solid transparent',
               marginBottom: -1, transition: 'all .15s'
             }}
           >
