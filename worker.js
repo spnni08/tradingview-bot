@@ -1045,6 +1045,161 @@ export default {
         return jsonResponse({ success, message: success ? 'Telegram-Nachricht gesendet!' : 'Fehler beim Senden' });
       }
 
+      // Send custom Telegram message
+      if (request.method === "POST" && url.pathname === "/admin/telegram/send") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const { message } = await request.json();
+        if (!message?.trim()) return jsonResponse({ error: 'message erforderlich' }, 400);
+        const success = await sendTelegramMessage(env, message.trim());
+        return jsonResponse({ success, message: success ? 'Gesendet!' : 'Fehler beim Senden' });
+      }
+
+      // System status overview
+      if (request.method === "GET" && url.pathname === "/admin/status") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+
+        let dbOk = false;
+        try { await env.DB.prepare('SELECT 1').first(); dbOk = true; } catch (_) {}
+
+        const tables = ['signals', 'snapshots', 'practice_trades', 'users', 'sessions', 'checklists'];
+        const tableCounts = {};
+        for (const t of tables) {
+          try {
+            const r = await env.DB.prepare(`SELECT COUNT(*) as c FROM ${t}`).first();
+            tableCounts[t] = r?.c ?? 0;
+          } catch (_) { tableCounts[t] = null; }
+        }
+
+        return jsonResponse({
+          db: dbOk,
+          telegram: !!(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID),
+          anthropic: !!env.ANTHROPIC_API_KEY,
+          webhook: !!env.WEBHOOK_SECRET,
+          tables: tableCounts,
+          version: '3.4.0',
+          time: new Date().toISOString()
+        });
+      }
+
+      // Test Anthropic AI connection
+      if (request.method === "POST" && url.pathname === "/admin/test-ai") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+
+        if (!env.ANTHROPIC_API_KEY) {
+          return jsonResponse({ ok: false, error: 'ANTHROPIC_API_KEY ist nicht gesetzt', keySet: false });
+        }
+
+        const t0 = Date.now();
+        try {
+          const res = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': env.ANTHROPIC_API_KEY,
+              'anthropic-version': '2023-06-01'
+            },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-5',
+              max_tokens: 10,
+              messages: [{ role: 'user', content: 'ping' }]
+            })
+          });
+          const data = await res.json();
+          const ms = Date.now() - t0;
+
+          if (data.content) {
+            return jsonResponse({
+              ok: true, keySet: true,
+              latencyMs: ms,
+              model: data.model,
+              inputTokens: data.usage?.input_tokens ?? 0,
+              outputTokens: data.usage?.output_tokens ?? 0
+            });
+          }
+          return jsonResponse({ ok: false, keySet: true, error: data.error?.message || 'Unbekannter Fehler', latencyMs: ms });
+        } catch (e) {
+          return jsonResponse({ ok: false, keySet: true, error: e.message, latencyMs: Date.now() - t0 });
+        }
+      }
+
+      // Webhook tester — inject test SNAPSHOT or SIGNAL
+      if (request.method === "POST" && url.pathname === "/admin/test-webhook") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+
+        const { type } = await request.json();
+        try {
+          if (type === 'SNAPSHOT') {
+            const result = await saveSnapshot(env, {
+              symbol: 'BTCUSDT', event_type: 'SNAPSHOT', timeframe: '5',
+              price: 80000, rsi: 55, ema50: 79800, ema200: 78000,
+              support: 79000, resistance: 81000,
+              trend: 'bullish', trend_1h: 'GREEN', trend_4h: 'GREEN'
+            });
+            return jsonResponse({ ok: true, type: 'SNAPSHOT', result });
+          } else {
+            const result = await processSignal(env, {
+              symbol: 'BTCUSDT', event_type: 'SIGNAL', timeframe: '5',
+              price: 80000, direction: 'LONG', trigger: 'ADMIN_TEST',
+              rsi: 55, ema50: 79800, ema200: 78000, action: 'BUY'
+            });
+            return jsonResponse({ ok: true, type: 'SIGNAL', result });
+          }
+        } catch (e) {
+          return jsonResponse({ ok: false, error: e.message }, 500);
+        }
+      }
+
+      // DB cleanup — remove old snapshots & expired sessions
+      if (request.method === "POST" && url.pathname === "/admin/db-cleanup") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+
+        const results = [];
+
+        try {
+          await env.DB.prepare(`
+            DELETE FROM snapshots WHERE id NOT IN (
+              SELECT id FROM (
+                SELECT id FROM snapshots ORDER BY created_at DESC LIMIT 500
+              )
+            )
+          `).run();
+          results.push('✅ Snapshots: auf 500 gekürzt');
+        } catch (e) { results.push('❌ Snapshots: ' + e.message); }
+
+        try {
+          await env.DB.prepare(`DELETE FROM sessions WHERE expires_at < ?`).bind(Date.now()).run();
+          results.push('✅ Abgelaufene Sessions gelöscht');
+        } catch (e) { results.push('❌ Sessions: ' + e.message); }
+
+        try {
+          await env.DB.prepare(`
+            DELETE FROM practice_trades WHERE status != 'OPEN' AND closed_at < datetime('now', '-90 days')
+          `).run();
+          results.push('✅ Alte Practice Trades (>90 Tage) bereinigt');
+        } catch (e) { results.push('❌ Practice Trades: ' + e.message); }
+
+        return jsonResponse({ ok: true, results });
+      }
+
+      // Active sessions list
+      if (request.method === "GET" && url.pathname === "/admin/sessions") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+
+        try {
+          const rows = await env.DB.prepare(`
+            SELECT id, username, role, created_at, expires_at FROM sessions
+            WHERE expires_at > ? ORDER BY created_at DESC
+          `).bind(Date.now()).all();
+          return jsonResponse(rows.results || []);
+        } catch (_) { return jsonResponse([]); }
+      }
+
       if (request.method === "POST" && url.pathname === "/admin/setup-db") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
