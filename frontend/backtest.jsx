@@ -4,8 +4,6 @@
 
 const BacktestPage = ({ user }) => {
   const [loading, setLoading]           = useState(true);
-  const [history, setHistory]           = useState([]);
-  const [stats, setStats]               = useState(null);
   const [practiceTrades, setPracticeTrades] = useState([]);
   const [practiceStats, setPracticeStats] = useState(null);
   const [showStrategy, setShowStrategy] = useState(false);
@@ -23,15 +21,11 @@ const BacktestPage = ({ user }) => {
 
   const loadData = async (sessionId) => {
     try {
-      const [histRes, statsRes, practiceRes, practiceStatsRes] = await Promise.all([
-        fetch(`${API_URL}/history?limit=200`, { headers: { 'X-Session-ID': sessionId } }),
-        fetch(`${API_URL}/stats`,             { headers: { 'X-Session-ID': sessionId } }),
+      const [practiceRes, practiceStatsRes] = await Promise.all([
         fetch(`${API_URL}/practice-trades`,   { headers: { 'X-Session-ID': sessionId } }),
         fetch(`${API_URL}/practice-trades/stats`, { headers: { 'X-Session-ID': sessionId } })
       ]);
-      if (histRes.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
-      setHistory(histRes.ok ? await histRes.json() : []);
-      setStats(statsRes.ok   ? await statsRes.json() : null);
+      if (practiceRes.status === 401 || practiceStatsRes.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       setPracticeTrades(practiceRes.ok ? await practiceRes.json() : []);
       setPracticeStats(practiceStatsRes.ok ? await practiceStatsRes.json() : null);
     } catch (err) {
