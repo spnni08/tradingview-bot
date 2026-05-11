@@ -397,14 +397,43 @@ async function ensureTables(env) {
       )
     `).run();
 
-    // Migrate signals table for strategy tracking columns
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at INTEGER
+      )
+    `).run();
+
+    // Migrate signals table
     const stratCols = [
-      ['strategy_id',      'TEXT'],
-      ['strategy_name',    'TEXT'],
-      ['strategy_version', 'TEXT'],
+      ['strategy_id',           'TEXT'],
+      ['strategy_name',         'TEXT'],
+      ['strategy_version',      'TEXT'],
+      ['is_test',               'INTEGER DEFAULT 0'],
+      ['telegram_sent',         'INTEGER DEFAULT 0'],
+      ['telegram_reason',       'TEXT'],
+      ['source',                'TEXT'],
+      ['pnl_pct',               'REAL'],
+      ['closed_at',             'INTEGER'],
+      ['outcome_source',        'TEXT'],
+      ['telegram_outcome_sent', 'INTEGER DEFAULT 0'],
+      ['admin_note',            'TEXT'],
+      ['manual_reason',         'TEXT'],
     ];
     for (const [col, type] of stratCols) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); }
+      catch (_) {}
+    }
+
+    // Migrate users table
+    const userCols = [
+      ['skip_password_change', 'INTEGER DEFAULT 0'],
+      ['blocked',              'INTEGER DEFAULT 0'],
+      ['last_seen',            'INTEGER'],
+    ];
+    for (const [col, type] of userCols) {
+      try { await env.DB.prepare(`ALTER TABLE users ADD COLUMN ${col} ${type}`).run(); }
       catch (_) {}
     }
 
@@ -442,6 +471,48 @@ async function initDefaultStrategy(env) {
     console.error('initDefaultStrategy error:', e.message);
     return null;
   }
+}
+
+// ─── Settings helpers ─────────────────────────────────────────
+
+async function getSetting(env, key, defaultValue = null) {
+  try {
+    const row = await env.DB.prepare(`SELECT value FROM settings WHERE key = ?`).bind(key).first();
+    return row ? row.value : defaultValue;
+  } catch (_) { return defaultValue; }
+}
+
+async function setSetting(env, key, value) {
+  try {
+    await env.DB.prepare(`
+      INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).bind(key, String(value), Date.now()).run();
+  } catch (_) {}
+}
+
+// ─── Live price (Binance public API, snapshot fallback) ───────
+
+async function getLivePrice(env, symbol) {
+  try {
+    const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.price) return parseFloat(data.price);
+    }
+  } catch (_) {}
+  const snap = await getSnapshot(env, symbol, '5m');
+  return snap?.price || null;
+}
+
+// ─── Duration formatter ───────────────────────────────────────
+
+function formatDuration(ms) {
+  const totalMin = Math.round(ms / 60000);
+  if (totalMin < 60) return `${totalMin}m`;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -657,6 +728,29 @@ async function processSignal(env, signal) {
   const analysis = await analyzeSignalWithAI(env, signal, strategyConfig);
   const signalId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+  // Determine Telegram notification
+  const isTest       = signal.test === true || signal.is_test === 1;
+  const shouldNotify = isTest || analysis.score >= 55;
+  let telegramSent   = 0;
+  let telegramReason = 'below_threshold';
+
+  if (shouldNotify) {
+    telegramReason = isTest ? 'test_signal' : (analysis.score >= 70 ? 'score_70' : 'score_55');
+    const debugPrefix = (analysis.score < 70 || isTest)
+      ? `🧪 <b>[${isTest ? 'TEST' : 'DEBUG'}]</b>\n` : '';
+    const telegramMessage = debugPrefix + formatSignalForTelegram({
+      ...signal,
+      direction,
+      ai_score:  analysis.score,
+      ai_entry:  analysis.entry,
+      ai_tp:     analysis.tp,
+      ai_sl:     analysis.sl,
+      ai_reason: analysis.reason
+    });
+    const sent = await sendTelegramMessage(env, telegramMessage);
+    if (sent) telegramSent = 1;
+  }
+
   await env.DB.prepare(`
     INSERT INTO signals (
       id, symbol, timeframe, price, direction, action, trigger,
@@ -665,8 +759,9 @@ async function processSignal(env, signal) {
       ai_entry, ai_tp, ai_sl, ai_reason,
       rule_score, rule_reason,
       strategy_id, strategy_name, strategy_version,
+      is_test, source, telegram_sent, telegram_reason,
       created_at, outcome
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     signalId,
     signal.symbol  || 'UNKNOWN',
@@ -696,30 +791,17 @@ async function processSignal(env, signal) {
     strategy?.id      || null,
     strategy?.name    || 'WAVESCOUT Standard',
     strategy?.version || 'v1.0',
+    isTest ? 1 : 0,
+    signal.source || 'WEBHOOK',
+    telegramSent,
+    telegramReason,
     Date.now(),
     'OPEN'
   ).run();
 
   await createPracticeTrade(env, signalId, { ...signal, direction }, analysis);
 
-  // Send Telegram: always for test signals, otherwise score >= 55
-  const shouldNotify = signal.test === true || analysis.score >= 55;
-  if (shouldNotify) {
-    const debugPrefix = (analysis.score < 70 || signal.test)
-      ? `🧪 <b>[${signal.test ? 'TEST' : 'DEBUG'}]</b>\n` : '';
-    const telegramMessage = debugPrefix + formatSignalForTelegram({
-      ...signal,
-      direction,
-      ai_score: analysis.score,
-      ai_entry: analysis.entry,
-      ai_tp:    analysis.tp,
-      ai_sl:    analysis.sl,
-      ai_reason: analysis.reason
-    });
-    await sendTelegramMessage(env, telegramMessage);
-  }
-
-  console.log('✅ Signal processed:', signalId, '| Score:', analysis.score, '| Rec:', analysis.recommendation);
+  console.log('✅ Signal processed:', signalId, '| Score:', analysis.score, '| Rec:', analysis.recommendation, '| Telegram:', telegramSent ? telegramReason : 'no');
   return { status: 'ok', signalId, analysis };
 }
 
@@ -745,10 +827,12 @@ async function login(env, username, password) {
   const now = Date.now();
   const expiresAt = now + 24 * 60 * 60 * 1000;
 
+  const mustChange = user.must_change_password === 1 && user.skip_password_change !== 1;
+
   await env.DB.prepare(`
     INSERT INTO sessions (id, user_id, username, role, must_change_password, created_at, expires_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).bind(sessionId, user.id, user.username, user.role, user.must_change_password, now, expiresAt).run();
+  `).bind(sessionId, user.id, user.username, user.role, mustChange ? 1 : 0, now, expiresAt).run();
 
   try {
     await env.DB.prepare(`UPDATE users SET last_seen = ? WHERE id = ?`).bind(now, user.id).run();
@@ -761,14 +845,14 @@ async function login(env, username, password) {
       userId: user.id,
       username: user.username,
       role: user.role,
-      mustChangePassword: user.must_change_password === 1
+      mustChangePassword: mustChange
     },
     user: {
       id: user.id,
       username: user.username,
       email: user.email,
       role: user.role,
-      mustChangePassword: user.must_change_password === 1
+      mustChangePassword: mustChange
     }
   };
 }
@@ -1009,34 +1093,54 @@ async function evaluateOpenTrades(env) {
     `).all();
 
     for (const signal of (open.results || [])) {
-      const snap = await getSnapshot(env, signal.symbol, '5m');
-      if (!snap?.price) continue;
+      const price = await getLivePrice(env, signal.symbol);
+      if (!price) continue;
 
-      const price = snap.price;
       const isLong = signal.direction === 'LONG';
       let outcome = null;
+      let hitLevel = null;
 
       if (isLong) {
-        if (price >= signal.ai_tp) outcome = 'WIN';
-        else if (price <= signal.ai_sl) outcome = 'LOSS';
+        if (price >= signal.ai_tp) { outcome = 'WIN';  hitLevel = signal.ai_tp; }
+        else if (price <= signal.ai_sl) { outcome = 'LOSS'; hitLevel = signal.ai_sl; }
       } else {
-        if (price <= signal.ai_tp) outcome = 'WIN';
-        else if (price >= signal.ai_sl) outcome = 'LOSS';
+        if (price <= signal.ai_tp) { outcome = 'WIN';  hitLevel = signal.ai_tp; }
+        else if (price >= signal.ai_sl) { outcome = 'LOSS'; hitLevel = signal.ai_sl; }
       }
 
       if (outcome) {
-        await env.DB.prepare(
-          `UPDATE signals SET outcome = ?, exit_price = ?, updated_at = ? WHERE id = ?`
-        ).bind(outcome, price, Date.now(), signal.id).run();
+        const exitPrice = hitLevel || price;
+        const entry     = signal.ai_entry || price;
+        const pnlPct    = isLong
+          ? ((exitPrice - entry) / entry) * 100
+          : ((entry - exitPrice) / entry) * 100;
+        const duration  = formatDuration(Date.now() - (signal.created_at || Date.now()));
+        const now       = Date.now();
 
-        const emoji = outcome === 'WIN' ? '✅' : '❌';
+        await env.DB.prepare(`
+          UPDATE signals SET
+            outcome = ?, exit_price = ?, pnl_pct = ?,
+            closed_at = ?, outcome_source = 'auto',
+            telegram_outcome_sent = 1, updated_at = ?
+          WHERE id = ?
+        `).bind(outcome, exitPrice, parseFloat(pnlPct.toFixed(2)), now, now, signal.id).run();
+
+        const isWin     = outcome === 'WIN';
+        const hitEmoji  = isWin ? '🎯' : '🛑';
+        const hitLabel  = isWin ? 'TP HIT' : 'SL HIT';
+        const pnlSign   = pnlPct >= 0 ? '+' : '';
+        const tpLine    = isWin
+          ? `TP: $${signal.ai_tp?.toFixed(2)}`
+          : `SL: $${signal.ai_sl?.toFixed(2)}`;
+
         await sendTelegramMessage(env,
-          `${emoji} <b>Trade geschlossen</b>\n\n` +
-          `${signal.direction === 'LONG' ? '🟢' : '🔴'} ${signal.symbol} ${signal.direction}\n` +
-          `📊 Ergebnis: <b>${outcome}</b>\n` +
-          `💰 Exit: $${price.toFixed(2)}\n` +
-          `📈 Entry war: $${signal.ai_entry?.toFixed(2) || '?'}`
+          `${hitEmoji} <b>${hitLabel} — ${signal.symbol} ${signal.direction}</b>\n` +
+          `Ergebnis: <b>${outcome}</b>\n\n` +
+          `Entry: $${entry.toFixed(2)} · ${tpLine} · Exit: $${exitPrice.toFixed(2)}\n` +
+          `PnL: <b>${pnlSign}${pnlPct.toFixed(2)}%</b> · Dauer: ${duration}`
         );
+
+        console.log(`📊 Signal ${signal.id} closed: ${outcome} | PnL: ${pnlPct.toFixed(2)}% | ${duration}`);
       }
     }
     console.log('✅ evaluateOpenTrades done');
@@ -1205,23 +1309,54 @@ export default {
 
       // ── SIGNALS PATCH ────────────────────────────────────────
 
-      if (request.method === "PATCH" && url.pathname.startsWith("/signals/")) {
+      if (request.method === "PATCH" && url.pathname.startsWith("/signals/") && !url.pathname.includes("/loss-reason")) {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
         const signalId = url.pathname.replace("/signals/", "");
-        const { outcome, exitPrice } = await request.json();
+        const body = await request.json();
+        const { outcome, exitPrice, adminNote, manualReason, closedAt, outcomeSource } = body;
 
-        const allowed = ['WIN', 'LOSS', 'BE', 'OPEN', 'IGNORED'];
+        const allowed = ['WIN', 'LOSS', 'BE', 'OPEN', 'SKIPPED', 'IGNORED'];
         if (outcome && !allowed.includes(outcome)) return jsonResponse({ error: "Ungültiges outcome" }, 400);
 
+        // For pnl_pct calc, fetch existing signal
+        let pnlPct = undefined;
+        const ep = exitPrice !== undefined ? parseFloat(exitPrice) : null;
+        if (ep !== null) {
+          try {
+            const sig = await env.DB.prepare(`SELECT ai_entry, direction FROM signals WHERE id = ?`).bind(signalId).first();
+            if (sig?.ai_entry) {
+              pnlPct = sig.direction === 'LONG'
+                ? ((ep - sig.ai_entry) / sig.ai_entry) * 100
+                : ((sig.ai_entry - ep) / sig.ai_entry) * 100;
+              pnlPct = parseFloat(pnlPct.toFixed(2));
+            }
+          } catch (_) {}
+        }
+
         const sets = [], binds = [];
-        if (outcome)              { sets.push("outcome = ?");    binds.push(outcome); }
-        if (exitPrice !== undefined) { sets.push("exit_price = ?"); binds.push(exitPrice); }
+        if (outcome)                 { sets.push("outcome = ?");        binds.push(outcome); }
+        if (ep !== null)             { sets.push("exit_price = ?");     binds.push(ep); }
+        if (pnlPct !== undefined)    { sets.push("pnl_pct = ?");        binds.push(pnlPct); }
+        if (adminNote !== undefined) { sets.push("admin_note = ?");     binds.push(adminNote); }
+        if (manualReason !== undefined) { sets.push("manual_reason = ?"); binds.push(manualReason); }
+        if (closedAt !== undefined)  { sets.push("closed_at = ?");      binds.push(closedAt); }
+        if (outcomeSource !== undefined) { sets.push("outcome_source = ?"); binds.push(outcomeSource); }
+        else if (outcome && session.role === 'admin') { sets.push("outcome_source = ?"); binds.push('manual'); }
         sets.push("updated_at = ?"); binds.push(Date.now());
         binds.push(signalId);
 
         await env.DB.prepare(`UPDATE signals SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
+        return jsonResponse({ success: true, pnlPct });
+      }
+
+      if (request.method === "DELETE" && url.pathname.startsWith("/signals/") && !url.pathname.includes("/loss-reason")) {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const signalId = url.pathname.replace("/signals/", "");
+        await env.DB.prepare(`DELETE FROM signals WHERE id = ?`).bind(signalId).run();
+        await env.DB.prepare(`DELETE FROM signal_loss_reasons WHERE signal_id = ?`).bind(signalId).run();
         return jsonResponse({ success: true });
       }
 
@@ -1282,7 +1417,7 @@ export default {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
-        const { username, email, password, role } = await request.json();
+        const { username, email, password, role, skipPasswordChange } = await request.json();
         if (!username || !email || !password) return jsonResponse({ error: "Fehlende Felder: username, email, password" }, 400);
 
         const existing = await env.DB.prepare(`SELECT id FROM users WHERE username = ? OR email = ?`)
@@ -1292,9 +1427,9 @@ export default {
         const id = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const now = Date.now();
         await env.DB.prepare(`
-          INSERT INTO users (id, username, email, password_hash, role, must_change_password, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, 0, ?, ?)
-        `).bind(id, username, email, hashPassword(password), role || 'user', now, now).run();
+          INSERT INTO users (id, username, email, password_hash, role, must_change_password, skip_password_change, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+        `).bind(id, username, email, hashPassword(password), role || 'user', skipPasswordChange ? 1 : 0, now, now).run();
         return jsonResponse({ success: true, id });
       }
 
@@ -1526,15 +1661,34 @@ export default {
           catch (_) { results.push(`signals.${col}: already exists`); }
         }
 
-        // Strategy tracking columns
+        // Strategy + Phase-2 signal columns
         const stratCols = [
-          ['strategy_id',      'TEXT'],
-          ['strategy_name',    'TEXT'],
-          ['strategy_version', 'TEXT'],
+          ['strategy_id',           'TEXT'],
+          ['strategy_name',         'TEXT'],
+          ['strategy_version',      'TEXT'],
+          ['is_test',               'INTEGER DEFAULT 0'],
+          ['telegram_sent',         'INTEGER DEFAULT 0'],
+          ['telegram_reason',       'TEXT'],
+          ['source',                'TEXT'],
+          ['pnl_pct',               'REAL'],
+          ['closed_at',             'INTEGER'],
+          ['outcome_source',        'TEXT'],
+          ['telegram_outcome_sent', 'INTEGER DEFAULT 0'],
+          ['admin_note',            'TEXT'],
+          ['manual_reason',         'TEXT'],
         ];
         for (const [col, type] of stratCols) {
           try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); results.push(`signals.${col}: added`); }
           catch (_) { results.push(`signals.${col}: already exists`); }
+        }
+
+        // User Phase-2 columns
+        const userP2Cols = [
+          ['skip_password_change', 'INTEGER DEFAULT 0'],
+        ];
+        for (const [col, type] of userP2Cols) {
+          try { await env.DB.prepare(`ALTER TABLE users ADD COLUMN ${col} ${type}`).run(); results.push(`users.${col}: added`); }
+          catch (_) { results.push(`users.${col}: already exists`); }
         }
 
         // Ensure default strategy exists
@@ -1542,6 +1696,74 @@ export default {
         results.push('strategies: default initialised');
 
         return jsonResponse({ success: true, results });
+      }
+
+      // ── ADMIN DATA MANAGEMENT ───────────────────────────────
+
+      if (request.method === "POST" && url.pathname === "/admin/delete-signals") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+
+        const { type } = await request.json();
+        let query = null;
+        if      (type === 'test')     query = `DELETE FROM signals WHERE is_test = 1`;
+        else if (type === 'wait')     query = `DELETE FROM signals WHERE ai_recommendation = 'WAIT'`;
+        else if (type === 'skipped')  query = `DELETE FROM signals WHERE outcome = 'SKIPPED'`;
+        else if (type === 'practice') {
+          await env.DB.prepare(`DELETE FROM practice_trades`).run();
+          return jsonResponse({ success: true, type: 'practice', deleted: true });
+        }
+        else if (type === 'all') {
+          await env.DB.prepare(`DELETE FROM signals`).run();
+          await env.DB.prepare(`DELETE FROM signal_loss_reasons`).run();
+          await env.DB.prepare(`DELETE FROM practice_trades`).run();
+          return jsonResponse({ success: true, type: 'all', deleted: true });
+        }
+        else return jsonResponse({ error: 'Ungültiger type (test|wait|skipped|practice|all)' }, 400);
+
+        const info = await env.DB.prepare(query).run();
+        return jsonResponse({ success: true, type, deleted: info.meta?.changes ?? 0 });
+      }
+
+      if (request.method === "POST" && url.pathname === "/admin/live-start") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+
+        const { deleteTestSignals } = await request.json();
+        await ensureTables(env);
+        await setSetting(env, 'mode', 'live');
+        await setSetting(env, 'live_started_at', String(Date.now()));
+
+        let deletedSignals = 0;
+        if (deleteTestSignals) {
+          const info = await env.DB.prepare(`DELETE FROM signals WHERE is_test = 1`).run();
+          deletedSignals = info.meta?.changes ?? 0;
+          await env.DB.prepare(`DELETE FROM practice_trades WHERE signal_id IN (SELECT id FROM signals WHERE is_test = 1)`).run();
+        }
+        return jsonResponse({ success: true, mode: 'live', liveStartedAt: Date.now(), deletedSignals });
+      }
+
+      if (request.method === "GET" && url.pathname === "/admin/settings") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        await ensureTables(env);
+        try {
+          const rows = await env.DB.prepare(`SELECT key, value, updated_at FROM settings ORDER BY key`).all();
+          const obj = {};
+          for (const r of (rows.results || [])) obj[r.key] = r.value;
+          return jsonResponse(obj);
+        } catch (_) { return jsonResponse({}); }
+      }
+
+      if (request.method === "POST" && url.pathname === "/admin/settings") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        await ensureTables(env);
+        const body = await request.json();
+        for (const [key, value] of Object.entries(body)) {
+          await setSetting(env, key, value);
+        }
+        return jsonResponse({ success: true });
       }
 
       // ── STRATEGIES ──────────────────────────────────────────
