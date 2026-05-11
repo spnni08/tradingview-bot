@@ -610,6 +610,222 @@ function SessionsCard() {
   );
 }
 
+// ─── Section: Data Cleanup & Live Mode ───────────────────────
+
+function DataCleanupCard({ onRefresh }) {
+  const [mode, setMode]           = useState(null);
+  const [liveStartedAt, setLiveStartedAt] = useState(null);
+  const [loading, setLoading]     = useState(false);
+  const [result, setResult]       = useState(null);
+  const [resetKeyword, setResetKeyword] = useState('');
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showLiveConfirm, setShowLiveConfirm] = useState(false);
+  const [deleteTestOnLive, setDeleteTestOnLive] = useState(true);
+  const { show: showToast, ToastEl } = useAdminToast();
+
+  useEffect(() => { loadSettings(); }, []);
+
+  const loadSettings = async () => {
+    try {
+      const res = await fetch(`${API_URL}/admin/settings`, { headers: { 'X-Session-ID': sid() } });
+      if (res.ok) {
+        const data = await res.json();
+        setMode(data.mode || 'test');
+        setLiveStartedAt(data.live_started_at ? parseInt(data.live_started_at) : null);
+      }
+    } catch (_) {}
+  };
+
+  const handleDelete = async (type, label) => {
+    setLoading(true); setResult(null);
+    try {
+      const res = await fetch(`${API_URL}/admin/delete-signals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        body: JSON.stringify({ type })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`${label} gelöscht (${data.deleted ?? '✓'})`);
+        if (onRefresh) onRefresh();
+      } else {
+        showToast(data.error || 'Fehler', 'err');
+      }
+    } catch (e) { showToast(e.message, 'err'); }
+    finally { setLoading(false); }
+  };
+
+  const handleResetAll = async () => {
+    if (resetKeyword !== 'RESET') return;
+    setShowResetConfirm(false);
+    setResetKeyword('');
+    await handleDelete('all', 'Alle Signale');
+  };
+
+  const handleLiveStart = async () => {
+    setShowLiveConfirm(false);
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/admin/live-start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        body: JSON.stringify({ deleteTestSignals: deleteTestOnLive })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setMode('live');
+        setLiveStartedAt(data.liveStartedAt);
+        showToast(`Live-Modus gestartet${data.deletedSignals ? ` · ${data.deletedSignals} Test-Signale gelöscht` : ''}`);
+        if (onRefresh) onRefresh();
+      } else {
+        showToast(data.error || 'Fehler', 'err');
+      }
+    } catch (e) { showToast(e.message, 'err'); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="card">
+      {ToastEl}
+      <div className="card-head">
+        <Icon name="trash" className="ico" style={{ color: 'var(--loss)' }}/>
+        <h3>Daten-Bereinigung & Live-Start</h3>
+        <div className="actions">
+          <span className={`badge ${mode === 'live' ? 'badge-win' : 'badge-wait'}`}>
+            {mode === 'live' ? 'LIVE' : 'TEST'}
+          </span>
+        </div>
+      </div>
+      <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+        {/* Mode status */}
+        {mode === 'live' && liveStartedAt && (
+          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(16,185,129,.08)', border: '1px solid rgba(16,185,129,.2)', fontSize: 13, color: 'var(--win)' }}>
+            Live-Modus aktiv seit {new Date(liveStartedAt).toLocaleString('de-DE')}
+          </div>
+        )}
+
+        {/* Partial deletes */}
+        <div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 12 }}>SIGNALE SELEKTIV LÖSCHEN</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--text-secondary)' }} onClick={() => handleDelete('test', 'Test-Signale')} disabled={loading}>
+              🧪 Test-Signale löschen
+            </button>
+            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--text-secondary)' }} onClick={() => handleDelete('wait', 'WAIT-Signale')} disabled={loading}>
+              ⏳ WAIT-Signale löschen
+            </button>
+            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--text-secondary)' }} onClick={() => handleDelete('skipped', 'SKIPPED-Signale')} disabled={loading}>
+              ⏭ SKIPPED löschen
+            </button>
+            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--text-secondary)' }} onClick={() => handleDelete('practice', 'Practice Trades')} disabled={loading}>
+              📝 Practice Trades löschen
+            </button>
+          </div>
+        </div>
+
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 20, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+
+          {/* RESET ALL */}
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 8 }}>CLEAN START</div>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
+              Löscht <strong>alle Signale</strong>, Loss-Gründe und Practice Trades unwiderruflich.
+            </p>
+            <button
+              className="btn btn-sm"
+              style={{ color: 'var(--loss)', borderColor: 'rgba(239,68,68,.4)' }}
+              onClick={() => setShowResetConfirm(true)}
+              disabled={loading}
+            >
+              💥 Alles löschen (RESET)
+            </button>
+          </div>
+
+          {/* LIVE START */}
+          {mode !== 'live' && (
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 8 }}>LIVE-MODUS STARTEN</div>
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
+                Schaltet von Test- auf Live-Betrieb um. Setzt <code style={{ fontSize: 11 }}>mode=live</code> und speichert den Startzeitpunkt.
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <input
+                  type="checkbox"
+                  id="delTestOnLive"
+                  checked={deleteTestOnLive}
+                  onChange={e => setDeleteTestOnLive(e.target.checked)}
+                />
+                <label htmlFor="delTestOnLive" style={{ fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                  Test-Signale dabei löschen
+                </label>
+              </div>
+              <button
+                className="btn btn-sm"
+                style={{ color: 'var(--win)', borderColor: 'rgba(16,185,129,.4)' }}
+                onClick={() => setShowLiveConfirm(true)}
+                disabled={loading}
+              >
+                🚀 Live-Modus starten
+              </button>
+            </div>
+          )}
+        </div>
+
+      </div>
+
+      {/* RESET confirm modal */}
+      {showResetConfirm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }} onClick={() => { setShowResetConfirm(false); setResetKeyword(''); }}>
+          <div style={{ background: 'var(--bg-1)', borderRadius: 14, padding: 28, maxWidth: 420, width: '90%', border: '1px solid rgba(239,68,68,.4)' }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ color: 'var(--loss)', marginBottom: 8 }}>⚠️ Kompletter Reset</h3>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 16 }}>
+              Diese Aktion löscht <strong>alle Signale, Loss-Gründe und Practice Trades</strong> unwiderruflich. Tippe <strong>RESET</strong> zum Bestätigen.
+            </p>
+            <input
+              className="input"
+              style={{ width: '100%', marginBottom: 14, borderColor: 'rgba(239,68,68,.4)' }}
+              placeholder="RESET eingeben"
+              value={resetKeyword}
+              onChange={e => setResetKeyword(e.target.value)}
+              autoFocus
+            />
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button
+                className="btn btn-sm"
+                style={{ color: 'var(--loss)', borderColor: 'rgba(239,68,68,.4)', opacity: resetKeyword === 'RESET' ? 1 : 0.4 }}
+                onClick={handleResetAll}
+                disabled={resetKeyword !== 'RESET'}
+              >
+                Alles löschen
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => { setShowResetConfirm(false); setResetKeyword(''); }}>Abbrechen</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Live start confirm modal */}
+      {showLiveConfirm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }} onClick={() => setShowLiveConfirm(false)}>
+          <div style={{ background: 'var(--bg-1)', borderRadius: 14, padding: 28, maxWidth: 380, width: '90%', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ color: 'var(--win)', marginBottom: 8 }}>🚀 Live-Modus starten?</h3>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 20 }}>
+              {deleteTestOnLive
+                ? 'Wechselt zu Live-Betrieb und löscht alle Test-Signale. Kann nicht rückgängig gemacht werden.'
+                : 'Wechselt zu Live-Betrieb. Test-Signale bleiben erhalten.'}
+            </p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn btn-primary btn-sm" style={{ flex: 1 }} onClick={handleLiveStart}>Bestätigen</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowLiveConfirm(false)}>Abbrechen</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Toast ───────────────────────────────────────────────────
 
 function useAdminToast() {
@@ -795,6 +1011,9 @@ const AdminPage = ({ user }) => {
       {/* DB Maintenance */}
       <DBMaintenanceCard onStatusRefresh={loadAll}/>
 
+      {/* Data Cleanup & Live Mode */}
+      <DataCleanupCard onRefresh={loadAll}/>
+
       {/* Active Sessions */}
       <SessionsCard/>
 
@@ -898,7 +1117,7 @@ const AdminPage = ({ user }) => {
 // ─── Create User Modal ───────────────────────────────────────
 
 const CreateUserModal = ({ onClose, onCreate }) => {
-  const [formData, setFormData] = useState({ username: '', email: '', password: '', role: 'user' });
+  const [formData, setFormData] = useState({ username: '', email: '', password: '', role: 'user', skipPasswordChange: false });
   const [err, setErr] = useState('');
 
   const handleSubmit = (e) => {
@@ -929,12 +1148,23 @@ const CreateUserModal = ({ onClose, onCreate }) => {
               <input type={type} value={formData[key]} onChange={e => setFormData({ ...formData, [key]: e.target.value })} placeholder={placeholder} className="input" style={{ width: '100%' }}/>
             </div>
           ))}
-          <div style={{ marginBottom: 20 }}>
+          <div style={{ marginBottom: 14 }}>
             <label style={{ display: 'block', marginBottom: 6, fontSize: 13 }}>Rolle</label>
             <select value={formData.role} onChange={e => setFormData({ ...formData, role: e.target.value })} className="input" style={{ width: '100%' }}>
               <option value="user">User</option>
               <option value="admin">Admin</option>
             </select>
+          </div>
+          <div style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <input
+              type="checkbox"
+              id="skipPwChange"
+              checked={formData.skipPasswordChange}
+              onChange={e => setFormData({ ...formData, skipPasswordChange: e.target.checked })}
+            />
+            <label htmlFor="skipPwChange" style={{ fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+              Passwortänderung beim ersten Login überspringen
+            </label>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Erstellen</button>
