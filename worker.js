@@ -495,13 +495,22 @@ async function ensureTables(env) {
     // Migrate snapshots table (compat with unique symbol snapshots)
     const snapshotCols = [
       ['timeframe',  'TEXT'],
+      ['price',      'REAL'],
+      ['rsi',        'REAL'],
+      ['ema50',      'REAL'],
+      ['ema200',     'REAL'],
+      ['support',    'REAL'],
+      ['resistance', 'REAL'],
+      ['trend',      'TEXT'],
+      ['trend_1h',   'TEXT'],
+      ['trend_4h',   'TEXT'],
       ['direction',  'TEXT'],
       ['trigger',    'TEXT'],
       ['strength',   'TEXT'],
-      ['timestamp',  'INTEGER'],
+      ['timestamp',  'TEXT'],
       ['raw_signal', 'TEXT'],
-      ['created_at', 'INTEGER'],
-      ['updated_at', 'INTEGER'],
+      ['created_at', 'TEXT'],
+      ['updated_at', 'TEXT'],
     ];
     for (const [col, type] of snapshotCols) {
       try { await env.DB.prepare(`ALTER TABLE snapshots ADD COLUMN ${col} ${type}`).run(); }
@@ -594,7 +603,7 @@ async function saveSnapshot(env, data) {
   console.log('📸 Saving snapshot:', data.symbol, data.timeframe, 'price:', data.price);
 
   await ensureTables(env);
-  const now = Date.now();
+  const nowIso = new Date().toISOString();
   const symbol = data.symbol || 'UNKNOWN';
   const rawSignal = JSON.stringify(data);
 
@@ -652,10 +661,10 @@ async function saveSnapshot(env, data) {
     data.direction || null,
     data.trigger || null,
     data.strength || null,
-    data.timestamp || now,
+    data.timestamp || nowIso,
     rawSignal,
-    now,
-    now
+    nowIso,
+    nowIso
   ).run();
 
   if (data.price && data.symbol) {
@@ -1039,7 +1048,7 @@ async function getMarketRadar(env, session = null) {
 
   if (freshCache.results?.length) {
     const events = freshCache.results.map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
-    return withDebug({ status: computeRadarStatus(events), updated_at: now, summary: "BTC/Krypto-Markt mit erhöhter Event-Aktivität.", events, disclaimer: RADAR_DISCLAIMER, source: 'CACHE' });
+    return withDebug({ success: true, source: 'cache', errors: [], status: computeRadarStatus(events), updated_at: now, updatedAt: new Date(now).toISOString(), summary: "BTC/Krypto-Markt mit erhöhter Event-Aktivität.", events, disclaimer: RADAR_DISCLAIMER });
   }
 
   const feedArrays = await Promise.all(MARKET_RADAR_FEEDS.map(async (feed) => {
@@ -1087,8 +1096,12 @@ async function getMarketRadar(env, session = null) {
   ).bind(MARKET_RADAR_MAX_EVENTS).all()).results.map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
 
   return withDebug({
+    success: true,
+    source: 'rss',
+    errors: [],
     status: computeRadarStatus(outputEvents),
     updated_at: now,
+    updatedAt: new Date(now).toISOString(),
     summary: outputEvents.length ? "BTC/Krypto-Markt mit erhöhter Event-Aktivität." : "Keine relevanten Markt-Events gefunden.",
     events: outputEvents,
     disclaimer: RADAR_DISCLAIMER
@@ -1097,8 +1110,12 @@ async function getMarketRadar(env, session = null) {
     console.error('❌ market-radar error:', error?.message || error);
     debug.error_message = String(error?.message || error || 'market-radar failed');
     return withDebug({
+      success: true,
+      source: 'partial',
+      errors: [debug.error_message],
       status: 'NORMAL',
       updated_at: now,
+      updatedAt: new Date(now).toISOString(),
       summary: 'Radar-Daten aktuell nicht verfügbar. Letzte Daten konnten nicht geladen werden.',
       events: [],
       disclaimer: RADAR_DISCLAIMER
@@ -1665,6 +1682,22 @@ export default {
         await env.DB.prepare(`DELETE FROM signals WHERE id = ?`).bind(signalId).run();
         await env.DB.prepare(`DELETE FROM signal_loss_reasons WHERE signal_id = ?`).bind(signalId).run();
         return jsonResponse({ success: true });
+      }
+
+      if (request.method === "PATCH" && url.pathname.startsWith("/practice-trades/")) {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const tradeId = url.pathname.replace("/practice-trades/", "");
+        const { status, exitPrice } = await request.json();
+        const allowed = ['WIN', 'LOSS', 'BE', 'OPEN', 'IGNORED'];
+        if (!status || !allowed.includes(status)) return jsonResponse({ error: "Ungültiger status" }, 400);
+        const now = new Date().toISOString();
+        await env.DB.prepare(`
+          UPDATE practice_trades
+          SET status = ?, exit_price = COALESCE(?, exit_price), closed_at = CASE WHEN ? IN ('WIN','LOSS','BE','IGNORED') THEN ? ELSE closed_at END
+          WHERE id = ?
+        `).bind(status, exitPrice ?? null, status, now, tradeId).run();
+        return jsonResponse({ success: true, id: tradeId, status });
       }
 
       // ── PRACTICE TRADES ─────────────────────────────────────
