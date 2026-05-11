@@ -1002,6 +1002,130 @@ function SuggestionsTab({ sessionId }) {
   );
 }
 
+// ─── Bias Stats Tab ────────────────────────────────────────────
+
+function BiasStatsTab({ sessionId }) {
+  const [stats,   setStats]   = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [filter,  setFilter]  = useState({ strategy: '', direction: '' });
+
+  useEffect(() => { load(); }, []);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (filter.strategy)  params.set('strategy', filter.strategy);
+      if (filter.direction) params.set('direction', filter.direction);
+      const res = await fetch(`${API_URL}/bias-stats?${params}`, { headers: { 'X-Session-ID': sessionId } });
+      if (res.ok) setStats(await res.json());
+    } catch (e) { console.error(e); } finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, [filter.strategy, filter.direction]);
+
+  if (loading) return <div style={{ textAlign: 'center', padding: 60 }}><div className="spinner-lg" style={{ margin: '0 auto 16px' }}/>Lade Bias-Statistiken…</div>;
+
+  if (!stats) return <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}>Keine Daten verfügbar</div>;
+
+  const pct = (a, b) => b > 0 ? ((a / b) * 100).toFixed(1) : '0.0';
+
+  const StatBox = ({ label, value, sub, color }) => (
+    <div style={{ background: 'var(--bg-1)', borderRadius: 10, padding: '14px 18px', border: '1px solid var(--border)' }}>
+      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 5 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'var(--font-mono)', color: color || 'var(--text-primary)' }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
+
+  const BiasBlock = ({ title, data, accentColor }) => {
+    if (!data) return null;
+    const wr = pct(data.wins, data.total);
+    return (
+      <div className="card">
+        <div className="card-head">
+          <span style={{ width: 10, height: 10, borderRadius: '50%', background: accentColor, display: 'inline-block', flexShrink: 0 }}/>
+          <h3 style={{ color: accentColor }}>{title}</h3>
+          <span className="badge badge-tag" style={{ marginLeft: 'auto' }}>{data.total} Trades</span>
+        </div>
+        <div className="card-body">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 12 }}>
+            <StatBox label="Win-Rate" value={`${wr}%`} color={parseFloat(wr) >= 50 ? 'var(--win)' : 'var(--loss)'}/>
+            <StatBox label="Wins" value={data.wins} color="var(--win)"/>
+            <StatBox label="Losses" value={data.losses} color="var(--loss)"/>
+            <StatBox label="Ø Score" value={data.avg_score != null ? data.avg_score.toFixed(1) : '–'}/>
+          </div>
+          {data.strategies && data.strategies.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 10 }}>STRATEGIE-AUFSCHLÜSSELUNG</div>
+              <div style={{ overflowX: 'auto' }}>
+                <table className="tbl">
+                  <thead>
+                    <tr><th>Strategie</th><th>Total</th><th>Wins</th><th>Losses</th><th>Win-Rate</th><th>Ø Score</th></tr>
+                  </thead>
+                  <tbody>
+                    {data.strategies.map((s, i) => (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 500 }}>{s.strategy_name || '–'}</td>
+                        <td className="mono">{s.total}</td>
+                        <td className="mono win">{s.wins}</td>
+                        <td className="mono loss">{s.losses}</td>
+                        <td className="mono" style={{ color: parseFloat(pct(s.wins, s.total)) >= 50 ? 'var(--win)' : 'var(--loss)' }}>
+                          {pct(s.wins, s.total)}%
+                        </td>
+                        <td className="mono">{s.avg_score != null ? s.avg_score.toFixed(1) : '–'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Filters */}
+      <div className="card">
+        <div className="card-body" style={{ padding: '12px 20px' }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 600 }}>Filter:</span>
+            <select value={filter.direction} onChange={e => setFilter(f => ({ ...f, direction: e.target.value }))} className="input" style={{ width: 'auto', minWidth: 140 }}>
+              <option value="">Alle Richtungen</option>
+              <option value="LONG">LONG</option>
+              <option value="SHORT">SHORT</option>
+            </select>
+            <button className="btn btn-ghost btn-sm" onClick={() => setFilter({ strategy: '', direction: '' })}>Zurücksetzen</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Overview */}
+      {stats.overview && (
+        <div className="card">
+          <div className="card-head"><Icon name="chart" className="ico"/><h3>Gesamtübersicht</h3></div>
+          <div className="card-body">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 12 }}>
+              <StatBox label="Gesamt" value={stats.overview.total}/>
+              <StatBox label="Win-Rate" value={`${pct(stats.overview.wins, stats.overview.total)}%`} color={parseFloat(pct(stats.overview.wins, stats.overview.total)) >= 50 ? 'var(--win)' : 'var(--loss)'}/>
+              <StatBox label="Mit Bias" value={stats.overview.with_bias || 0} sub="Morgenroutine gemacht"/>
+              <StatBox label="Ohne Bias" value={stats.overview.without_bias || 0} sub="Vor Morgenroutine"/>
+              <StatBox label="Bias-Match" value={stats.overview.bias_match || 0} sub="Richtung passte"/>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <BiasBlock title="Mit Bias (Morgenroutine abgeschlossen)" data={stats.with_bias} accentColor="var(--win)"/>
+      <BiasBlock title="Ohne Bias (vor Morgenroutine)" data={stats.without_bias} accentColor="var(--wait)"/>
+      <BiasBlock title="Bias-Match (Richtung entsprach Tages-Bias)" data={stats.bias_match} accentColor="var(--blue-400)"/>
+    </div>
+  );
+}
+
 // ─── Main Page ─────────────────────────────────────────────────
 
 const BacktestPage = ({ user }) => {
@@ -1015,6 +1139,7 @@ const BacktestPage = ({ user }) => {
     { id: 'strategy',    label: 'Strategie-Labor'     },
     { id: 'compare',     label: 'Strategie-Vergleich' },
     { id: 'loss',        label: 'Loss-Analyse'        },
+    { id: 'biasstats',   label: 'Bias-Statistiken'    },
     { id: 'suggestions', label: 'Vorschläge'          },
   ];
 
@@ -1044,6 +1169,7 @@ const BacktestPage = ({ user }) => {
       {activeTab === 'strategy'    && <StrategyLabTab     sessionId={sessionId} userRole={userRole}/>}
       {activeTab === 'compare'     && <StrategyCompareTab sessionId={sessionId}/>}
       {activeTab === 'loss'        && <LossAnalysisTab    sessionId={sessionId}/>}
+      {activeTab === 'biasstats'   && <BiasStatsTab       sessionId={sessionId}/>}
       {activeTab === 'suggestions' && <SuggestionsTab     sessionId={sessionId}/>}
     </div>
   );

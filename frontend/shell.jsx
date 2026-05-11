@@ -157,23 +157,14 @@ window.OutcomeEditor = OutcomeEditor;
 window.updateOutcomeAPI = updateOutcomeAPI;
 
 // ═══════════════════════════════════════════════════════════════
-// NAVBAR
+// SIDEBAR
 // ═══════════════════════════════════════════════════════════════
 
-const Navbar = ({ page, setPage, user, onLogout }) => {
+const Sidebar = ({ page, setPage, user, onLogout, collapsed, setCollapsed }) => {
   const [time, setTime] = useState(new Date());
   const [lightMode, setLightMode] = useState(() => localStorage.getItem('theme') === 'light');
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const menuRef = useRef(null);
-
-  const NAV = [
-    { id: 'dashboard',     label: 'Dashboard' },
-    { id: 'backtest',      label: 'Backtest' },
-    { id: 'journal',       label: 'Journal' },
-    { id: 'statistiken',   label: 'Statistiken' },
-    { id: 'einstellungen', label: 'Einstellungen' },
-  ];
-  if (user?.role === 'admin') NAV.push({ id: 'admin', label: 'Admin' });
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
@@ -186,86 +177,141 @@ const Navbar = ({ page, setPage, user, onLogout }) => {
   }, [lightMode]);
 
   useEffect(() => {
-    if (!menuOpen) return;
-    const handler = (e) => {
-      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [menuOpen]);
+    if (!userMenuOpen) return;
+    const h = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setUserMenuOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [userMenuOpen]);
+
+  const role = user?.role || 'user';
+  const isAdmin = role === 'admin';
+
+  const NAV = [
+    { id: 'dashboard',     label: 'Dashboard',    icon: 'home'    },
+    { id: 'backtest',      label: 'Backtesting',   icon: 'chart'   },
+    { id: 'journal',       label: 'Journal',       icon: 'book'    },
+    { id: 'statistiken',   label: 'Statistiken',   icon: 'stats'   },
+    { id: 'einstellungen', label: 'Einstellungen', icon: 'settings'},
+  ];
 
   const timeStr = time.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 
   return (
-    <nav className="navbar">
+    <nav className={`sidebar${collapsed ? ' collapsed' : ''}`}>
       {/* Brand */}
-      <button className="navbar-brand" onClick={() => setPage('dashboard')}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--blue-500)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <div className="sidebar-brand">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--blue-500)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
           <path d="M2 14c2-3 4-3 6 0s4 3 6 0 4-3 6 0"/>
         </svg>
-        <span className="navbar-brand-name">WAVESCOUT</span>
-      </button>
+        {!collapsed && <span className="sidebar-brand-name">WAVESCOUT</span>}
+        <button
+          className="sidebar-toggle"
+          onClick={() => setCollapsed(c => !c)}
+          title={collapsed ? 'Ausklappen' : 'Einklappen'}
+          style={{ marginLeft: collapsed ? 0 : 'auto' }}
+        >
+          <Icon name="chevron" size={14} style={{ transform: collapsed ? 'rotate(-90deg)' : 'rotate(90deg)', transition: 'transform 0.2s' }}/>
+        </button>
+      </div>
 
-      <div className="navbar-divider"/>
+      {/* Live indicator */}
+      {!collapsed && (
+        <div className="sidebar-status">
+          <span className="status-dot status-pulse"/>
+          LIVE · {timeStr}
+        </div>
+      )}
+      {collapsed && (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0' }}>
+          <span className="status-dot status-pulse"/>
+        </div>
+      )}
 
       {/* Nav links */}
-      <div className="navbar-nav">
+      <div className="sidebar-nav">
         {NAV.map(n => (
           <button
             key={n.id}
-            className={`navbar-link${page === n.id ? ' active' : ''}`}
+            className={`sidebar-link${page === n.id ? ' active' : ''}`}
             onClick={() => setPage(n.id)}
+            title={collapsed ? n.label : ''}
           >
-            {n.label}
+            <Icon name={n.icon} size={16} style={{ flexShrink: 0 }}/>
+            {!collapsed && <span className="link-label">{n.label}</span>}
           </button>
         ))}
+
+        {/* Waveboard external link */}
         <a
           href="https://waveboard-e54ed.web.app/waveboard/dashboard"
           target="_blank"
           rel="noopener noreferrer"
-          className="navbar-link"
+          className="sidebar-link"
+          title={collapsed ? 'Waveboard' : ''}
         >
-          Waveboard
-          <Icon name="external" size={11} style={{ marginLeft: 3, opacity: 0.45 }}/>
+          <Icon name="external" size={16} style={{ flexShrink: 0 }}/>
+          {!collapsed && <span className="link-label">Waveboard</span>}
         </a>
+
+        {isAdmin && (
+          <>
+            <div className="sidebar-sep"/>
+            <button
+              className={`sidebar-link${page === 'admin' ? ' active' : ''}`}
+              onClick={() => setPage('admin')}
+              title={collapsed ? 'Admin' : ''}
+            >
+              <Icon name="shield" size={16} style={{ flexShrink: 0 }}/>
+              {!collapsed && <span className="link-label">Admin</span>}
+            </button>
+          </>
+        )}
       </div>
 
-      {/* Right section */}
-      <div className="navbar-right">
-        <div className="status-pill">
-          <span className="status-dot status-pulse"/>
-          LIVE
-        </div>
-
-        <span className="navbar-time">{timeStr}</span>
-
+      {/* Bottom: theme + user */}
+      <div className="sidebar-bottom">
         <button
-          className="icon-btn"
+          className="sidebar-link"
           onClick={() => setLightMode(m => !m)}
           title={lightMode ? 'Dark Mode' : 'Light Mode'}
         >
-          <Icon name={lightMode ? 'moon' : 'sun'} size={15}/>
+          <Icon name={lightMode ? 'moon' : 'sun'} size={16} style={{ flexShrink: 0 }}/>
+          {!collapsed && <span className="link-label">{lightMode ? 'Dark Mode' : 'Light Mode'}</span>}
         </button>
 
         {user && (
           <div style={{ position: 'relative' }} ref={menuRef}>
-            <button className="user-btn" onClick={() => setMenuOpen(m => !m)}>
-              <span className="user-avatar-sm">{(user.username || 'U').charAt(0).toUpperCase()}</span>
-              <span className="user-btn-name">{user.username}</span>
-              <Icon name="chevron" size={13} style={{ opacity: 0.4 }}/>
+            <button className="sidebar-user-btn" onClick={() => setUserMenuOpen(m => !m)}>
+              <span className="user-avatar-sm" style={{ flexShrink: 0 }}>{(user.username || 'U').charAt(0).toUpperCase()}</span>
+              {!collapsed && (
+                <div className="sidebar-user-info">
+                  <div className="sidebar-user-name">{user.username}</div>
+                  <div className="sidebar-user-role">{user.role || 'user'}</div>
+                </div>
+              )}
             </button>
-            {menuOpen && (
-              <div className="user-dropdown">
-                <div className="user-dropdown-header">
-                  <div className="user-dropdown-name">{user.username}</div>
-                  <div className="user-dropdown-role">{user.role === 'admin' ? 'Administrator' : 'Benutzer'}</div>
+            {userMenuOpen && (
+              <div style={{
+                position: 'absolute', bottom: '100%', left: 0, right: 0,
+                background: 'var(--bg-1)', border: '1px solid var(--border)',
+                borderRadius: 10, overflow: 'hidden', boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                marginBottom: 4, minWidth: 160, zIndex: 200
+              }}>
+                <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{user.username}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{user.role}</div>
                 </div>
                 <button
-                  className="user-dropdown-item"
-                  onClick={() => { setMenuOpen(false); onLogout(); }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)', fontFamily: 'var(--font-main)' }}
+                  onClick={() => { setUserMenuOpen(false); setPage('einstellungen'); }}
                 >
-                  <Icon name="logout" size={14}/>
-                  Abmelden
+                  <Icon name="settings" size={14}/> Einstellungen
+                </button>
+                <button
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--loss)', fontFamily: 'var(--font-main)' }}
+                  onClick={() => { setUserMenuOpen(false); onLogout(); }}
+                >
+                  <Icon name="logout" size={14}/> Abmelden
                 </button>
               </div>
             )}
@@ -351,4 +397,4 @@ function getTimeAgo(timestamp) {
 // EXPORTS
 // ═══════════════════════════════════════════════════════════════
 
-Object.assign(window, { Icon, Navbar, StatCard, AssetChip, CountUp, getTimeAgo });
+Object.assign(window, { Icon, Sidebar, StatCard, AssetChip, CountUp, getTimeAgo });
