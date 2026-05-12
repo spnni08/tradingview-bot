@@ -1,70 +1,153 @@
 // ═══════════════════════════════════════════════════════════════
-// WAVESCOUT v3.5 - DASHBOARD
+// WAVESCOUT v3.6 - DASHBOARD
 // ═══════════════════════════════════════════════════════════════
 
-const DashboardPage = ({ user, navigate }) => {
-  const [loading, setLoading]     = useState(true);
-  const [error, setError]         = useState(null);
-  const [data, setData]           = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [toast, setToast]         = useState(null);
-  const [todayBias, setTodayBias] = useState(null);
-  const [radar, setRadar]         = useState(null);
+const { useRef, useCallback } = React;
 
+const LIVE_INTERVAL_MS       = 30 * 1000;
+const RADAR_INTERVAL_MS      = 5  * 60 * 1000;
+const BIAS_INTERVAL_MS       = 60 * 1000;
+
+// ─── Live-Modus toggle button ─────────────────────────────────
+
+function LiveModeButton({ liveMode, onToggle, refreshing }) {
+  return (
+    <button
+      onClick={onToggle}
+      title={liveMode ? 'Live-Modus stoppen' : 'Live-Modus starten'}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 7,
+        padding: '5px 14px', borderRadius: 20, fontSize: 12, fontWeight: 700,
+        border: `1px solid ${liveMode ? 'rgba(16,185,129,.45)' : 'var(--border)'}`,
+        background: liveMode ? 'rgba(16,185,129,.1)' : 'var(--bg-2)',
+        color: liveMode ? 'var(--win)' : 'var(--text-tertiary)',
+        cursor: 'pointer', transition: 'all .2s', fontFamily: 'var(--font-mono)',
+      }}
+    >
+      <span style={{
+        width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+        background: liveMode ? 'var(--win)' : 'var(--text-quaternary)',
+        animation: liveMode ? 'pulse 1.5s infinite' : 'none',
+      }}/>
+      {liveMode
+        ? (refreshing ? 'LIVE …' : 'LIVE AKTIV')
+        : 'LIVE GESTOPPT'}
+    </button>
+  );
+}
+
+// ─── Main Dashboard ───────────────────────────────────────────
+
+const DashboardPage = ({ user, navigate }) => {
+  const sessionId = localStorage.getItem('wavescout_session');
+
+  // ── State ─────────────────────────────────────────────────────
+  const [loading, setLoading]       = useState(true);
+  const [error, setError]           = useState(null);
+  const [data, setData]             = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [toast, setToast]           = useState(null);
+  const [todayBias, setTodayBias]   = useState(null);
+  const [radar, setRadar]           = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [liveMode, setLiveMode]     = useState(() => {
+    const saved = localStorage.getItem('wavescout_livemode');
+    return saved !== 'false'; // default: true
+  });
+
+  // ── Interval refs ─────────────────────────────────────────────
+  const liveRef  = useRef(null);
+  const radarRef = useRef(null);
+  const biasRef  = useRef(null);
+
+  // ── Toast ─────────────────────────────────────────────────────
   const showToast = (msg, type = 'info') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3200);
   };
 
-  const loadTodayBias = async (sessionId) => {
+  // ── Fetch helpers ─────────────────────────────────────────────
+  const loadLiveData = useCallback(async (quiet = false) => {
+    if (!quiet) setRefreshing(true);
+    try {
+      const res = await fetch(`${API_URL}/dashboard/live`, {
+        headers: { 'X-Session-ID': sessionId }
+      });
+      if (res.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setData(await res.json());
+      setError(null);
+      setLastUpdated(new Date());
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [sessionId]);
+
+  const loadTodayBias = useCallback(async () => {
     try {
       const res = await fetch(`${API_URL}/today-bias`, { headers: { 'X-Session-ID': sessionId } });
       if (res.ok) setTodayBias(await res.json());
     } catch { /* non-critical */ }
-  };
+  }, [sessionId]);
 
-  useEffect(() => {
-    const sessionId = localStorage.getItem('wavescout_session');
-    loadLiveData(sessionId);
-    loadTodayBias(sessionId);
-    loadMarketRadar(sessionId);
-    const interval = setInterval(() => loadLiveData(sessionId), 30000);
-    const radarInterval = setInterval(() => loadMarketRadar(sessionId), 5 * 60 * 1000);
-    return () => { clearInterval(interval); clearInterval(radarInterval); };
+  const loadMarketRadar = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/market-radar`, { headers: { 'X-Session-ID': sessionId } });
+      if (res.ok) setRadar(await res.json());
+    } catch { /* non-critical */ }
+  }, [sessionId]);
+
+  // ── Polling management ────────────────────────────────────────
+  const stopPolling = useCallback(() => {
+    [liveRef, radarRef, biasRef].forEach(ref => {
+      if (ref.current) { clearInterval(ref.current); ref.current = null; }
+    });
   }, []);
 
-  const loadLiveData = async (sessionId) => {
-    try {
-      const response = await fetch(`${API_URL}/dashboard/live`, {
-        headers: { 'X-Session-ID': sessionId }
-      });
-      if (response.status === 401) {
-        localStorage.clear();
-        window.location.href = 'login.html';
-        return;
-      }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      setData(await response.json());
-      setError(null);
-      setLoading(false);
-      setLastUpdated(new Date());
-    } catch (err) {
-      setError(err.message);
-      setLoading(false);
-    }
-  };
+  const startPolling = useCallback(() => {
+    stopPolling();
+    liveRef.current  = setInterval(() => loadLiveData(true), LIVE_INTERVAL_MS);
+    radarRef.current = setInterval(loadMarketRadar, RADAR_INTERVAL_MS);
+    biasRef.current  = setInterval(loadTodayBias,   BIAS_INTERVAL_MS);
+  }, [loadLiveData, loadMarketRadar, loadTodayBias, stopPolling]);
 
-  const loadMarketRadar = async (sessionId) => {
-    try {
-      const response = await fetch(`${API_URL}/market-radar`, {
-        headers: { 'X-Session-ID': sessionId }
-      });
-      if (response.ok) setRadar(await response.json());
-    } catch (err) {
-      console.warn('Market radar unavailable:', err?.message || err);
+  // ── Live toggle ───────────────────────────────────────────────
+  const handleToggleLive = useCallback(() => {
+    const next = !liveMode;
+    setLiveMode(next);
+    localStorage.setItem('wavescout_livemode', String(next));
+    if (next) {
+      loadLiveData(false);
+      loadMarketRadar();
+      loadTodayBias();
+      startPolling();
+      showToast('Live-Modus gestartet', 'info');
+    } else {
+      stopPolling();
+      showToast('Live-Modus gestoppt — manuelle Aktualisierung möglich', 'warn');
     }
-  };
+  }, [liveMode, loadLiveData, loadMarketRadar, loadTodayBias, startPolling, stopPolling]);
 
+  // ── Manual refresh ────────────────────────────────────────────
+  const handleManualRefresh = useCallback(() => {
+    loadLiveData(false);
+    loadTodayBias();
+    loadMarketRadar();
+  }, [loadLiveData, loadTodayBias, loadMarketRadar]);
+
+  // ── Mount: initial load + conditional polling ─────────────────
+  useEffect(() => {
+    loadLiveData(false);
+    loadTodayBias();
+    loadMarketRadar();
+    if (liveMode) startPolling();
+    return () => stopPolling(); // cleanup on unmount / page switch
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Signal actions ────────────────────────────────────────────
   const handleExecuteTrade = (signal) => {
     showToast(`Trade-Ausführung für ${signal.symbol} ${signal.direction} erfordert Broker-API-Integration.`, 'warn');
   };
@@ -75,44 +158,52 @@ const DashboardPage = ({ user, navigate }) => {
   };
 
   const handleIgnoreSignal = async (signal) => {
-    const sessionId = localStorage.getItem('wavescout_session');
     try {
       await fetch(`${API_URL}/signals/${signal.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
         body: JSON.stringify({ outcome: 'IGNORED' })
       });
-      loadLiveData(sessionId);
+      loadLiveData(false);
       showToast(`Signal ${signal.symbol} ${signal.direction} ignoriert.`, 'info');
     } catch (err) {
       console.error('Ignore error:', err);
     }
   };
 
+  // ── Render ────────────────────────────────────────────────────
   if (loading) return (
     <div className="content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 'calc(100vh - 52px)' }}>
       <div className="spinner-lg"/>
     </div>
   );
 
-  if (error || !data) return (
+  if (error && !data) return (
     <div className="content" style={{ textAlign: 'center', paddingTop: 80 }}>
-      <p style={{ color: 'var(--text-tertiary)', marginBottom: 16 }}>Fehler beim Laden: {error}</p>
-      <button className="btn" onClick={() => { setLoading(true); loadLiveData(localStorage.getItem('wavescout_session')); }}>
-        <Icon name="refresh" size={14}/> Neu laden
-      </button>
+      <div style={{ fontSize: 32, marginBottom: 12 }}>⚠️</div>
+      <p style={{ color: 'var(--text-tertiary)', marginBottom: 16 }}>Backend nicht erreichbar: {error}</p>
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+        <button className="btn" onClick={handleManualRefresh}>
+          <Icon name="refresh" size={14}/> Neu laden
+        </button>
+        {!liveMode && (
+          <button className="btn btn-primary" onClick={handleToggleLive}>
+            Live-Modus starten
+          </button>
+        )}
+      </div>
     </div>
   );
 
-  const stats      = data?.stats || {};
-  const bestSignal = data?.bestSignal || null;
+  const stats         = data?.stats || {};
+  const bestSignal    = data?.bestSignal || null;
   const latestSignals = Array.isArray(data?.latestSignals) ? data.latestSignals : [];
   const marketBias    = data?.marketBias || null;
-  const todayPnL   = stats.todayPnL  ?? 0;
-  const totalPnL   = stats.totalPnL  ?? 0;
-  const winRate    = stats.winRate   ?? 0;
-  const equity     = stats.equity    ?? stats.startingCapital ?? 0;
-  const startCap   = stats.startingCapital ?? 10000;
+  const todayPnL      = stats.todayPnL  ?? 0;
+  const totalPnL      = stats.totalPnL  ?? 0;
+  const winRate       = stats.winRate   ?? 0;
+  const equity        = stats.equity    ?? stats.startingCapital ?? 0;
+  const startCap      = stats.startingCapital ?? 10000;
 
   const greeting = (() => {
     const h = new Date().getHours();
@@ -135,25 +226,43 @@ const DashboardPage = ({ user, navigate }) => {
           background: toast.type === 'warn' ? 'var(--bg-warning)' : toast.type === 'error' ? 'var(--bg-error)' : 'var(--bg-success)',
           border: `1px solid ${toast.type === 'warn' ? 'rgba(245,158,11,.4)' : toast.type === 'error' ? 'rgba(239,68,68,.4)' : 'rgba(16,185,129,.4)'}`,
           color: toast.type === 'warn' ? 'var(--wait)' : toast.type === 'error' ? 'var(--loss)' : 'var(--win)',
-          boxShadow: '0 4px 16px rgba(0,0,0,.25)',
-          maxWidth: 360,
-          animation: 'fadeIn .2s ease'
+          boxShadow: '0 4px 16px rgba(0,0,0,.25)', maxWidth: 360, animation: 'fadeIn .2s ease'
         }}>
           {toast.msg}
         </div>
       )}
 
+      {/* Error banner (non-fatal: data exists but last refresh failed) */}
+      {error && data && (
+        <div style={{
+          margin: '0 0 16px', padding: '10px 16px', borderRadius: 10,
+          background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.2)',
+          fontSize: 13, color: 'var(--loss)', display: 'flex', alignItems: 'center', gap: 10
+        }}>
+          <span>⚠️</span>
+          <span>Letzte Aktualisierung fehlgeschlagen: {error}</span>
+          <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={handleManualRefresh}>
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Page header */}
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
           <div>
             <h2>Guten {greeting}, {user?.username || 'Trader'}</h2>
             <p className="subtitle">
-              {stats.open} offene Signale · {stats.totalTrades} Total Trades ·
-              {' '}<span style={{ color: 'var(--text-quaternary)' }}>Aktualisiert {lastUpdStr}</span>
+              {stats.open ?? '–'} offene Signale · {stats.totalTrades ?? '–'} Total Trades
+              {lastUpdated && (
+                <span style={{ color: 'var(--text-quaternary)' }}> · Aktualisiert {lastUpdStr}</span>
+              )}
             </p>
           </div>
-          {/* Morning routine indicator */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+
+          {/* Right controls */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, flexWrap: 'wrap' }}>
+            {/* Bias indicator */}
             {todayBias?.bias ? (
               <span style={{
                 display: 'flex', alignItems: 'center', gap: 7, fontSize: 13,
@@ -167,20 +276,20 @@ const DashboardPage = ({ user, navigate }) => {
                 Bias: {todayBias.bias}
               </span>
             ) : (
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={() => navigate('journal')}
-                style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12 }}
-              >
+              <button className="btn btn-ghost btn-sm" onClick={() => navigate('journal')}
+                style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12 }}>
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--loss)', display: 'inline-block', animation: 'pulse 1.5s infinite' }}/>
                 Morgenroutine fehlt
               </button>
             )}
+
+            {/* Live-Modus toggle */}
+            <LiveModeButton liveMode={liveMode} onToggle={handleToggleLive} refreshing={refreshing}/>
           </div>
         </div>
       </div>
 
-      {/* Equity Strip */}
+      {/* Equity + Manual Refresh strip */}
       <div className="card" style={{ marginBottom: 'var(--gap)' }}>
         <div className="card-body" style={{ padding: '14px 20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 32, flexWrap: 'wrap' }}>
@@ -204,19 +313,28 @@ const DashboardPage = ({ user, navigate }) => {
                 ${startCap.toLocaleString('de-DE')}
               </div>
             </div>
-            <div style={{ marginLeft: 'auto' }}>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+              {!liveMode && (
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+                  Live-Modus aus
+                </span>
+              )}
               <button
                 className="btn btn-ghost btn-sm"
-                onClick={() => { setLoading(false); loadLiveData(localStorage.getItem('wavescout_session')); }}
-                title="Daten aktualisieren"
+                onClick={handleManualRefresh}
+                disabled={refreshing}
+                title="Manuell aktualisieren"
               >
-                <Icon name="refresh" size={14}/>
+                {refreshing
+                  ? <div className="spinner-sm"/>
+                  : <Icon name="refresh" size={14}/>}
               </button>
             </div>
           </div>
         </div>
       </div>
 
+      {/* Best signal + Market bias */}
       <div className="grid grid-2" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
         <BestSignalCard
           signal={bestSignal}
@@ -227,8 +345,10 @@ const DashboardPage = ({ user, navigate }) => {
         <MarketBiasCard marketBias={marketBias}/>
       </div>
 
+      {/* Market radar */}
       <CryptoMarketRadar radar={radar}/>
 
+      {/* KPI strip */}
       <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <StatCard
           label="Trades gesamt"
@@ -237,7 +357,7 @@ const DashboardPage = ({ user, navigate }) => {
         />
         <StatCard
           label="Win-Rate"
-          value={`${winRate.toFixed(1)}%`}
+          value={stats.totalTrades ? `${winRate.toFixed(1)}%` : '–'}
           sub="Alle abgeschlossenen Trades"
           subTone={winRate >= 50 ? 'win' : 'loss'}
         />
@@ -249,17 +369,20 @@ const DashboardPage = ({ user, navigate }) => {
         />
         <StatCard
           label="System"
-          value="LIVE"
-          sub="Daten aktualisiert"
-          subTone="win"
+          value={liveMode ? 'LIVE' : 'PAUSE'}
+          sub={liveMode ? `Auto-Refresh ${LIVE_INTERVAL_MS / 1000}s` : 'Manueller Refresh aktiv'}
+          subTone={liveMode ? 'win' : 'loss'}
           icon="signal"
         />
       </div>
 
+      {/* Latest signals table */}
       <LatestTradesCard signals={latestSignals} onViewAll={() => navigate('backtest')}/>
     </div>
   );
 };
+
+// ─── Crypto Market Radar ──────────────────────────────────────
 
 const CryptoMarketRadar = ({ radar }) => {
   const status = radar?.status || 'NORMAL';
@@ -283,7 +406,7 @@ const CryptoMarketRadar = ({ radar }) => {
       </div>
       <div className="card-body">
         <p style={{ color: 'var(--text-secondary)', marginBottom: 12 }}>
-          {radar?.summary || 'Lade BTC- und Krypto-Markt-Events…'}
+          {radar?.summary || 'Market Radar noch nicht geladen'}
         </p>
         {events.length === 0 ? (
           <p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>Keine relevanten Events gefunden.</p>
@@ -310,7 +433,7 @@ const CryptoMarketRadar = ({ radar }) => {
   );
 };
 
-// ─── Sub-components ──────────────────────────────────────────
+// ─── Sub-components ───────────────────────────────────────────
 
 const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) => {
   if (!signal) return (
@@ -360,6 +483,12 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
                 <div className="l">Take Profit</div>
                 <div className="v mono win">${signal.ai_tp?.toFixed(2) || 'N/A'}</div>
               </div>
+              {signal.risk_reward != null && (
+                <div className="cell">
+                  <div className="l">R:R</div>
+                  <div className="v mono">1:{signal.risk_reward.toFixed(1)}</div>
+                </div>
+              )}
             </div>
 
             {signal.ai_reason && (
@@ -401,6 +530,9 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
               <span className={`badge ${signal.ai_risk === 'LOW' ? 'badge-win' : signal.ai_risk === 'HIGH' ? 'badge-loss' : 'badge-wait'}`}>
                 {signal.ai_risk} RISK
               </span>
+            )}
+            {signal.telegram_sent === 1 && (
+              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>📱 Telegram ✓</span>
             )}
           </div>
         </div>
@@ -461,7 +593,7 @@ const LatestTradesCard = ({ signals, onViewAll }) => {
       <div className="card-head"><Icon name="signal" className="ico"/><h3>Letzte Signale</h3></div>
       <div className="card-body" style={{ padding: 40, textAlign: 'center' }}>
         <Icon name="signal" size={32} style={{ opacity: 0.15, marginBottom: 10 }}/>
-        <p style={{ color: 'var(--text-tertiary)' }}>Keine Trades vorhanden</p>
+        <p style={{ color: 'var(--text-tertiary)' }}>Heute noch keine Signale vorhanden</p>
         <p style={{ fontSize: 12, color: 'var(--text-quaternary)', marginTop: 6 }}>Warten auf TradingView Webhooks…</p>
       </div>
     </div>
@@ -481,7 +613,7 @@ const LatestTradesCard = ({ signals, onViewAll }) => {
           <thead>
             <tr>
               <th>Zeit</th><th>Asset</th><th>Richtung</th>
-              <th>Entry</th><th>TP</th><th>SL</th><th>Score</th><th>Status</th>
+              <th>Entry</th><th>TP</th><th>SL</th><th>R:R</th><th>Score</th><th>Status</th>
             </tr>
           </thead>
           <tbody>
@@ -493,6 +625,7 @@ const LatestTradesCard = ({ signals, onViewAll }) => {
                 <td className="mono">${(s.ai_entry || s.price || 0).toFixed(2)}</td>
                 <td className="mono win">{s.ai_tp ? `$${s.ai_tp.toFixed(2)}` : '–'}</td>
                 <td className="mono loss">{s.ai_sl ? `$${s.ai_sl.toFixed(2)}` : '–'}</td>
+                <td className="mono">{s.risk_reward != null ? `1:${s.risk_reward.toFixed(1)}` : '–'}</td>
                 <td className="mono">{s.ai_score || 0}</td>
                 <td>
                   <span className={`badge ${s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`}>
