@@ -66,6 +66,7 @@ const App = () => {
   const [page, setPage] = useState(resolvePage(window.location.pathname));
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     const sessionId = localStorage.getItem('wavescout_session');
@@ -123,6 +124,12 @@ const App = () => {
     setPage(p);
   };
 
+  useEffect(() => {
+    const h = (e) => setPage(e.detail);
+    window.addEventListener('wavescout-navigate', h);
+    return () => window.removeEventListener('wavescout-navigate', h);
+  }, []);
+
   if (!ready) {
     return (
       <div style={{
@@ -142,6 +149,7 @@ const App = () => {
       case 'journal':       return <JournalPage       key="journal"       {...props}/>;
       case 'backtest':      return <BacktestPage      key="backtest"      {...props}/>;
       case 'statistiken':   return <StatistikenPage   key="statistiken"   {...props}/>;
+      case 'news':          return <NewsPage          key="news"          {...props}/>;
       case 'einstellungen': return <EinstellungenPage key="einstellungen" {...props}/>;
       case 'admin':
         return user?.role === 'admin'
@@ -152,9 +160,16 @@ const App = () => {
   };
 
   return (
-    <div className="app">
-      <Navbar page={page} onNavigate={navigate} user={user} onLogout={handleLogout}/>
-      <main className="main">
+    <div className="app-with-sidebar">
+      <Sidebar
+        page={page}
+        setPage={setPage}
+        user={user}
+        onLogout={handleLogout}
+        collapsed={sidebarCollapsed}
+        setCollapsed={setSidebarCollapsed}
+      />
+      <main className={`app-main${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
         <PageErrorBoundary key={page}>
           {renderPage()}
         </PageErrorBoundary>

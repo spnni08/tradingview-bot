@@ -15,6 +15,13 @@ const DashboardPage = ({ user, navigate }) => {
     setTimeout(() => setToast(null), 3200);
   };
 
+  const loadTodayBias = async (sessionId) => {
+    try {
+      const res = await fetch(`${API_URL}/today-bias`, { headers: { 'X-Session-ID': sessionId } });
+      if (res.ok) setTodayBias(await res.json());
+    } catch { /* non-critical */ }
+  };
+
   useEffect(() => {
     const sessionId = localStorage.getItem('wavescout_session');
     loadLiveData(sessionId);
@@ -135,11 +142,40 @@ const DashboardPage = ({ user, navigate }) => {
       )}
 
       <div className="page-header">
-        <h2>Guten {greeting}, {user?.username || 'Trader'}</h2>
-        <p className="subtitle">
-          {stats.open} offene Signale · {stats.totalTrades} Total Trades ·
-          {' '}<span style={{ color: 'var(--text-quaternary)' }}>Aktualisiert {lastUpdStr}</span>
-        </p>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+          <div>
+            <h2>Guten {greeting}, {user?.username || 'Trader'}</h2>
+            <p className="subtitle">
+              {stats.open} offene Signale · {stats.totalTrades} Total Trades ·
+              {' '}<span style={{ color: 'var(--text-quaternary)' }}>Aktualisiert {lastUpdStr}</span>
+            </p>
+          </div>
+          {/* Morning routine indicator */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+            {todayBias?.bias ? (
+              <span style={{
+                display: 'flex', alignItems: 'center', gap: 7, fontSize: 13,
+                padding: '5px 12px', borderRadius: 20,
+                background: todayBias.bias === 'LONG' ? 'rgba(16,185,129,.12)' : todayBias.bias === 'SHORT' ? 'rgba(239,68,68,.12)' : 'var(--bg-2)',
+                border: `1px solid ${todayBias.bias === 'LONG' ? 'rgba(16,185,129,.35)' : todayBias.bias === 'SHORT' ? 'rgba(239,68,68,.35)' : 'var(--border)'}`,
+                color: todayBias.bias === 'LONG' ? 'var(--win)' : todayBias.bias === 'SHORT' ? 'var(--loss)' : 'var(--text-tertiary)',
+                fontWeight: 600
+              }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'currentColor', display: 'inline-block' }}/>
+                Bias: {todayBias.bias}
+              </span>
+            ) : (
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => navigate('journal')}
+                style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12 }}
+              >
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--loss)', display: 'inline-block', animation: 'pulse 1.5s infinite' }}/>
+                Morgenroutine fehlt
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Equity Strip */}
