@@ -8,6 +8,8 @@ const StatistikenPage = ({ user }) => {
   const [history, setHistory]   = useState([]);
   const [analytics, setAnalytics] = useState(null);
   const [breakdown, setBreakdown] = useState(null);
+  const [toast, setToast] = useState(null);
+  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2200); };
 
   useEffect(() => {
     const sessionId = localStorage.getItem('wavescout_session');
@@ -76,6 +78,7 @@ const StatistikenPage = ({ user }) => {
 
   return (
     <div className="content page-enter">
+      {toast && <div style={{ position: 'fixed', top: 66, right: 18, zIndex: 9999, padding: '10px 14px', borderRadius: 10, background: 'var(--bg-1)', border: '1px solid var(--border)' }}>{toast}</div>}
       <div className="page-header">
         <h2>Statistiken & Analytics</h2>
         <p className="subtitle">{stats.total} Total Signale · {totalClosed} abgeschlossen · {stats.open} offen</p>
@@ -270,9 +273,13 @@ const StatistikenPage = ({ user }) => {
                     <td className="mono muted">{t.timeframe}m</td>
                     <td className="mono">{t.ai_score || 0}/100</td>
                     <td>
-                      <span className={`badge ${t.outcome === 'WIN' ? 'badge-win' : t.outcome === 'LOSS' ? 'badge-loss' : 'badge-wait'}`}>
-                        {t.outcome || 'OPEN'}
-                      </span>
+                      <window.OutcomeEditor
+                        id={t.id}
+                        currentOutcome={t.outcome}
+                        type="signal"
+                        onUpdated={(next) => setHistory(prev => prev.map(x => x.id === t.id ? { ...x, outcome: next } : x))}
+                        showToast={(m) => showToast(m)}
+                      />
                     </td>
                   </tr>
                 ))}
