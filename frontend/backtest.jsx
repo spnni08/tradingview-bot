@@ -166,52 +166,205 @@ function LossReasonModal({ signalId, sessionId, onClose, onSaved }) {
 function SignalDetailModal({ signal, onClose, onMarkLoss }) {
   if (!signal) return null;
   const pnl = calculatePnL(signal);
-  const fields = [
-    ['Symbol',      signal.symbol],
-    ['Richtung',    signal.direction],
-    ['Datum',       fmtDate(signal.created_at)],
-    ['Timeframe',   signal.timeframe ? signal.timeframe + 'm' : '–'],
-    ['Entry',       signal.ai_entry  ? '$' + fmtPrice(signal.ai_entry, signal.symbol)  : '–'],
-    ['Take Profit', signal.ai_tp     ? '$' + fmtPrice(signal.ai_tp, signal.symbol)     : '–'],
-    ['Stop Loss',   signal.ai_sl     ? '$' + fmtPrice(signal.ai_sl, signal.symbol)     : '–'],
-    ['Exit',        signal.exit_price ? '$' + fmtPrice(signal.exit_price, signal.symbol) : '–'],
-    ['PnL',         pnl !== 0 ? fmtPct(pnl) : '–'],
-    ['Score',       (signal.ai_score || 0) + '/100'],
-    ['Risiko',      signal.ai_risk || '–'],
-    ['RSI',         signal.rsi ?? '–'],
-    ['EMA50',       signal.ema50  ? signal.ema50.toFixed(0)  : '–'],
-    ['EMA200',      signal.ema200 ? signal.ema200.toFixed(0) : '–'],
-    ['Trend',       signal.trend     || '–'],
-    ['Wave Bias',   signal.wave_bias || '–'],
-    ['Strategie',   signal.strategy_name    || 'WAVESCOUT Standard'],
-    ['Version',     signal.strategy_version || 'v1.0'],
-    ['Ergebnis',    signal.outcome || 'OPEN'],
-  ];
+
+  // Parse JSON fields safely
+  const matchedRules   = (() => { try { return JSON.parse(signal.matched_rules  || '[]'); } catch { return []; } })();
+  const failedRules    = (() => { try { return JSON.parse(signal.failed_rules   || '[]'); } catch { return []; } })();
+  const unknownRules   = (() => { try { return JSON.parse(signal.unknown_rules  || '[]'); } catch { return []; } })();
+  const scoreBreakdown = (() => { try { return JSON.parse(signal.score_breakdown || '{}'); } catch { return {}; } })();
+
+  const sc = signal.ai_score || 0;
+  const scoreColor = sc >= 80 ? 'var(--win)' : sc >= 60 ? 'var(--wait)' : 'var(--loss)';
+  const scoreLabel = sc >= 90 ? 'A+ Setup' : sc >= 80 ? 'Starkes Setup' : sc >= 70 ? 'Gutes Setup' : sc >= 60 ? 'Schwaches Setup' : sc >= 50 ? 'Unsicher' : 'Kein Trade';
+
+  const rr = signal.risk_reward;
+  const rrStr = rr ? `1:${parseFloat(rr).toFixed(1)}` : '–';
+  const fmt = (v, sym) => {
+    const n = parseFloat(v);
+    if (!v || isNaN(n)) return '–';
+    return '$' + fmtPrice(n, sym || signal.symbol);
+  };
+
+  const breakdownEntries = Object.entries(scoreBreakdown).filter(([, v]) => v !== 0);
+
+  const biasStatus = (() => {
+    if (signal.before_morning_routine) return { label: 'Vor Morgenroutine', color: 'var(--wait)', icon: '⏰' };
+    if (signal.bias_match === 'no_bias') return { label: 'Kein Tagesbias gesetzt', color: 'var(--text-tertiary)', icon: '–' };
+    if (signal.bias_match === 'against_bias') return { label: `Gegen Bias (${signal.daily_bias || '?'})`, color: 'var(--loss)', icon: '⚠️' };
+    if (signal.bias_match === 'no_trade_day') return { label: 'Kein-Trade-Tag', color: 'var(--loss)', icon: '🚫' };
+    if (signal.daily_bias) return { label: `Bias-Match ${signal.daily_bias}`, color: 'var(--win)', icon: '✅' };
+    return { label: '–', color: 'var(--text-tertiary)', icon: '' };
+  })();
+
+  const RULE_LABELS = {
+    rsi: 'RSI', ema: 'EMA 50/200', trend: 'Trend', wave_bias: 'Wave Bias',
+    support_resistance: 'S/R Nähe', timeframe: 'Timeframe', confidence: 'Konfidenz',
+  };
+
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-box" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
-        <div className="modal-head">
+      <div className="modal-box" style={{ maxWidth: 640, maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="modal-head" style={{ position: 'sticky', top: 0, background: 'var(--bg-1)', zIndex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className={`badge ${signal.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{signal.direction}</span>
             <h3 style={{ margin: 0 }}>{signal.symbol}</h3>
+            <span className="badge badge-tag" style={{ fontSize: 11 }}>{signal.timeframe ? signal.timeframe + 'm' : '–'}</span>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
-        <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 24px', fontSize: 13 }}>
-          {fields.map(([l, v]) => (
-            <div key={l}>
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 2 }}>{l}</div>
-              <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{v}</div>
+
+        <div style={{ padding: '0 20px 20px' }}>
+
+          {/* Score + Quality */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '16px 0 12px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ textAlign: 'center', flexShrink: 0 }}>
+              <div style={{ fontSize: 32, fontWeight: 800, fontFamily: 'var(--font-mono)', color: scoreColor, lineHeight: 1 }}>{sc}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.08em', marginTop: 2 }}>Score</div>
             </div>
-          ))}
-        </div>
-        {signal.ai_reason && (
-          <div style={{ padding: '0 20px 14px' }}>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 4 }}>Analyse-Begründung</div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', background: 'var(--bg-3)', borderRadius: 8, padding: '8px 12px', lineHeight: 1.5 }}>{signal.ai_reason}</div>
+            <div style={{ width: 1, height: 40, background: 'var(--border)', flexShrink: 0 }}/>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: scoreColor }}>{scoreLabel}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>{signal.signal_quality || '–'}</div>
+            </div>
+            <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Ergebnis</div>
+              <span className={`badge ${signal.outcome === 'WIN' ? 'badge-win' : signal.outcome === 'LOSS' ? 'badge-loss' : signal.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`} style={{ marginTop: 4 }}>
+                {signal.outcome || 'OPEN'}
+              </span>
+            </div>
           </div>
-        )}
-        <div className="modal-foot">
+
+          {/* Prices grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, padding: '14px 0', borderBottom: '1px solid var(--border)' }}>
+            {[
+              ['Entry',      fmt(signal.ai_entry ?? signal.price), 'var(--text-primary)'],
+              ['Take Profit', fmt(signal.ai_tp),                    'var(--win)'],
+              ['Stop Loss',   fmt(signal.ai_sl),                    'var(--loss)'],
+              ['Exit',        fmt(signal.exit_price),               pnl > 0 ? 'var(--win)' : pnl < 0 ? 'var(--loss)' : 'var(--text-primary)'],
+              ['R:R',         rrStr,                                rr && rr >= 1.5 ? 'var(--win)' : rr ? 'var(--wait)' : 'var(--text-tertiary)'],
+              ['PnL',         pnl !== 0 ? fmtPct(pnl) : '–',      pnl > 0 ? 'var(--win)' : pnl < 0 ? 'var(--loss)' : 'var(--text-tertiary)'],
+            ].map(([l, v, c]) => (
+              <div key={l} style={{ background: 'var(--bg-0)', borderRadius: 8, padding: '8px 12px' }}>
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 3 }}>{l}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 13, color: c }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Planned profit/risk */}
+          {(signal.planned_profit_pct != null || signal.planned_risk_pct != null) && (
+            <div style={{ display: 'flex', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
+              {signal.planned_profit_pct != null && (
+                <span style={{ color: 'var(--win)' }}>Geplanter Gewinn: +{parseFloat(signal.planned_profit_pct).toFixed(2)}%</span>
+              )}
+              {signal.planned_risk_pct != null && (
+                <span style={{ color: 'var(--loss)' }}>Geplantes Risiko: -{parseFloat(signal.planned_risk_pct).toFixed(2)}%</span>
+              )}
+            </div>
+          )}
+
+          {/* Strategy status */}
+          <div style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 8 }}>STRATEGIE-STATUS</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, fontSize: 12 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: signal.counts_for_strategy !== 0 ? 'var(--win)' : 'var(--loss)', display: 'inline-block' }}/>
+                {signal.counts_for_strategy !== 0 ? 'Zählt zur Strategie' : 'Zählt nicht zur Strategie'}
+              </span>
+              <span style={{ color: biasStatus.color }}>{biasStatus.icon} {biasStatus.label}</span>
+              {signal.strategy_name && (
+                <span style={{ color: 'var(--text-tertiary)' }}>
+                  {signal.strategy_name} {signal.strategy_version || ''}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Score breakdown */}
+          {breakdownEntries.length > 0 && (
+            <div style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 8 }}>SCORE-AUFSCHLÜSSELUNG</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-quaternary)', marginBottom: 2 }}>
+                  <span>Basis</span><span style={{ fontFamily: 'var(--font-mono)' }}>+50</span>
+                </div>
+                {breakdownEntries.map(([key, val]) => (
+                  <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>{RULE_LABELS[key] || key}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: val > 0 ? 'var(--win)' : 'var(--loss)' }}>
+                      {val > 0 ? '+' : ''}{val}
+                    </span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 700, borderTop: '1px solid var(--border)', paddingTop: 6, marginTop: 2 }}>
+                  <span>Gesamt</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: scoreColor }}>{sc}/100</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Matched / Failed / Unknown rules */}
+          {(matchedRules.length > 0 || failedRules.length > 0 || unknownRules.length > 0) && (
+            <div style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 8 }}>STRATEGIE-CHECK</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {matchedRules.map((r, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12 }}>
+                    <span style={{ color: 'var(--win)', flexShrink: 0, marginTop: 1 }}>✓</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{r}</span>
+                  </div>
+                ))}
+                {failedRules.map((r, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12 }}>
+                    <span style={{ color: 'var(--loss)', flexShrink: 0, marginTop: 1 }}>✗</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{r}</span>
+                  </div>
+                ))}
+                {unknownRules.map((r, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12 }}>
+                    <span style={{ color: 'var(--text-tertiary)', flexShrink: 0, marginTop: 1 }}>?</span>
+                    <span style={{ color: 'var(--text-tertiary)' }}>{r}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* AI Reason */}
+          {signal.ai_reason && (
+            <div style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 6 }}>ANALYSE-BEGRÜNDUNG</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', background: 'var(--bg-0)', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6 }}>{signal.ai_reason}</div>
+            </div>
+          )}
+
+          {/* Meta info */}
+          <div style={{ paddingTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 20px', fontSize: 12 }}>
+            {[
+              ['Datum',          fmtDate(signal.created_at)],
+              ['RSI',            signal.rsi ?? '–'],
+              ['EMA 50',         signal.ema50  ? signal.ema50.toFixed(0)  : '–'],
+              ['EMA 200',        signal.ema200 ? signal.ema200.toFixed(0) : '–'],
+              ['Trend',          signal.trend     || '–'],
+              ['Wave Bias',      signal.wave_bias || '–'],
+              ['Risiko-Level',   signal.ai_risk   || '–'],
+              ['Empfehlung',     signal.ai_recommendation || '–'],
+              ['Telegram',       signal.telegram_sent ? `✓ Gesendet (${signal.telegram_reason || ''})` : `– ${signal.telegram_reason || 'nicht gesendet'}`],
+              ['Quelle',         signal.source || 'WEBHOOK'],
+            ].map(([l, v]) => (
+              <div key={l}>
+                <span style={{ color: 'var(--text-quaternary)' }}>{l}: </span>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="modal-foot" style={{ position: 'sticky', bottom: 0, background: 'var(--bg-1)' }}>
           {signal.outcome === 'LOSS' && (
             <button className="btn btn-ghost" style={{ color: 'var(--loss)', marginRight: 'auto' }} onClick={() => { onMarkLoss?.(); onClose(); }}>
               Loss-Grund markieren
@@ -447,7 +600,7 @@ function SignalHistoryTab({ sessionId }) {
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="tbl">
-              <thead><tr><th>Datum</th><th>Symbol</th><th>Richtung</th><th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>PnL</th><th>Score</th><th>Strategie</th><th>Ergebnis</th></tr></thead>
+              <thead><tr><th>Datum</th><th>Symbol</th><th>Richtung</th><th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>PnL</th><th>Score</th><th>R:R</th><th>Strategie</th><th>Ergebnis</th></tr></thead>
               <tbody>
                 {filtered.map((trade, i) => {
                   const pnl = calculatePnL(trade);
@@ -462,6 +615,9 @@ function SignalHistoryTab({ sessionId }) {
                       <td className="mono">{trade.exit_price ? `$${fmtPrice(trade.exit_price, trade.symbol)}` : '—'}</td>
                       <td className={`mono ${pnl > 0 ? 'win' : pnl < 0 ? 'loss' : ''}`}>{pnl !== 0 ? fmtPct(pnl) : '—'}</td>
                       <td className="mono">{trade.ai_score || 0}</td>
+                      <td className="mono" style={{ fontSize: 11 }}>
+                        {trade.risk_reward ? `1:${parseFloat(trade.risk_reward).toFixed(1)}` : '–'}
+                      </td>
                       <td style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{trade.strategy_name || 'Standard'} <span style={{ color: 'var(--text-quaternary)' }}>{trade.strategy_version || ''}</span></td>
                       <td onClick={e => e.stopPropagation()}>
                         <OutcomeSelector tradeId={trade.id} current={trade.outcome} onChange={updateOutcome}/>
@@ -1133,11 +1289,15 @@ const BacktestPage = ({ user }) => {
   const sessionId = localStorage.getItem('wavescout_session');
   const userRole  = user?.role || 'user';
 
+  const isTraderOrAdmin = userRole === 'admin' || userRole === 'trader';
+
   const tabs = [
     { id: 'practice',    label: 'Übungstrades'       },
     { id: 'history',     label: 'Signal-Historie'     },
-    { id: 'strategy',    label: 'Strategie-Labor'     },
-    { id: 'compare',     label: 'Strategie-Vergleich' },
+    ...(isTraderOrAdmin ? [
+      { id: 'strategy',  label: 'Strategie-Labor'     },
+      { id: 'compare',   label: 'Strategie-Vergleich' },
+    ] : []),
     { id: 'loss',        label: 'Loss-Analyse'        },
     { id: 'biasstats',   label: 'Bias-Statistiken'    },
     { id: 'suggestions', label: 'Vorschläge'          },
