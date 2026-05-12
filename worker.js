@@ -235,7 +235,6 @@ function analyzeWithRules(signal, strategyConfig = null) {
   const isLong  = dir === 'LONG';
   const isShort = dir === 'SHORT';
 
-  // Extract weights from config (0 = disabled)
   const rW  = cfg.rules?.rsi?.enabled                !== false ? (cfg.rules?.rsi?.weight                ?? 18) : 0;
   const eW  = cfg.rules?.ema?.enabled                !== false ? (cfg.rules?.ema?.weight                ?? 12) : 0;
   const tW  = cfg.rules?.trend?.enabled              !== false ? (cfg.rules?.trend?.weight              ?? 10) : 0;
@@ -245,62 +244,130 @@ function analyzeWithRules(signal, strategyConfig = null) {
   const cW  = cfg.rules?.confidence?.enabled         !== false ? (cfg.rules?.confidence?.weight         ?? 10) : 0;
 
   let score = 50;
+  const matched_rules  = [];
+  const failed_rules   = [];
+  const unknown_rules  = [];
+  const score_breakdown = {};
 
   // ── RSI ──────────────────────────────────────────────────────
-  const rsi = parseFloat(signal.rsi ?? 50);
+  const rsi = signal.rsi != null ? parseFloat(signal.rsi) : null;
   if (rW > 0) {
-    if (isLong) {
-      if      (rsi < 30) score += rW;
-      else if (rsi < 40) score += Math.round(rW * 0.56);
-      else if (rsi < 50) score += Math.round(rW * 0.22);
-      else if (rsi > 70) score -= rW;
-      else if (rsi > 60) score -= Math.round(rW * 0.33);
-    } else if (isShort) {
-      if      (rsi > 70) score += rW;
-      else if (rsi > 60) score += Math.round(rW * 0.56);
-      else if (rsi > 50) score += Math.round(rW * 0.22);
-      else if (rsi < 30) score -= rW;
-      else if (rsi < 40) score -= Math.round(rW * 0.33);
+    if (rsi == null) {
+      unknown_rules.push('RSI (keine Daten)');
+      score_breakdown.rsi = 0;
+    } else {
+      let rsiDelta = 0;
+      if (isLong) {
+        if      (rsi < 30) { rsiDelta = rW;                        matched_rules.push(`RSI überverkauft (${rsi.toFixed(0)}) – günstig für LONG`); }
+        else if (rsi < 40) { rsiDelta = Math.round(rW * 0.56);    matched_rules.push(`RSI niedrig (${rsi.toFixed(0)}) – passt zu LONG`); }
+        else if (rsi < 50) { rsiDelta = Math.round(rW * 0.22);    matched_rules.push(`RSI neutral-niedrig (${rsi.toFixed(0)})`); }
+        else if (rsi > 70) { rsiDelta = -rW;                       failed_rules.push(`RSI überkauft (${rsi.toFixed(0)}) – ungünstig für LONG`); }
+        else if (rsi > 60) { rsiDelta = -Math.round(rW * 0.33);   failed_rules.push(`RSI hoch (${rsi.toFixed(0)}) – Vorsicht bei LONG`); }
+        else               {                                        matched_rules.push(`RSI neutral (${rsi.toFixed(0)})`); }
+      } else if (isShort) {
+        if      (rsi > 70) { rsiDelta = rW;                        matched_rules.push(`RSI überkauft (${rsi.toFixed(0)}) – günstig für SHORT`); }
+        else if (rsi > 60) { rsiDelta = Math.round(rW * 0.56);    matched_rules.push(`RSI hoch (${rsi.toFixed(0)}) – passt zu SHORT`); }
+        else if (rsi > 50) { rsiDelta = Math.round(rW * 0.22);    matched_rules.push(`RSI neutral-hoch (${rsi.toFixed(0)})`); }
+        else if (rsi < 30) { rsiDelta = -rW;                       failed_rules.push(`RSI überverkauft (${rsi.toFixed(0)}) – ungünstig für SHORT`); }
+        else if (rsi < 40) { rsiDelta = -Math.round(rW * 0.33);   failed_rules.push(`RSI niedrig (${rsi.toFixed(0)}) – Vorsicht bei SHORT`); }
+        else               {                                        matched_rules.push(`RSI neutral (${rsi.toFixed(0)})`); }
+      }
+      score += rsiDelta;
+      score_breakdown.rsi = rsiDelta;
     }
   }
 
   // ── EMA trend alignment ──────────────────────────────────────
   const ema50  = parseFloat(signal.ema50  ?? 0);
   const ema200 = parseFloat(signal.ema200 ?? 0);
-  if (eW > 0 && ema50 && ema200) {
-    const bullish = ema50 > ema200;
-    if (isLong  && bullish)  score += eW;
-    if (isShort && !bullish) score += eW;
-    if (isLong  && !bullish) score -= eW;
-    if (isShort && bullish)  score -= eW;
+  if (eW > 0) {
+    if (!ema50 || !ema200) {
+      unknown_rules.push('EMA 50/200 (keine Daten)');
+      score_breakdown.ema = 0;
+    } else {
+      const bullish = ema50 > ema200;
+      let emaDelta = 0;
+      if (isLong  && bullish)  { emaDelta = eW;   matched_rules.push('EMA 50 > EMA 200 – bullisher Trend passt zu LONG'); }
+      if (isShort && !bullish) { emaDelta = eW;   matched_rules.push('EMA 50 < EMA 200 – bearisher Trend passt zu SHORT'); }
+      if (isLong  && !bullish) { emaDelta = -eW;  failed_rules.push('EMA 50 < EMA 200 – bearisher Trend gegen LONG'); }
+      if (isShort && bullish)  { emaDelta = -eW;  failed_rules.push('EMA 50 > EMA 200 – bullisher Trend gegen SHORT'); }
+      score += emaDelta;
+      score_breakdown.ema = emaDelta;
+    }
   }
 
   // ── Trend label ──────────────────────────────────────────────
   const trend = (signal.trend || '').toUpperCase();
   if (tW > 0) {
-    if (trend === 'BULLISH' || trend === 'UP')     score += isLong  ? tW : -tW;
-    else if (trend === 'BEARISH' || trend === 'DOWN') score += isShort ? tW : -tW;
+    if (!trend) {
+      unknown_rules.push('Trend-Label (keine Daten)');
+      score_breakdown.trend = 0;
+    } else {
+      let tDelta = 0;
+      if (trend === 'BULLISH' || trend === 'UP') {
+        tDelta = isLong ? tW : -tW;
+        if (isLong)  matched_rules.push('Trend BULLISH – passt zu LONG');
+        else         failed_rules.push('Trend BULLISH – gegen SHORT');
+      } else if (trend === 'BEARISH' || trend === 'DOWN') {
+        tDelta = isShort ? tW : -tW;
+        if (isShort) matched_rules.push('Trend BEARISH – passt zu SHORT');
+        else         failed_rules.push('Trend BEARISH – gegen LONG');
+      } else {
+        unknown_rules.push(`Trend unklar (${trend})`);
+      }
+      score += tDelta;
+      score_breakdown.trend = tDelta;
+    }
   }
 
   // ── Wave bias ────────────────────────────────────────────────
   const waveBias = (signal.wave_bias || '').toUpperCase();
   if (wW > 0) {
-    if (waveBias === 'LONG')  score += isLong  ? wW : -Math.round(wW * 0.5);
-    if (waveBias === 'SHORT') score += isShort ? wW : -Math.round(wW * 0.5);
+    if (!waveBias) {
+      unknown_rules.push('Wave Bias (keine Daten)');
+      score_breakdown.wave_bias = 0;
+    } else {
+      let wDelta = 0;
+      if (waveBias === 'LONG') {
+        wDelta = isLong ? wW : -Math.round(wW * 0.5);
+        if (isLong)  matched_rules.push('Wave Bias LONG – passt zu LONG');
+        else         failed_rules.push('Wave Bias LONG – gegen SHORT');
+      } else if (waveBias === 'SHORT') {
+        wDelta = isShort ? wW : -Math.round(wW * 0.5);
+        if (isShort) matched_rules.push('Wave Bias SHORT – passt zu SHORT');
+        else         failed_rules.push('Wave Bias SHORT – gegen LONG');
+      }
+      score += wDelta;
+      score_breakdown.wave_bias = wDelta;
+    }
   }
 
   // ── Timeframe ────────────────────────────────────────────────
   if (tfW > 0) {
     const tf = String(signal.timeframe || '').replace('m','').replace('h','H');
-    if      (['60','240','1H','4H'].includes(tf)) score += tfW;
-    else if (['15','30'].includes(tf))             score += Math.round(tfW * 0.5);
+    let tfDelta = 0;
+    if      (['60','240','1H','4H'].includes(tf)) { tfDelta = tfW;                    matched_rules.push(`Timeframe ${tf} – hohes Gewicht`); }
+    else if (['15','30'].includes(tf))             { tfDelta = Math.round(tfW * 0.5); matched_rules.push(`Timeframe ${tf} – mittleres Gewicht`); }
+    else if (tf)                                   {                                   failed_rules.push(`Timeframe ${tf} – niedrigers Gewicht`); }
+    else                                           { unknown_rules.push('Timeframe (keine Daten)'); }
+    score += tfDelta;
+    score_breakdown.timeframe = tfDelta;
   }
 
   // ── Confidence ───────────────────────────────────────────────
   if (cW > 0) {
-    const confidence = parseFloat(signal.confidence ?? 0);
-    if      (confidence >= 80) score += cW;
-    else if (confidence >= 60) score += Math.round(cW * 0.5);
+    const confidence = parseFloat(signal.confidence ?? -1);
+    if (confidence < 0) {
+      unknown_rules.push('Konfidenz (keine Daten)');
+      score_breakdown.confidence = 0;
+    } else {
+      let cDelta = 0;
+      if      (confidence >= 80) { cDelta = cW;                    matched_rules.push(`Konfidenz ${confidence}% – hoch`); }
+      else if (confidence >= 60) { cDelta = Math.round(cW * 0.5); matched_rules.push(`Konfidenz ${confidence}% – mittel`); }
+      else                       {                                  failed_rules.push(`Konfidenz ${confidence}% – niedrig`); }
+      score += cDelta;
+      score_breakdown.confidence = cDelta;
+    }
   }
 
   // ── Support / Resistance proximity ───────────────────────────
@@ -308,18 +375,32 @@ function analyzeWithRules(signal, strategyConfig = null) {
   const support    = parseFloat(signal.support ?? 0);
   const resistance = parseFloat(signal.resistance ?? 0);
   if (srW > 0) {
-    if (price && support && isLong && price > support) {
-      if ((price - support) / price < 0.02) score += srW;
-    }
-    if (price && resistance && isShort && price < resistance) {
-      if ((resistance - price) / price < 0.02) score += srW;
+    let srDelta = 0;
+    if (!price) {
+      unknown_rules.push('Support/Resistance (kein Preis)');
+      score_breakdown.support_resistance = 0;
+    } else if (!support && !resistance) {
+      unknown_rules.push('Support/Resistance (keine Zonen)');
+      score_breakdown.support_resistance = 0;
+    } else {
+      if (price && support && isLong && price > support) {
+        if ((price - support) / price < 0.02) { srDelta = srW; matched_rules.push('Preis nah an Support – günstig für LONG'); }
+        else { failed_rules.push('Preis zu weit von Support entfernt'); }
+      } else if (price && resistance && isShort && price < resistance) {
+        if ((resistance - price) / price < 0.02) { srDelta = srW; matched_rules.push('Preis nah an Resistance – günstig für SHORT'); }
+        else { failed_rules.push('Preis zu weit von Resistance entfernt'); }
+      } else {
+        failed_rules.push('Preis nicht in Key-Zone');
+      }
+      score += srDelta;
+      score_breakdown.support_resistance = srDelta;
     }
   }
 
   // ── Clamp ────────────────────────────────────────────────────
   score = Math.max(0, Math.min(100, Math.round(score)));
 
-  // ── Recommendation (uses config thresholds) ──────────────────
+  // ── Recommendation ───────────────────────────────────────────
   const minTrade    = cfg.thresholds?.min_trade_score    ?? 70;
   const minTelegram = cfg.thresholds?.min_telegram_score ?? 55;
 
@@ -342,13 +423,23 @@ function analyzeWithRules(signal, strategyConfig = null) {
 
   // ── Reason ───────────────────────────────────────────────────
   const reasons = [];
-  if (rsi && (rsi < 35 || rsi > 65)) reasons.push(`RSI ${rsi}`);
+  if (rsi != null && (rsi < 35 || rsi > 65)) reasons.push(`RSI ${rsi}`);
   if (ema50 && ema200) reasons.push(`EMA ${ema50 > ema200 ? 'bullish' : 'bearish'}`);
   if (trend)    reasons.push(`Trend: ${trend}`);
   if (waveBias) reasons.push(`Bias: ${waveBias}`);
   const reason = reasons.length > 0 ? reasons.join(' · ') : 'Rule-based analysis';
 
-  return { recommendation, score, risk, entry, tp, sl, reason, direction: dir };
+  // ── R:R & quality ────────────────────────────────────────────
+  const risk_reward       = calcRR(entry, tp, sl, isLong);
+  const planned_profit_pct = safePct(tp, entry);
+  const planned_risk_pct   = safePct(sl, entry);
+  const signal_quality     = getSignalQuality(score);
+
+  return {
+    recommendation, score, risk, entry, tp, sl, reason, direction: dir,
+    matched_rules, failed_rules, unknown_rules, score_breakdown,
+    risk_reward, planned_profit_pct, planned_risk_pct, signal_quality,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -629,6 +720,25 @@ async function ensureTables(env) {
     for (const [col, type] of biasCols) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); } catch (_) {}
     }
+
+    // Phase 4 — signal analysis columns
+    const phase4Cols = [
+      ['matched_rules',      'TEXT'],
+      ['failed_rules',       'TEXT'],
+      ['unknown_rules',      'TEXT'],
+      ['score_breakdown',    'TEXT'],
+      ['trigger_reason',     'TEXT'],
+      ['signal_quality',     'TEXT'],
+      ['risk_reward',        'REAL'],
+      ['planned_profit_pct', 'REAL'],
+      ['planned_risk_pct',   'REAL'],
+      ['excluded_reason',    'TEXT'],
+      ['disclaimer_shown',   'INTEGER DEFAULT 1'],
+    ];
+    for (const [col, type] of phase4Cols) {
+      try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); } catch (_) {}
+    }
+
     // Migrate snapshots table (compat with unique symbol snapshots)
     const snapshotCols = [
       ['timeframe',  'TEXT'],
@@ -985,13 +1095,25 @@ async function processSignal(env, signal) {
   if (!strategy) strategy = await initDefaultStrategy(env);
   const strategyConfig = strategy?.config || null;
 
-  const fallbackAnalysis = analyzeWithRules(signal, strategyConfig);
+  const ruleAnalysis  = analyzeWithRules(signal, strategyConfig);
+  const fallbackAnalysis = ruleAnalysis;
   const analysis = await withTimeout(
     analyzeSignalWithAI(env, signal, strategyConfig),
     AI_TIMEOUT_MS,
     fallbackAnalysis
   ) || fallbackAnalysis;
   const signalId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  // Compute derived fields from ruleAnalysis (always deterministic)
+  const matchedRulesJSON   = JSON.stringify(ruleAnalysis.matched_rules  || []);
+  const failedRulesJSON    = JSON.stringify(ruleAnalysis.failed_rules   || []);
+  const unknownRulesJSON   = JSON.stringify(ruleAnalysis.unknown_rules  || []);
+  const scoreBreakdownJSON = JSON.stringify(ruleAnalysis.score_breakdown || {});
+  const signalQuality      = getSignalQuality(analysis.score);
+  const riskReward         = calcRR(analysis.entry, analysis.tp, analysis.sl, direction === 'LONG');
+  const plannedProfitPct   = safePct(analysis.tp, analysis.entry);
+  const plannedRiskPct     = safePct(analysis.sl, analysis.entry);
+  const triggerReason      = signal.trigger || signal.action || 'WEBHOOK';
 
   // Determine Telegram notification
   const isTest       = signal.test === true || signal.is_test === 1;
@@ -1006,11 +1128,15 @@ async function processSignal(env, signal) {
     const telegramMessage = debugPrefix + formatSignalForTelegram({
       ...signal,
       direction,
-      ai_score:  analysis.score,
-      ai_entry:  analysis.entry,
-      ai_tp:     analysis.tp,
-      ai_sl:     analysis.sl,
-      ai_reason: analysis.reason
+      ai_score:       analysis.score,
+      ai_entry:       analysis.entry,
+      ai_tp:          analysis.tp,
+      ai_sl:          analysis.sl,
+      ai_reason:      analysis.reason,
+      signal_quality: signalQuality,
+      risk_reward:    riskReward,
+      matched_rules:  matchedRulesJSON,
+      failed_rules:   failedRulesJSON,
     });
     const sent = await withTimeout(sendTelegramMessage(env, telegramMessage), TELEGRAM_TIMEOUT_MS, false);
     if (sent) telegramSent = 1;
@@ -1025,8 +1151,14 @@ async function processSignal(env, signal) {
       rule_score, rule_reason,
       strategy_id, strategy_name, strategy_version,
       is_test, source, telegram_sent, telegram_reason,
+      matched_rules, failed_rules, unknown_rules, score_breakdown,
+      signal_quality, risk_reward, planned_profit_pct, planned_risk_pct,
+      trigger_reason, disclaimer_shown,
       created_at, outcome
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    )
   `).bind(
     signalId,
     signal.symbol  || 'UNKNOWN',
@@ -1060,6 +1192,16 @@ async function processSignal(env, signal) {
     signal.source || 'WEBHOOK',
     telegramSent,
     telegramReason,
+    matchedRulesJSON,
+    failedRulesJSON,
+    unknownRulesJSON,
+    scoreBreakdownJSON,
+    signalQuality,
+    riskReward,
+    plannedProfitPct,
+    plannedRiskPct,
+    triggerReason,
+    1,
     Date.now(),
     'OPEN'
   ).run();
