@@ -586,6 +586,8 @@ async function ensureTables(env) {
       ['telegram_outcome_sent', 'INTEGER DEFAULT 0'],
       ['admin_note',            'TEXT'],
       ['manual_reason',         'TEXT'],
+      ['updated_at',            'INTEGER'],
+      ['exit_price',            'REAL'],
     ];
     for (const [col, type] of stratCols) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); }
@@ -1651,7 +1653,7 @@ async function checkOpenSignals(env, onlySignalId = null) {
   await ensureTables(env);
   const rows = await env.DB.prepare(`
     SELECT * FROM signals
-    WHERE outcome = 'OPEN' AND ai_tp IS NOT NULL AND ai_sl IS NOT NULL
+    WHERE (outcome = 'OPEN' OR outcome IS NULL) AND ai_tp IS NOT NULL AND ai_sl IS NOT NULL
     ${onlySignalId ? 'AND id = ?' : ''}
     ORDER BY created_at ASC
   `).bind(...(onlySignalId ? [onlySignalId] : [])).all();
@@ -1660,8 +1662,15 @@ async function checkOpenSignals(env, onlySignalId = null) {
   for (const signal of (rows.results || [])) {
     const price = await getLivePrice(env, signal.symbol);
     const { outcome, hitLevel } = evaluateOutcomeForSignal(signal, price);
-    const item = { id: signal.id, symbol: signal.symbol, direction: signal.direction, price, outcome };
-    if (outcome === 'WIN' || outcome === 'LOSS') {
+    const item = {
+      id: signal.id, symbol: signal.symbol, direction: signal.direction,
+      entry: signal.ai_entry, tp: signal.ai_tp, sl: signal.ai_sl, price
+    };
+    if (!price || !Number.isFinite(price)) {
+      item.status  = 'no_price';
+      item.outcome = null;
+      item.message = `Kein Preis für ${signal.symbol}`;
+    } else if (outcome === 'WIN' || outcome === 'LOSS') {
       const entry = signal.ai_entry || price;
       const exitPrice = hitLevel || price;
       const pnlPct = signal.direction === 'LONG'
@@ -1673,8 +1682,13 @@ async function checkOpenSignals(env, onlySignalId = null) {
         SET outcome = ?, exit_price = ?, pnl_pct = ?, closed_at = ?, outcome_source = 'auto', updated_at = ?, telegram_outcome_sent = COALESCE(telegram_outcome_sent,0)
         WHERE id = ?
       `).bind(outcome, exitPrice, parseFloat(pnlPct.toFixed(2)), now, now, signal.id).run();
-      item.updated = true;
-      item.pnl_pct = parseFloat(pnlPct.toFixed(2));
+      item.status  = 'closed';
+      item.outcome = outcome;
+      item.message = `${outcome} — Preis ${price} hat ${outcome === 'WIN' ? 'TP' : 'SL'} erreicht`;
+    } else {
+      item.status  = 'open';
+      item.outcome = 'OPEN';
+      item.message = 'Weiter offen';
     }
     checked.push(item);
   }
@@ -2119,10 +2133,13 @@ export default {
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const results = await checkOpenSignals(env);
-          return jsonResponse({ ok: true, checked: results.length, results });
+          const closed  = results.filter(r => r.status === 'closed').length;
+          const open    = results.filter(r => r.status === 'open').length;
+          const noprice = results.filter(r => r.status === 'no_price').length;
+          return jsonResponse({ success: true, checked: results.length, closed, open, no_price: noprice, skipped: 0, results });
         } catch (e) {
           console.error('❌ /admin/check-open-trades failed:', e?.message || e);
-          return jsonResponse({ ok: false, error: e.message || 'trade-check failed', results: [] }, 200);
+          return jsonResponse({ success: false, error: e.message || 'trade-check failed' }, 200);
         }
       }
 
@@ -2130,12 +2147,15 @@ export default {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const signalId = url.pathname.replace("/admin/check-trade/", "");
+        if (!signalId) return jsonResponse({ error: "Missing signal ID" }, 400);
         try {
           const results = await checkOpenSignals(env, signalId);
-          return jsonResponse({ ok: true, checked: results.length, results });
+          const r = results[0];
+          if (!r) return jsonResponse({ error: "Signal nicht gefunden" }, 404);
+          return jsonResponse({ success: true, status: r.status, outcome: r.outcome, direction: r.direction, entry: r.entry, price: r.price, tp: r.tp, sl: r.sl, message: r.message });
         } catch (e) {
           console.error('❌ /admin/check-trade failed:', e?.message || e);
-          return jsonResponse({ ok: false, error: e.message || 'trade-check failed', results: [] }, 200);
+          return jsonResponse({ success: false, error: e.message || 'trade-check failed' }, 200);
         }
       }
 
@@ -2144,11 +2164,11 @@ export default {
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const results = await checkOpenSignals(env);
-          const closed = results.filter(r => r.outcome === 'WIN' || r.outcome === 'LOSS').length;
-          return jsonResponse({ ok: true, checked: results.length, closed, open: results.length - closed, results });
+          const closed = results.filter(r => r.status === 'closed').length;
+          return jsonResponse({ success: true, checked: results.length, closed, results });
         } catch (e) {
           console.error('❌ /admin/eod-check failed:', e?.message || e);
-          return jsonResponse({ ok: false, error: e.message || 'eod-check failed', results: [] }, 200);
+          return jsonResponse({ success: false, error: e.message || 'eod-check failed' }, 200);
         }
       }
 
@@ -2543,66 +2563,6 @@ export default {
         return jsonResponse({ success: true });
       }
 
-      if (request.method === "POST" && url.pathname === "/admin/check-open-trades") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
-        try {
-          const results = await checkOpenTrades(env, { outcomeSource: 'manual_admin', adminUsername: session.username });
-          const closed = results.filter(r => r.status === 'closed');
-          const open   = results.filter(r => r.status === 'open');
-          const skipped = results.filter(r => r.status === 'skipped');
-          const noprice = results.filter(r => r.status === 'no_price');
-          return jsonResponse({ success: true, checked: results.length, closed: closed.length, open: open.length, skipped: skipped.length, no_price: noprice.length, results });
-        } catch (error) {
-          return jsonResponse({ success: false, error: error?.message || String(error) }, 500);
-        }
-      }
-
-      if (request.method === "POST" && url.pathname.startsWith("/admin/check-trade/")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
-        const tradeId = url.pathname.replace('/admin/check-trade/', '');
-        if (!tradeId) return jsonResponse({ error: "Missing trade ID" }, 400);
-        try {
-          const trade = await env.DB.prepare(`SELECT id, symbol, direction, ai_entry, ai_tp, ai_sl, outcome, created_at FROM signals WHERE id = ?`).bind(tradeId).first();
-          if (!trade) return jsonResponse({ error: "Signal nicht gefunden" }, 404);
-          const snap = await env.DB.prepare(`SELECT price FROM snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 1`).bind(trade.symbol).first();
-          if (!snap || !snap.price) return jsonResponse({ success: true, status: 'no_price', direction: trade.direction, entry: trade.ai_entry, tp: trade.ai_tp, sl: trade.ai_sl, message: `Kein aktueller Preis für ${trade.symbol}` });
-          const price = snap.price;
-          const tp = trade.ai_tp;
-          const sl = trade.ai_sl;
-          let newOutcome = null;
-          if (trade.direction === 'LONG') {
-            if (tp && price >= tp) newOutcome = 'WIN';
-            else if (sl && price <= sl) newOutcome = 'LOSS';
-          } else if (trade.direction === 'SHORT') {
-            if (tp && price <= tp) newOutcome = 'WIN';
-            else if (sl && price >= sl) newOutcome = 'LOSS';
-          }
-          if (newOutcome) {
-            const now = Date.now();
-            await env.DB.prepare(`UPDATE signals SET outcome = ?, exit_price = ?, outcome_source = ?, closed_at = ?, updated_at = ? WHERE id = ?`)
-              .bind(newOutcome, price, `manual_admin by ${session.username}`, now, now, tradeId).run();
-            return jsonResponse({ success: true, status: 'closed', outcome: newOutcome, direction: trade.direction, entry: trade.ai_entry, price, tp, sl, message: `${newOutcome} — ${price} hat ${newOutcome === 'WIN' ? 'TP' : 'SL'} erreicht` });
-          }
-          return jsonResponse({ success: true, status: 'open', direction: trade.direction, entry: trade.ai_entry, price, tp, sl, message: 'Trade weiter offen — TP/SL noch nicht erreicht' });
-        } catch (error) {
-          return jsonResponse({ success: false, error: error?.message || String(error) }, 500);
-        }
-      }
-
-      if (request.method === "POST" && url.pathname === "/admin/eod-check") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
-        try {
-          const results = await checkOpenTradesEndOfDay(env);
-          const closed = results.filter(r => r.status === 'closed');
-          return jsonResponse({ success: true, checked: results.length, closed: closed.length, results });
-        } catch (error) {
-          return jsonResponse({ success: false, error: error?.message || String(error) }, 500);
-        }
-      }
-
       // ── MORNING ROUTINE ──────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/morning-routine") {
@@ -2637,6 +2597,41 @@ export default {
           body.bias ? now : (body.completed ? now : null), now
         ).run();
         return jsonResponse({ success: true, id });
+      }
+
+      // ── MORNING BRIEFING ─────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/morning-briefing") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const since = Date.now() - 14 * 60 * 60 * 1000; // last 14 hours
+          const rows = await env.DB.prepare(
+            `SELECT * FROM market_events WHERE status = 'ACTIVE' AND (updated_at >= ? OR created_at >= ?) ORDER BY impact DESC, event_time DESC LIMIT 30`
+          ).bind(since, since).all();
+          const events = rows.results || [];
+          const highImpact = events.filter(e => e.impact === 'HIGH');
+          const affectedSymbols = [...new Set(
+            events.flatMap(e => { try { return JSON.parse(e.affected_symbols || '[]'); } catch { return []; } })
+          )];
+          const marketScope = highImpact.some(e => ['MACRO','GLOBAL','REGULATION'].includes(e.affected_scope))
+            ? 'GLOBAL' : affectedSymbols.length > 0 ? 'COIN_SPECIFIC' : 'GLOBAL';
+          const summary = events.length === 0
+            ? 'Keine relevanten Marktnews in den letzten 14 Stunden.'
+            : `${events.length} Ereignisse — ${highImpact.length} HIGH Impact.${affectedSymbols.length ? ' Betroffene Coins: ' + affectedSymbols.slice(0,5).join(', ') + '.' : ''} Erhöhte Aufmerksamkeit empfohlen. Kein direkter Trade-Hinweis.`;
+          return jsonResponse({
+            success: true,
+            date: new Date().toISOString().slice(0, 10),
+            summary,
+            highImpact: highImpact.slice(0, 10),
+            affectedSymbols: affectedSymbols.slice(0, 10),
+            marketScope,
+            events: events.slice(0, 20),
+            disclaimer: 'Nur Marktübersicht. Keine Finanzberatung. Jeder Trade ist eigenverantwortlich zu prüfen.'
+          });
+        } catch (e) {
+          return jsonResponse({ success: false, error: e.message }, 500);
+        }
       }
 
       // ── TODAY BIAS ───────────────────────────────────────────

@@ -8,6 +8,7 @@ const DashboardPage = ({ user, navigate }) => {
   const [data, setData]           = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [toast, setToast]         = useState(null);
+  const [todayBias, setTodayBias] = useState(null);
   const [radar, setRadar]         = useState(null);
 
   const showToast = (msg, type = 'info') => {
@@ -25,6 +26,7 @@ const DashboardPage = ({ user, navigate }) => {
   useEffect(() => {
     const sessionId = localStorage.getItem('wavescout_session');
     loadLiveData(sessionId);
+    loadTodayBias(sessionId);
     loadMarketRadar(sessionId);
     const interval = setInterval(() => loadLiveData(sessionId), 30000);
     const radarInterval = setInterval(() => loadMarketRadar(sessionId), 5 * 60 * 1000);
