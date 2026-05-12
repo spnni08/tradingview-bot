@@ -82,20 +82,67 @@ async function withTimeout(promise, ms, fallbackValue = null) {
   return result;
 }
 
+function getSignalQuality(score) {
+  if (score >= 90) return 'A+ Setup – sehr stark prüfen';
+  if (score >= 80) return 'Starkes Setup – prüfen';
+  if (score >= 70) return 'Gutes Setup – mit Vorsicht prüfen';
+  if (score >= 60) return 'Schwaches Setup – eher beobachten';
+  if (score >= 50) return 'Unsicher – warten';
+  return 'Kein Trade / Skip';
+}
+
+function calcRR(entry, tp, sl, isLong) {
+  if (!entry || !tp || !sl || entry === 0) return null;
+  const reward = Math.abs(tp - entry);
+  const risk   = Math.abs(entry - sl);
+  if (risk === 0) return null;
+  return parseFloat((reward / risk).toFixed(2));
+}
+
+function safePct(a, b) {
+  if (!a || !b || b === 0) return null;
+  return parseFloat(((Math.abs(a - b) / b) * 100).toFixed(3));
+}
+
+function tryParseJSON(str) {
+  if (!str) return null;
+  try { return JSON.parse(str); } catch { return null; }
+}
+
 function formatSignalForTelegram(signal) {
   const emoji = signal.direction === 'LONG' ? '🟢' : '🔴';
-  const scoreEmoji = signal.ai_score >= 75 ? '⭐⭐⭐' : signal.ai_score >= 65 ? '⭐⭐' : '⭐';
-  return `
-${emoji} <b>${signal.symbol}</b> ${signal.direction}
+  const sc    = signal.ai_score || 0;
+  const scoreEmoji = sc >= 90 ? '⭐⭐⭐' : sc >= 75 ? '⭐⭐' : '⭐';
+  const quality = signal.signal_quality || getSignalQuality(sc);
+  const rrVal   = signal.risk_reward;
+  const rrStr   = rrVal ? `1:${rrVal.toFixed(1)}` : 'N/A';
+  const fmt     = (v) => v != null && !isNaN(v) ? `$${parseFloat(v).toFixed(2)}` : 'unbekannt';
 
-${scoreEmoji} Score: <b>${signal.ai_score}/100</b>
-📊 Timeframe: ${signal.timeframe}
-💰 Entry: $${signal.ai_entry?.toFixed(2) || signal.price?.toFixed(2)}
-🎯 TP: $${signal.ai_tp?.toFixed(2) || 'N/A'}
-🛑 SL: $${signal.ai_sl?.toFixed(2) || 'N/A'}
+  const biasLine = signal.daily_bias
+    ? `\n📐 Tagesbias: ${signal.daily_bias}${signal.bias_match ? ` · ${signal.bias_match}` : ''}` : '';
 
-${signal.ai_reason || 'Signal von TradingView'}
-  `.trim();
+  const matched = tryParseJSON(signal.matched_rules) || [];
+  const failed  = tryParseJSON(signal.failed_rules)  || [];
+  const matchedStr = matched.slice(0, 3).map(r => `✅ ${r}`).join('\n') || '–';
+  const failedStr  = failed.slice(0, 3).map(r => `❌ ${r}`).join('\n')  || '–';
+
+  const disclaimer = '\n\n⚠️ <i>Hinweis: Keine Finanzberatung. Signale dienen nur zu Analyse- und Backtesting-Zwecken. Trading birgt Risiko. Keine Garantie für Gewinne.</i>';
+
+  return `${emoji} <b>${signal.symbol}</b> ${signal.direction}
+
+${scoreEmoji} Score: <b>${sc}/100</b> · ${quality}
+💰 Entry: ${fmt(signal.ai_entry ?? signal.price)}
+🎯 TP: ${fmt(signal.ai_tp)}
+🛑 SL: ${fmt(signal.ai_sl)}
+⚖️ R:R: ${rrStr}${biasLine}
+
+✅ <b>Erfüllt:</b>
+${matchedStr}
+
+❌ <b>Fehlt / Warnung:</b>
+${failedStr}
+
+📋 ${signal.ai_reason || 'Signal von TradingView'}${disclaimer}`.trim();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -188,7 +235,6 @@ function analyzeWithRules(signal, strategyConfig = null) {
   const isLong  = dir === 'LONG';
   const isShort = dir === 'SHORT';
 
-  // Extract weights from config (0 = disabled)
   const rW  = cfg.rules?.rsi?.enabled                !== false ? (cfg.rules?.rsi?.weight                ?? 18) : 0;
   const eW  = cfg.rules?.ema?.enabled                !== false ? (cfg.rules?.ema?.weight                ?? 12) : 0;
   const tW  = cfg.rules?.trend?.enabled              !== false ? (cfg.rules?.trend?.weight              ?? 10) : 0;
@@ -198,62 +244,130 @@ function analyzeWithRules(signal, strategyConfig = null) {
   const cW  = cfg.rules?.confidence?.enabled         !== false ? (cfg.rules?.confidence?.weight         ?? 10) : 0;
 
   let score = 50;
+  const matched_rules  = [];
+  const failed_rules   = [];
+  const unknown_rules  = [];
+  const score_breakdown = {};
 
   // ── RSI ──────────────────────────────────────────────────────
-  const rsi = parseFloat(signal.rsi ?? 50);
+  const rsi = signal.rsi != null ? parseFloat(signal.rsi) : null;
   if (rW > 0) {
-    if (isLong) {
-      if      (rsi < 30) score += rW;
-      else if (rsi < 40) score += Math.round(rW * 0.56);
-      else if (rsi < 50) score += Math.round(rW * 0.22);
-      else if (rsi > 70) score -= rW;
-      else if (rsi > 60) score -= Math.round(rW * 0.33);
-    } else if (isShort) {
-      if      (rsi > 70) score += rW;
-      else if (rsi > 60) score += Math.round(rW * 0.56);
-      else if (rsi > 50) score += Math.round(rW * 0.22);
-      else if (rsi < 30) score -= rW;
-      else if (rsi < 40) score -= Math.round(rW * 0.33);
+    if (rsi == null) {
+      unknown_rules.push('RSI (keine Daten)');
+      score_breakdown.rsi = 0;
+    } else {
+      let rsiDelta = 0;
+      if (isLong) {
+        if      (rsi < 30) { rsiDelta = rW;                        matched_rules.push(`RSI überverkauft (${rsi.toFixed(0)}) – günstig für LONG`); }
+        else if (rsi < 40) { rsiDelta = Math.round(rW * 0.56);    matched_rules.push(`RSI niedrig (${rsi.toFixed(0)}) – passt zu LONG`); }
+        else if (rsi < 50) { rsiDelta = Math.round(rW * 0.22);    matched_rules.push(`RSI neutral-niedrig (${rsi.toFixed(0)})`); }
+        else if (rsi > 70) { rsiDelta = -rW;                       failed_rules.push(`RSI überkauft (${rsi.toFixed(0)}) – ungünstig für LONG`); }
+        else if (rsi > 60) { rsiDelta = -Math.round(rW * 0.33);   failed_rules.push(`RSI hoch (${rsi.toFixed(0)}) – Vorsicht bei LONG`); }
+        else               {                                        matched_rules.push(`RSI neutral (${rsi.toFixed(0)})`); }
+      } else if (isShort) {
+        if      (rsi > 70) { rsiDelta = rW;                        matched_rules.push(`RSI überkauft (${rsi.toFixed(0)}) – günstig für SHORT`); }
+        else if (rsi > 60) { rsiDelta = Math.round(rW * 0.56);    matched_rules.push(`RSI hoch (${rsi.toFixed(0)}) – passt zu SHORT`); }
+        else if (rsi > 50) { rsiDelta = Math.round(rW * 0.22);    matched_rules.push(`RSI neutral-hoch (${rsi.toFixed(0)})`); }
+        else if (rsi < 30) { rsiDelta = -rW;                       failed_rules.push(`RSI überverkauft (${rsi.toFixed(0)}) – ungünstig für SHORT`); }
+        else if (rsi < 40) { rsiDelta = -Math.round(rW * 0.33);   failed_rules.push(`RSI niedrig (${rsi.toFixed(0)}) – Vorsicht bei SHORT`); }
+        else               {                                        matched_rules.push(`RSI neutral (${rsi.toFixed(0)})`); }
+      }
+      score += rsiDelta;
+      score_breakdown.rsi = rsiDelta;
     }
   }
 
   // ── EMA trend alignment ──────────────────────────────────────
   const ema50  = parseFloat(signal.ema50  ?? 0);
   const ema200 = parseFloat(signal.ema200 ?? 0);
-  if (eW > 0 && ema50 && ema200) {
-    const bullish = ema50 > ema200;
-    if (isLong  && bullish)  score += eW;
-    if (isShort && !bullish) score += eW;
-    if (isLong  && !bullish) score -= eW;
-    if (isShort && bullish)  score -= eW;
+  if (eW > 0) {
+    if (!ema50 || !ema200) {
+      unknown_rules.push('EMA 50/200 (keine Daten)');
+      score_breakdown.ema = 0;
+    } else {
+      const bullish = ema50 > ema200;
+      let emaDelta = 0;
+      if (isLong  && bullish)  { emaDelta = eW;   matched_rules.push('EMA 50 > EMA 200 – bullisher Trend passt zu LONG'); }
+      if (isShort && !bullish) { emaDelta = eW;   matched_rules.push('EMA 50 < EMA 200 – bearisher Trend passt zu SHORT'); }
+      if (isLong  && !bullish) { emaDelta = -eW;  failed_rules.push('EMA 50 < EMA 200 – bearisher Trend gegen LONG'); }
+      if (isShort && bullish)  { emaDelta = -eW;  failed_rules.push('EMA 50 > EMA 200 – bullisher Trend gegen SHORT'); }
+      score += emaDelta;
+      score_breakdown.ema = emaDelta;
+    }
   }
 
   // ── Trend label ──────────────────────────────────────────────
   const trend = (signal.trend || '').toUpperCase();
   if (tW > 0) {
-    if (trend === 'BULLISH' || trend === 'UP')     score += isLong  ? tW : -tW;
-    else if (trend === 'BEARISH' || trend === 'DOWN') score += isShort ? tW : -tW;
+    if (!trend) {
+      unknown_rules.push('Trend-Label (keine Daten)');
+      score_breakdown.trend = 0;
+    } else {
+      let tDelta = 0;
+      if (trend === 'BULLISH' || trend === 'UP') {
+        tDelta = isLong ? tW : -tW;
+        if (isLong)  matched_rules.push('Trend BULLISH – passt zu LONG');
+        else         failed_rules.push('Trend BULLISH – gegen SHORT');
+      } else if (trend === 'BEARISH' || trend === 'DOWN') {
+        tDelta = isShort ? tW : -tW;
+        if (isShort) matched_rules.push('Trend BEARISH – passt zu SHORT');
+        else         failed_rules.push('Trend BEARISH – gegen LONG');
+      } else {
+        unknown_rules.push(`Trend unklar (${trend})`);
+      }
+      score += tDelta;
+      score_breakdown.trend = tDelta;
+    }
   }
 
   // ── Wave bias ────────────────────────────────────────────────
   const waveBias = (signal.wave_bias || '').toUpperCase();
   if (wW > 0) {
-    if (waveBias === 'LONG')  score += isLong  ? wW : -Math.round(wW * 0.5);
-    if (waveBias === 'SHORT') score += isShort ? wW : -Math.round(wW * 0.5);
+    if (!waveBias) {
+      unknown_rules.push('Wave Bias (keine Daten)');
+      score_breakdown.wave_bias = 0;
+    } else {
+      let wDelta = 0;
+      if (waveBias === 'LONG') {
+        wDelta = isLong ? wW : -Math.round(wW * 0.5);
+        if (isLong)  matched_rules.push('Wave Bias LONG – passt zu LONG');
+        else         failed_rules.push('Wave Bias LONG – gegen SHORT');
+      } else if (waveBias === 'SHORT') {
+        wDelta = isShort ? wW : -Math.round(wW * 0.5);
+        if (isShort) matched_rules.push('Wave Bias SHORT – passt zu SHORT');
+        else         failed_rules.push('Wave Bias SHORT – gegen LONG');
+      }
+      score += wDelta;
+      score_breakdown.wave_bias = wDelta;
+    }
   }
 
   // ── Timeframe ────────────────────────────────────────────────
   if (tfW > 0) {
     const tf = String(signal.timeframe || '').replace('m','').replace('h','H');
-    if      (['60','240','1H','4H'].includes(tf)) score += tfW;
-    else if (['15','30'].includes(tf))             score += Math.round(tfW * 0.5);
+    let tfDelta = 0;
+    if      (['60','240','1H','4H'].includes(tf)) { tfDelta = tfW;                    matched_rules.push(`Timeframe ${tf} – hohes Gewicht`); }
+    else if (['15','30'].includes(tf))             { tfDelta = Math.round(tfW * 0.5); matched_rules.push(`Timeframe ${tf} – mittleres Gewicht`); }
+    else if (tf)                                   {                                   failed_rules.push(`Timeframe ${tf} – niedrigers Gewicht`); }
+    else                                           { unknown_rules.push('Timeframe (keine Daten)'); }
+    score += tfDelta;
+    score_breakdown.timeframe = tfDelta;
   }
 
   // ── Confidence ───────────────────────────────────────────────
   if (cW > 0) {
-    const confidence = parseFloat(signal.confidence ?? 0);
-    if      (confidence >= 80) score += cW;
-    else if (confidence >= 60) score += Math.round(cW * 0.5);
+    const confidence = parseFloat(signal.confidence ?? -1);
+    if (confidence < 0) {
+      unknown_rules.push('Konfidenz (keine Daten)');
+      score_breakdown.confidence = 0;
+    } else {
+      let cDelta = 0;
+      if      (confidence >= 80) { cDelta = cW;                    matched_rules.push(`Konfidenz ${confidence}% – hoch`); }
+      else if (confidence >= 60) { cDelta = Math.round(cW * 0.5); matched_rules.push(`Konfidenz ${confidence}% – mittel`); }
+      else                       {                                  failed_rules.push(`Konfidenz ${confidence}% – niedrig`); }
+      score += cDelta;
+      score_breakdown.confidence = cDelta;
+    }
   }
 
   // ── Support / Resistance proximity ───────────────────────────
@@ -261,18 +375,32 @@ function analyzeWithRules(signal, strategyConfig = null) {
   const support    = parseFloat(signal.support ?? 0);
   const resistance = parseFloat(signal.resistance ?? 0);
   if (srW > 0) {
-    if (price && support && isLong && price > support) {
-      if ((price - support) / price < 0.02) score += srW;
-    }
-    if (price && resistance && isShort && price < resistance) {
-      if ((resistance - price) / price < 0.02) score += srW;
+    let srDelta = 0;
+    if (!price) {
+      unknown_rules.push('Support/Resistance (kein Preis)');
+      score_breakdown.support_resistance = 0;
+    } else if (!support && !resistance) {
+      unknown_rules.push('Support/Resistance (keine Zonen)');
+      score_breakdown.support_resistance = 0;
+    } else {
+      if (price && support && isLong && price > support) {
+        if ((price - support) / price < 0.02) { srDelta = srW; matched_rules.push('Preis nah an Support – günstig für LONG'); }
+        else { failed_rules.push('Preis zu weit von Support entfernt'); }
+      } else if (price && resistance && isShort && price < resistance) {
+        if ((resistance - price) / price < 0.02) { srDelta = srW; matched_rules.push('Preis nah an Resistance – günstig für SHORT'); }
+        else { failed_rules.push('Preis zu weit von Resistance entfernt'); }
+      } else {
+        failed_rules.push('Preis nicht in Key-Zone');
+      }
+      score += srDelta;
+      score_breakdown.support_resistance = srDelta;
     }
   }
 
   // ── Clamp ────────────────────────────────────────────────────
   score = Math.max(0, Math.min(100, Math.round(score)));
 
-  // ── Recommendation (uses config thresholds) ──────────────────
+  // ── Recommendation ───────────────────────────────────────────
   const minTrade    = cfg.thresholds?.min_trade_score    ?? 70;
   const minTelegram = cfg.thresholds?.min_telegram_score ?? 55;
 
@@ -295,13 +423,23 @@ function analyzeWithRules(signal, strategyConfig = null) {
 
   // ── Reason ───────────────────────────────────────────────────
   const reasons = [];
-  if (rsi && (rsi < 35 || rsi > 65)) reasons.push(`RSI ${rsi}`);
+  if (rsi != null && (rsi < 35 || rsi > 65)) reasons.push(`RSI ${rsi}`);
   if (ema50 && ema200) reasons.push(`EMA ${ema50 > ema200 ? 'bullish' : 'bearish'}`);
   if (trend)    reasons.push(`Trend: ${trend}`);
   if (waveBias) reasons.push(`Bias: ${waveBias}`);
   const reason = reasons.length > 0 ? reasons.join(' · ') : 'Rule-based analysis';
 
-  return { recommendation, score, risk, entry, tp, sl, reason, direction: dir };
+  // ── R:R & quality ────────────────────────────────────────────
+  const risk_reward       = calcRR(entry, tp, sl, isLong);
+  const planned_profit_pct = safePct(tp, entry);
+  const planned_risk_pct   = safePct(sl, entry);
+  const signal_quality     = getSignalQuality(score);
+
+  return {
+    recommendation, score, risk, entry, tp, sl, reason, direction: dir,
+    matched_rules, failed_rules, unknown_rules, score_breakdown,
+    risk_reward, planned_profit_pct, planned_risk_pct, signal_quality,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -490,6 +628,135 @@ async function ensureTables(env) {
     for (const [col, type] of userCols) {
       try { await env.DB.prepare(`ALTER TABLE users ADD COLUMN ${col} ${type}`).run(); }
       catch (_) {}
+    }
+
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS morning_routines (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        date TEXT NOT NULL,
+        bias TEXT NOT NULL,
+        chart_opened INTEGER DEFAULT 0,
+        ema200_checked INTEGER DEFAULT 0,
+        ema_direction TEXT,
+        key_zones_marked INTEGER DEFAULT 0,
+        zone_notes TEXT,
+        bias_reason TEXT,
+        completed_at INTEGER,
+        created_at INTEGER
+      )
+    `).run();
+
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS pre_trade_checklists (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        signal_id TEXT,
+        date TEXT NOT NULL,
+        bias_match INTEGER DEFAULT 0,
+        in_key_zone INTEGER DEFAULT 0,
+        structure_confirmed INTEGER DEFAULT 0,
+        no_chop INTEGER DEFAULT 0,
+        trend_candle INTEGER DEFAULT 0,
+        break_confirmed INTEGER DEFAULT 0,
+        rsi_ok INTEGER DEFAULT 0,
+        rsi_not_extreme INTEGER DEFAULT 0,
+        sl_logical INTEGER DEFAULT 0,
+        rr_ok INTEGER DEFAULT 0,
+        can_explain INTEGER DEFAULT 0,
+        clear_minded INTEGER DEFAULT 0,
+        no_fomo INTEGER DEFAULT 0,
+        notes TEXT,
+        created_at INTEGER
+      )
+    `).run();
+
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS trade_reviews (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        signal_id TEXT,
+        date TEXT NOT NULL,
+        instrument TEXT,
+        direction TEXT,
+        entry REAL,
+        stop_loss REAL,
+        take_profit REAL,
+        exit_price REAL,
+        outcome TEXT,
+        realized_rr TEXT,
+        bias_clear INTEGER DEFAULT 0,
+        bias_direction INTEGER DEFAULT 0,
+        in_key_zone INTEGER DEFAULT 0,
+        structure_hl_lh INTEGER DEFAULT 0,
+        trend_candle_clean INTEGER DEFAULT 0,
+        break_confirmed INTEGER DEFAULT 0,
+        rsi_ok INTEGER DEFAULT 0,
+        sl_logical INTEGER DEFAULT 0,
+        rr_acceptable INTEGER DEFAULT 0,
+        what_went_well TEXT,
+        what_went_wrong TEXT,
+        discipline TEXT,
+        mood_before TEXT,
+        no_fomo INTEGER DEFAULT 0,
+        sl_not_moved INTEGER DEFAULT 0,
+        tp_not_closed_early INTEGER DEFAULT 0,
+        no_revenge INTEGER DEFAULT 0,
+        lesson TEXT,
+        would_take_again INTEGER DEFAULT 0,
+        created_at INTEGER,
+        updated_at INTEGER
+      )
+    `).run();
+
+    // Migrate signals table — bias/routine columns
+    const biasCols = [
+      ['morning_routine_id',    'TEXT'],
+      ['daily_bias',            'TEXT'],
+      ['before_morning_routine','INTEGER DEFAULT 0'],
+      ['bias_match',            'TEXT'],
+      ['counts_for_strategy',   'INTEGER DEFAULT 1'],
+    ];
+    for (const [col, type] of biasCols) {
+      try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); } catch (_) {}
+    }
+
+    // Phase 4 — signal analysis columns
+    const phase4Cols = [
+      ['matched_rules',      'TEXT'],
+      ['failed_rules',       'TEXT'],
+      ['unknown_rules',      'TEXT'],
+      ['score_breakdown',    'TEXT'],
+      ['trigger_reason',     'TEXT'],
+      ['signal_quality',     'TEXT'],
+      ['risk_reward',        'REAL'],
+      ['planned_profit_pct', 'REAL'],
+      ['planned_risk_pct',   'REAL'],
+      ['excluded_reason',    'TEXT'],
+      ['disclaimer_shown',   'INTEGER DEFAULT 1'],
+    ];
+    for (const [col, type] of phase4Cols) {
+      try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); } catch (_) {}
+    }
+
+    // Migrate trade_reviews table — add columns expected by frontend
+    const tradeReviewCols = [
+      ['followed_plan',      'INTEGER DEFAULT 0'],
+      ['waited_confirmation','INTEGER DEFAULT 0'],
+      ['felt_confident',     'INTEGER DEFAULT 0'],
+    ];
+    for (const [col, type] of tradeReviewCols) {
+      try { await env.DB.prepare(`ALTER TABLE trade_reviews ADD COLUMN ${col} ${type}`).run(); } catch (_) {}
+    }
+
+    // Migrate market_events table — extended news fields
+    const marketEventsCols = [
+      ['long_text',          'TEXT'],
+      ['affected_symbols',   'TEXT'],
+      ['affected_scope',     'TEXT'],
+    ];
+    for (const [col, type] of marketEventsCols) {
+      try { await env.DB.prepare(`ALTER TABLE market_events ADD COLUMN ${col} ${type}`).run(); } catch (_) {}
     }
 
     // Migrate snapshots table (compat with unique symbol snapshots)
@@ -848,13 +1115,25 @@ async function processSignal(env, signal) {
   if (!strategy) strategy = await initDefaultStrategy(env);
   const strategyConfig = strategy?.config || null;
 
-  const fallbackAnalysis = analyzeWithRules(signal, strategyConfig);
+  const ruleAnalysis  = analyzeWithRules(signal, strategyConfig);
+  const fallbackAnalysis = ruleAnalysis;
   const analysis = await withTimeout(
     analyzeSignalWithAI(env, signal, strategyConfig),
     AI_TIMEOUT_MS,
     fallbackAnalysis
   ) || fallbackAnalysis;
   const signalId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  // Compute derived fields from ruleAnalysis (always deterministic)
+  const matchedRulesJSON   = JSON.stringify(ruleAnalysis.matched_rules  || []);
+  const failedRulesJSON    = JSON.stringify(ruleAnalysis.failed_rules   || []);
+  const unknownRulesJSON   = JSON.stringify(ruleAnalysis.unknown_rules  || []);
+  const scoreBreakdownJSON = JSON.stringify(ruleAnalysis.score_breakdown || {});
+  const signalQuality      = getSignalQuality(analysis.score);
+  const riskReward         = calcRR(analysis.entry, analysis.tp, analysis.sl, direction === 'LONG');
+  const plannedProfitPct   = safePct(analysis.tp, analysis.entry);
+  const plannedRiskPct     = safePct(analysis.sl, analysis.entry);
+  const triggerReason      = signal.trigger || signal.action || 'WEBHOOK';
 
   // Determine Telegram notification
   const isTest       = signal.test === true || signal.is_test === 1;
@@ -869,11 +1148,15 @@ async function processSignal(env, signal) {
     const telegramMessage = debugPrefix + formatSignalForTelegram({
       ...signal,
       direction,
-      ai_score:  analysis.score,
-      ai_entry:  analysis.entry,
-      ai_tp:     analysis.tp,
-      ai_sl:     analysis.sl,
-      ai_reason: analysis.reason
+      ai_score:       analysis.score,
+      ai_entry:       analysis.entry,
+      ai_tp:          analysis.tp,
+      ai_sl:          analysis.sl,
+      ai_reason:      analysis.reason,
+      signal_quality: signalQuality,
+      risk_reward:    riskReward,
+      matched_rules:  matchedRulesJSON,
+      failed_rules:   failedRulesJSON,
     });
     const sent = await withTimeout(sendTelegramMessage(env, telegramMessage), TELEGRAM_TIMEOUT_MS, false);
     if (sent) telegramSent = 1;
@@ -888,8 +1171,14 @@ async function processSignal(env, signal) {
       rule_score, rule_reason,
       strategy_id, strategy_name, strategy_version,
       is_test, source, telegram_sent, telegram_reason,
+      matched_rules, failed_rules, unknown_rules, score_breakdown,
+      signal_quality, risk_reward, planned_profit_pct, planned_risk_pct,
+      trigger_reason, disclaimer_shown,
       created_at, outcome
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    )
   `).bind(
     signalId,
     signal.symbol  || 'UNKNOWN',
@@ -923,6 +1212,16 @@ async function processSignal(env, signal) {
     signal.source || 'WEBHOOK',
     telegramSent,
     telegramReason,
+    matchedRulesJSON,
+    failedRulesJSON,
+    unknownRulesJSON,
+    scoreBreakdownJSON,
+    signalQuality,
+    riskReward,
+    plannedProfitPct,
+    plannedRiskPct,
+    triggerReason,
+    1,
     Date.now(),
     'OPEN'
   ).run();
@@ -1082,11 +1381,12 @@ async function getMarketRadar(env, session = null) {
   for (const event of relevant) {
     await env.DB.prepare(`
       INSERT OR REPLACE INTO market_events
-      (id, created_at, updated_at, event_time, title, category, impact, affected_markets, source, source_url, summary, radar_status, raw_json, status)
-      VALUES (?, COALESCE((SELECT created_at FROM market_events WHERE id = ?), ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+      (id, created_at, updated_at, event_time, title, category, impact, affected_markets, source, source_url, summary, radar_status, raw_json, long_text, affected_symbols, affected_scope, status)
+      VALUES (?, COALESCE((SELECT created_at FROM market_events WHERE id = ?), ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
     `).bind(
       event.id, event.id, now, now, event.event_time, event.title, event.category, event.impact,
-      JSON.stringify(event.affected_markets), event.source, event.source_url, event.summary, status, JSON.stringify(event)
+      JSON.stringify(event.affected_markets), event.source, event.source_url, event.summary, status, JSON.stringify(event),
+      event.long_text || '', event.affected_symbols || '[]', event.affected_scope || 'GLOBAL'
     ).run();
     debug.db_saved += 1;
   }
@@ -1211,6 +1511,10 @@ async function validateSession(env, sessionId) {
     return null;
   }
 }
+
+function isAdmin(session) { return session?.role === 'admin'; }
+function isTraderOrAdmin(session) { return session?.role === 'admin' || session?.role === 'trader'; }
+function canViewDashboard(session) { return session && !session.blocked; } // admin/trader/viewer/extern all can view
 
 async function logout(env, sessionId) {
   try {
@@ -2209,7 +2513,7 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/strategies") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const { name, version, config } = await request.json();
         if (!name || !config) return jsonResponse({ error: "name and config required" }, 400);
         const id = `strategy_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -2223,7 +2527,7 @@ export default {
 
       if (request.method === "PUT" && url.pathname.startsWith("/strategies/") && !url.pathname.endsWith("/activate") && url.pathname !== "/strategies/reset-to-default" && url.pathname !== "/strategies/compare" && url.pathname !== "/strategies/ab-backtest" && url.pathname !== "/strategies/suggestions") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const stratId = url.pathname.slice("/strategies/".length);
         const existing = await env.DB.prepare(`SELECT * FROM strategies WHERE id = ?`).bind(stratId).first();
         if (!existing) return jsonResponse({ error: "Nicht gefunden" }, 404);
@@ -2241,7 +2545,7 @@ export default {
 
       if (request.method === "DELETE" && url.pathname.startsWith("/strategies/")) {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const stratId = url.pathname.slice("/strategies/".length);
         const existing = await env.DB.prepare(`SELECT * FROM strategies WHERE id = ?`).bind(stratId).first();
         if (!existing) return jsonResponse({ error: "Nicht gefunden" }, 404);
@@ -2252,7 +2556,7 @@ export default {
 
       if (request.method === "POST" && url.pathname.endsWith("/activate") && url.pathname.startsWith("/strategies/")) {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const stratId = url.pathname.replace("/activate", "").slice("/strategies/".length);
         await env.DB.prepare(`UPDATE strategies SET active = 0`).run();
         await env.DB.prepare(`UPDATE strategies SET active = 1, updated_at = ? WHERE id = ?`).bind(Date.now(), stratId).run();
@@ -2261,7 +2565,7 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/strategies/reset-to-default") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         await env.DB.prepare(`UPDATE strategies SET active = 0`).run();
         await env.DB.prepare(`UPDATE strategies SET active = 1, updated_at = ? WHERE is_default = 1`).bind(Date.now()).run();
         return jsonResponse({ success: true });
@@ -2293,7 +2597,7 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/strategies/ab-backtest") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const { strategyIds } = await request.json();
         if (!strategyIds?.length) return jsonResponse({ error: "strategyIds required" }, 400);
         const signals = await env.DB.prepare(`SELECT * FROM signals ORDER BY created_at DESC LIMIT 100`).all();
@@ -2376,6 +2680,264 @@ export default {
           const rows = await env.DB.prepare(`SELECT * FROM signal_loss_reasons WHERE signal_id = ? ORDER BY created_at DESC`).bind(signalId).all();
           return jsonResponse(rows.results || []);
         } catch (_) { return jsonResponse([]); }
+      }
+
+      // ── ADMIN: ROLE CHANGE ──────────────────────────────────
+
+      if (request.method === "PATCH" && url.pathname.startsWith("/admin/users/") && url.pathname.endsWith("/role")) {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!isAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
+        const userId = url.pathname.split("/")[3];
+        const { role } = await request.json();
+        const validRoles = ['admin', 'trader', 'viewer', 'extern'];
+        if (!validRoles.includes(role)) return jsonResponse({ error: "Ungültige Rolle" }, 400);
+        await env.DB.prepare(`UPDATE users SET role = ?, updated_at = ? WHERE id = ?`)
+          .bind(role, Date.now(), userId).run();
+        try {
+          await env.DB.prepare(`UPDATE sessions SET role = ? WHERE user_id = ?`).bind(role, userId).run();
+        } catch (_) {}
+        return jsonResponse({ success: true });
+      }
+
+      if (request.method === "POST" && url.pathname === "/admin/check-open-trades") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const results = await checkOpenTrades(env, { outcomeSource: 'manual_admin', adminUsername: session.username });
+          const closed = results.filter(r => r.status === 'closed');
+          const open   = results.filter(r => r.status === 'open');
+          const skipped = results.filter(r => r.status === 'skipped');
+          const noprice = results.filter(r => r.status === 'no_price');
+          return jsonResponse({ success: true, checked: results.length, closed: closed.length, open: open.length, skipped: skipped.length, no_price: noprice.length, results });
+        } catch (error) {
+          return jsonResponse({ success: false, error: error?.message || String(error) }, 500);
+        }
+      }
+
+      if (request.method === "POST" && url.pathname.startsWith("/admin/check-trade/")) {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const tradeId = url.pathname.replace('/admin/check-trade/', '');
+        if (!tradeId) return jsonResponse({ error: "Missing trade ID" }, 400);
+        try {
+          const trade = await env.DB.prepare(`SELECT id, symbol, direction, ai_entry, ai_tp, ai_sl, outcome, created_at FROM signals WHERE id = ?`).bind(tradeId).first();
+          if (!trade) return jsonResponse({ error: "Signal nicht gefunden" }, 404);
+          const snap = await env.DB.prepare(`SELECT price FROM snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 1`).bind(trade.symbol).first();
+          if (!snap || !snap.price) return jsonResponse({ success: true, status: 'no_price', direction: trade.direction, entry: trade.ai_entry, tp: trade.ai_tp, sl: trade.ai_sl, message: `Kein aktueller Preis für ${trade.symbol}` });
+          const price = snap.price;
+          const tp = trade.ai_tp;
+          const sl = trade.ai_sl;
+          let newOutcome = null;
+          if (trade.direction === 'LONG') {
+            if (tp && price >= tp) newOutcome = 'WIN';
+            else if (sl && price <= sl) newOutcome = 'LOSS';
+          } else if (trade.direction === 'SHORT') {
+            if (tp && price <= tp) newOutcome = 'WIN';
+            else if (sl && price >= sl) newOutcome = 'LOSS';
+          }
+          if (newOutcome) {
+            const now = Date.now();
+            await env.DB.prepare(`UPDATE signals SET outcome = ?, exit_price = ?, outcome_source = ?, closed_at = ?, updated_at = ? WHERE id = ?`)
+              .bind(newOutcome, price, `manual_admin by ${session.username}`, now, now, tradeId).run();
+            return jsonResponse({ success: true, status: 'closed', outcome: newOutcome, direction: trade.direction, entry: trade.ai_entry, price, tp, sl, message: `${newOutcome} — ${price} hat ${newOutcome === 'WIN' ? 'TP' : 'SL'} erreicht` });
+          }
+          return jsonResponse({ success: true, status: 'open', direction: trade.direction, entry: trade.ai_entry, price, tp, sl, message: 'Trade weiter offen — TP/SL noch nicht erreicht' });
+        } catch (error) {
+          return jsonResponse({ success: false, error: error?.message || String(error) }, 500);
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/admin/eod-check") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const results = await checkOpenTradesEndOfDay(env);
+          const closed = results.filter(r => r.status === 'closed');
+          return jsonResponse({ success: true, checked: results.length, closed: closed.length, results });
+        } catch (error) {
+          return jsonResponse({ success: false, error: error?.message || String(error) }, 500);
+        }
+      }
+
+      // ── MORNING ROUTINE ──────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/morning-routine") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+        const routine = await env.DB.prepare(
+          `SELECT * FROM morning_routines WHERE user_id = ? AND date = ? ORDER BY created_at DESC LIMIT 1`
+        ).bind(session.userId, date).first();
+        return jsonResponse(routine || null);
+      }
+
+      if (request.method === "POST" && url.pathname === "/morning-routine") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const body = await request.json();
+        const date = body.date || new Date().toISOString().slice(0, 10);
+        const id = body.id || `mr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const now = Date.now();
+        await env.DB.prepare(`
+          INSERT INTO morning_routines (id, user_id, date, bias, chart_opened, ema200_checked, ema_direction, key_zones_marked, zone_notes, bias_reason, completed_at, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET bias = excluded.bias, chart_opened = excluded.chart_opened, ema200_checked = excluded.ema200_checked, ema_direction = excluded.ema_direction, key_zones_marked = excluded.key_zones_marked, zone_notes = excluded.zone_notes, bias_reason = excluded.bias_reason, completed_at = excluded.completed_at
+        `).bind(
+          id, session.userId, date, body.bias || 'KEIN_TRADE',
+          (body.chart_opened ?? body.chartOpened) ? 1 : 0,
+          (body.ema200_checked ?? body.ema200Checked) ? 1 : 0,
+          body.ema_direction || body.emaDirection || null,
+          (body.key_zones_marked ?? body.keyZonesMarked) ? 1 : 0,
+          body.zone_notes || body.zoneNotes || null,
+          body.bias_reason || body.biasReason || null,
+          body.bias ? now : (body.completed ? now : null), now
+        ).run();
+        return jsonResponse({ success: true, id });
+      }
+
+      // ── TODAY BIAS ───────────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/today-bias") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const date = new Date().toISOString().slice(0, 10);
+        const routine = await env.DB.prepare(
+          `SELECT bias, completed_at FROM morning_routines WHERE user_id = ? AND date = ? AND completed_at IS NOT NULL ORDER BY created_at DESC LIMIT 1`
+        ).bind(session.userId, date).first();
+        return jsonResponse({ date, bias: routine?.bias || null, routineDone: !!routine });
+      }
+
+      // ── PRE-TRADE CHECKLIST ──────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/pre-trade-checklist") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+        const rows = await env.DB.prepare(
+          `SELECT * FROM pre_trade_checklists WHERE user_id = ? AND date = ? ORDER BY created_at DESC`
+        ).bind(session.userId, date).all();
+        return jsonResponse(rows.results || []);
+      }
+
+      if (request.method === "POST" && url.pathname === "/pre-trade-checklist") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const body = await request.json();
+        const id = body.id || `ptc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const now = Date.now();
+        await env.DB.prepare(`
+          INSERT INTO pre_trade_checklists (id, user_id, signal_id, date, bias_match, in_key_zone, structure_confirmed, no_chop, trend_candle, break_confirmed, rsi_ok, rsi_not_extreme, sl_logical, rr_ok, can_explain, clear_minded, no_fomo, notes, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET bias_match=excluded.bias_match, in_key_zone=excluded.in_key_zone, structure_confirmed=excluded.structure_confirmed, no_chop=excluded.no_chop, trend_candle=excluded.trend_candle, break_confirmed=excluded.break_confirmed, rsi_ok=excluded.rsi_ok, rsi_not_extreme=excluded.rsi_not_extreme, sl_logical=excluded.sl_logical, rr_ok=excluded.rr_ok, can_explain=excluded.can_explain, clear_minded=excluded.clear_minded, no_fomo=excluded.no_fomo, notes=excluded.notes
+        `).bind(
+          id, session.userId, body.signal_id || body.signalId || null,
+          body.date || new Date().toISOString().slice(0, 10),
+          (body.bias_match ?? body.biasMatch) ? 1 : 0,
+          (body.in_key_zone ?? body.inKeyZone) ? 1 : 0,
+          (body.structure_confirmed ?? body.structureConfirmed) ? 1 : 0,
+          (body.no_chop ?? body.noChop) ? 1 : 0,
+          (body.trend_candle ?? body.trendCandle) ? 1 : 0,
+          (body.break_confirmed ?? body.breakConfirmed) ? 1 : 0,
+          (body.rsi_ok ?? body.rsiOk) ? 1 : 0,
+          (body.rsi_not_extreme ?? body.rsiNotExtreme) ? 1 : 0,
+          (body.sl_logical ?? body.slLogical) ? 1 : 0,
+          (body.rr_ok ?? body.rrOk) ? 1 : 0,
+          (body.can_explain ?? body.canExplain) ? 1 : 0,
+          (body.clear_minded ?? body.clearMinded) ? 1 : 0,
+          (body.no_fomo ?? body.noFomo) ? 1 : 0,
+          body.notes || null, now
+        ).run();
+        return jsonResponse({ success: true, id });
+      }
+
+      // ── TRADE REVIEW ─────────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/trade-review") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+        const rows = await env.DB.prepare(
+          `SELECT * FROM trade_reviews WHERE user_id = ? AND date = ? ORDER BY created_at DESC`
+        ).bind(session.userId, date).all();
+        const mapped = (rows.results || []).map(r => ({
+          ...r,
+          entry_price:   r.entry_price  ?? r.entry,
+          sl_price:      r.sl_price     ?? r.stop_loss,
+          tp_price:      r.tp_price     ?? r.take_profit,
+          lessons:       r.lessons      ?? r.lesson,
+          trade_emotion: r.trade_emotion?? r.mood_before,
+          respected_sl:  r.respected_sl ?? r.sl_not_moved,
+          respected_tp:  r.respected_tp ?? r.tp_not_closed_early,
+          would_retake:  r.would_retake ?? r.would_take_again,
+          mistakes:      r.mistakes     ?? r.what_went_wrong,
+        }));
+        return jsonResponse(mapped);
+      }
+
+      if (request.method === "POST" && url.pathname === "/trade-review") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const body = await request.json();
+        const id = body.id || `tr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const now = Date.now();
+        await env.DB.prepare(`
+          INSERT INTO trade_reviews (id, user_id, signal_id, date, instrument, direction, entry, stop_loss, take_profit, exit_price, outcome, realized_rr, bias_clear, bias_direction, in_key_zone, structure_hl_lh, trend_candle_clean, break_confirmed, rsi_ok, sl_logical, rr_acceptable, what_went_well, what_went_wrong, discipline, mood_before, no_fomo, sl_not_moved, tp_not_closed_early, no_revenge, lesson, would_take_again, followed_plan, waited_confirmation, felt_confident, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET instrument=excluded.instrument, direction=excluded.direction, entry=excluded.entry, stop_loss=excluded.stop_loss, take_profit=excluded.take_profit, exit_price=excluded.exit_price, outcome=excluded.outcome, realized_rr=excluded.realized_rr, what_went_wrong=excluded.what_went_wrong, mood_before=excluded.mood_before, no_fomo=excluded.no_fomo, sl_not_moved=excluded.sl_not_moved, tp_not_closed_early=excluded.tp_not_closed_early, no_revenge=excluded.no_revenge, lesson=excluded.lesson, would_take_again=excluded.would_take_again, followed_plan=excluded.followed_plan, waited_confirmation=excluded.waited_confirmation, felt_confident=excluded.felt_confident, updated_at=excluded.updated_at
+        `).bind(
+          id, session.userId, body.signal_id || body.signalId || null,
+          body.date || new Date().toISOString().slice(0, 10),
+          body.instrument || null, body.direction || null,
+          body.entry_price ?? body.entry ?? null,
+          body.sl_price    ?? body.stopLoss ?? null,
+          body.tp_price    ?? body.takeProfit ?? null,
+          body.exit_price  ?? body.exitPrice ?? null,
+          body.outcome || null,
+          body.realizedRR || null,
+          0, 0, 0, 0, 0, 0, 0, 0, 0,
+          null,
+          body.mistakes    || body.whatWentWrong || null,
+          null,
+          body.trade_emotion || body.moodBefore || null,
+          (body.no_fomo ?? body.noFomo) ? 1 : 0,
+          (body.respected_sl ?? body.slNotMoved) ? 1 : 0,
+          (body.respected_tp ?? body.tpNotClosedEarly) ? 1 : 0,
+          (body.no_revenge ?? body.noRevenge) ? 1 : 0,
+          body.lessons || body.lesson || null,
+          (body.would_retake ?? body.wouldTakeAgain) ? 1 : 0,
+          (body.followed_plan ?? body.followedPlan) ? 1 : 0,
+          (body.waited_confirmation ?? body.waitedConfirmation) ? 1 : 0,
+          (body.felt_confident ?? body.feltConfident) ? 1 : 0,
+          now, now
+        ).run();
+        return jsonResponse({ success: true, id });
+      }
+
+      // ── BIAS STATS ───────────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/bias-stats") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const all = await env.DB.prepare(
+            `SELECT outcome, daily_bias, before_morning_routine, counts_for_strategy FROM signals WHERE outcome IN ('WIN','LOSS')`
+          ).all();
+          const rows = all.results || [];
+          const calc = (filter) => {
+            const s = rows.filter(filter);
+            const w = s.filter(r => r.outcome === 'WIN').length;
+            const l = s.filter(r => r.outcome === 'LOSS').length;
+            return { total: s.length, wins: w, losses: l, winRate: (w + l) > 0 ? parseFloat(((w / (w + l)) * 100).toFixed(1)) : 0 };
+          };
+          return jsonResponse({
+            official:   calc(r => r.counts_for_strategy === 1),
+            all:        calc(() => true),
+            biasConform: calc(r => r.bias_match === 'conform'),
+            againstBias: calc(r => r.bias_match === 'against'),
+            beforeRoutine: calc(r => r.before_morning_routine === 1),
+            noTradeDay:  calc(r => r.daily_bias === 'KEIN_TRADE'),
+          });
+        } catch (e) { return jsonResponse({ error: e.message }, 500); }
       }
 
       // ── WEBHOOK (TradingView) ────────────────────────────────
