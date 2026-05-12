@@ -26,7 +26,6 @@ const DashboardPage = ({ user, navigate }) => {
   useEffect(() => {
     const sessionId = localStorage.getItem('wavescout_session');
     loadLiveData(sessionId);
-    loadTodayBias(sessionId);
     loadMarketRadar(sessionId);
     const interval = setInterval(() => loadLiveData(sessionId), 30000);
     const radarInterval = setInterval(() => loadMarketRadar(sessionId), 5 * 60 * 1000);
