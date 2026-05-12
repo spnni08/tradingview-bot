@@ -917,6 +917,18 @@ const AdminPage = ({ user }) => {
     } catch (e) { showToast(e.message, 'err'); }
   };
 
+  const handleChangeRole = async (userId, newRole) => {
+    try {
+      const res = await fetch(`${API_URL}/admin/users/${userId}/role`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        body: JSON.stringify({ role: newRole })
+      });
+      if (res.ok) { loadAll(); showToast(`Rolle auf ${newRole} geändert`); }
+      else showToast('Fehler beim Ändern der Rolle', 'error');
+    } catch { showToast('Fehler beim Ändern der Rolle', 'error'); }
+  };
+
   const handleBlockUser = (userId, block) => {
     setConfirm({
       message: `User wirklich ${block ? 'sperren' : 'entsperren'}?`,
@@ -1062,9 +1074,19 @@ const AdminPage = ({ user }) => {
                       </div>
                     </td>
                     <td>
-                      <span className={`badge ${u.role === 'admin' ? 'badge-win' : 'badge-wait'}`}>
-                        {u.role === 'admin' ? 'ADMIN' : 'USER'}
-                      </span>
+                      <select
+                        value={u.role || 'viewer'}
+                        onChange={e => handleChangeRole(u.id, e.target.value)}
+                        className="input"
+                        style={{ fontSize: 12, padding: '3px 6px', width: 'auto', minWidth: 110 }}
+                        disabled={u.id === user?.id}
+                        title={u.id === user?.id ? 'Eigene Rolle kann nicht geändert werden' : undefined}
+                      >
+                        <option value="admin">ADMIN</option>
+                        <option value="trader">TRADER</option>
+                        <option value="viewer">VIEWER</option>
+                        <option value="extern">EXTERN</option>
+                      </select>
                     </td>
                     <td className="mono muted" style={{ fontSize: 11 }}>
                       {u.last_seen ? new Date(u.last_seen).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '–'}
