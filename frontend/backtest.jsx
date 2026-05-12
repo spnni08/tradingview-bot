@@ -166,41 +166,27 @@ function LossReasonModal({ signalId, sessionId, onClose, onSaved }) {
 function SignalDetailModal({ signal, onClose, onMarkLoss }) {
   if (!signal) return null;
   const pnl = calculatePnL(signal);
-
-  // Parse JSON fields safely
-  const matchedRules   = (() => { try { return JSON.parse(signal.matched_rules  || '[]'); } catch { return []; } })();
-  const failedRules    = (() => { try { return JSON.parse(signal.failed_rules   || '[]'); } catch { return []; } })();
-  const unknownRules   = (() => { try { return JSON.parse(signal.unknown_rules  || '[]'); } catch { return []; } })();
-  const scoreBreakdown = (() => { try { return JSON.parse(signal.score_breakdown || '{}'); } catch { return {}; } })();
-
-  const sc = signal.ai_score || 0;
-  const scoreColor = sc >= 80 ? 'var(--win)' : sc >= 60 ? 'var(--wait)' : 'var(--loss)';
-  const scoreLabel = sc >= 90 ? 'A+ Setup' : sc >= 80 ? 'Starkes Setup' : sc >= 70 ? 'Gutes Setup' : sc >= 60 ? 'Schwaches Setup' : sc >= 50 ? 'Unsicher' : 'Kein Trade';
-
-  const rr = signal.risk_reward;
-  const rrStr = rr ? `1:${parseFloat(rr).toFixed(1)}` : '–';
-  const fmt = (v, sym) => {
-    const n = parseFloat(v);
-    if (!v || isNaN(n)) return '–';
-    return '$' + fmtPrice(n, sym || signal.symbol);
-  };
-
-  const breakdownEntries = Object.entries(scoreBreakdown).filter(([, v]) => v !== 0);
-
-  const biasStatus = (() => {
-    if (signal.before_morning_routine) return { label: 'Vor Morgenroutine', color: 'var(--wait)', icon: '⏰' };
-    if (signal.bias_match === 'no_bias') return { label: 'Kein Tagesbias gesetzt', color: 'var(--text-tertiary)', icon: '–' };
-    if (signal.bias_match === 'against_bias') return { label: `Gegen Bias (${signal.daily_bias || '?'})`, color: 'var(--loss)', icon: '⚠️' };
-    if (signal.bias_match === 'no_trade_day') return { label: 'Kein-Trade-Tag', color: 'var(--loss)', icon: '🚫' };
-    if (signal.daily_bias) return { label: `Bias-Match ${signal.daily_bias}`, color: 'var(--win)', icon: '✅' };
-    return { label: '–', color: 'var(--text-tertiary)', icon: '' };
-  })();
-
-  const RULE_LABELS = {
-    rsi: 'RSI', ema: 'EMA 50/200', trend: 'Trend', wave_bias: 'Wave Bias',
-    support_resistance: 'S/R Nähe', timeframe: 'Timeframe', confidence: 'Konfidenz',
-  };
-
+  const fields = [
+    ['Symbol',      signal.symbol],
+    ['Richtung',    signal.direction],
+    ['Datum',       fmtDate(signal.created_at)],
+    ['Timeframe',   signal.timeframe ? signal.timeframe + 'm' : '–'],
+    ['Entry',       signal.ai_entry  ? '$' + fmtPrice(signal.ai_entry, signal.symbol)  : '–'],
+    ['Take Profit', signal.ai_tp     ? '$' + fmtPrice(signal.ai_tp, signal.symbol)     : '–'],
+    ['Stop Loss',   signal.ai_sl     ? '$' + fmtPrice(signal.ai_sl, signal.symbol)     : '–'],
+    ['Exit',        signal.exit_price ? '$' + fmtPrice(signal.exit_price, signal.symbol) : '–'],
+    ['PnL',         pnl !== 0 ? fmtPct(pnl) : '–'],
+    ['Score',       (signal.ai_score || 0) + '/100'],
+    ['Risiko',      signal.ai_risk || '–'],
+    ['RSI',         signal.rsi ?? '–'],
+    ['EMA50',       signal.ema50  ? signal.ema50.toFixed(0)  : '–'],
+    ['EMA200',      signal.ema200 ? signal.ema200.toFixed(0) : '–'],
+    ['Trend',       signal.trend     || '–'],
+    ['Wave Bias',   signal.wave_bias || '–'],
+    ['Strategie',   signal.strategy_name    || 'WAVESCOUT Standard'],
+    ['Version',     signal.strategy_version || 'v1.0'],
+    ['Ergebnis',    signal.outcome || 'OPEN'],
+  ];
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-box" style={{ maxWidth: 640, maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
@@ -412,11 +398,6 @@ function PracticeTradesTab({ sessionId }) {
   });
 
   const updatePracticeStatus = async (tradeId, status) => {
-    await fetch(`${API_URL}/practice-trades/${tradeId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
-      body: JSON.stringify({ status })
-    });
     setTrades(prev => prev.map(t => String(t.id) === String(tradeId) ? { ...t, status } : t));
   };
 
@@ -532,6 +513,7 @@ function SignalHistoryTab({ sessionId }) {
     } catch (e) { console.error(e); } finally { setLoading(false); }
   };
 
+  const updateOutcome = async (tradeId, outcome) => {
   const setF = (key, val) => setFilters(f => ({ ...f, [key]: val }));
   const resetFilters = () => setFilters({ ...EMPTY_HIST_FILTERS });
   const isFiltered = Object.entries(filters).some(([k, v]) => v !== EMPTY_HIST_FILTERS[k]);

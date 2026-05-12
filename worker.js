@@ -1325,25 +1325,6 @@ function safeIdPart(input = '') {
   return Math.abs(hash).toString(36);
 }
 
-function extractAffectedSymbols(text) {
-  const syms = [];
-  if (/bitcoin|btc/i.test(text)) syms.push('BTC');
-  if (/ethereum|eth/i.test(text)) syms.push('ETH');
-  if (/solana|sol/i.test(text)) syms.push('SOL');
-  if (/bnb|binance coin/i.test(text)) syms.push('BNB');
-  if (/xrp|ripple/i.test(text)) syms.push('XRP');
-  if (/cardano|ada/i.test(text)) syms.push('ADA');
-  return JSON.stringify(syms.length ? syms : ['ALL']);
-}
-
-function mapAffectedScope(text) {
-  if (/\bfed\b|cpi|nfp|gdp|inflation|interest rate|macro|recession/i.test(text)) return 'MACRO';
-  if (/regulation|sec|government|law|ban|legal|regulatory|compliance/i.test(text)) return 'REGULATION';
-  if (/binance|bybit|mexc|blofin|okx|kraken|coinbase|ftx|exchange/i.test(text)) return 'EXCHANGE';
-  if (/bitcoin|btc|ethereum|eth|solana|sol|ripple|xrp/i.test(text)) return 'COIN_SPECIFIC';
-  return 'GLOBAL';
-}
-
 async function getMarketRadar(env, session = null) {
   await ensureTables(env);
   const now = Date.now();
@@ -1392,9 +1373,6 @@ async function getMarketRadar(env, session = null) {
         source: 'RSS',
         source_url: item.link,
         summary: item.description.slice(0, 180) || 'Relevantes Krypto-Markt-Event.',
-        long_text: item.description || '',
-        affected_symbols: extractAffectedSymbols(text),
-        affected_scope: mapAffectedScope(text),
       };
     });
   debug.items_relevant = relevant.length;
@@ -1431,87 +1409,18 @@ async function getMarketRadar(env, session = null) {
   } catch (error) {
     console.error('❌ market-radar error:', error?.message || error);
     debug.error_message = String(error?.message || error || 'market-radar failed');
-    try {
-      const stale = await env.DB.prepare(
-        `SELECT * FROM market_events WHERE status = 'ACTIVE' ORDER BY updated_at DESC LIMIT ?`
-      ).bind(MARKET_RADAR_MAX_EVENTS).all();
-      const events = (stale.results || []).map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
-      return withDebug({
-        success: true,
-        source: 'stale_cache',
-        errors: [debug.error_message],
-        status: computeRadarStatus(events),
-        updated_at: now,
-        updatedAt: new Date(now).toISOString(),
-        summary: events.length ? 'Radar zeigt letzte gespeicherte Events (Feed nicht erreichbar).' : 'Radar-Daten aktuell nicht verfügbar.',
-        events,
-        disclaimer: RADAR_DISCLAIMER
-      });
-    } catch (_) {
-      return withDebug({
-        success: true,
-        source: 'partial',
-        errors: [debug.error_message],
-        status: 'NORMAL',
-        updated_at: now,
-        updatedAt: new Date(now).toISOString(),
-        summary: 'Radar-Daten aktuell nicht verfügbar.',
-        events: [],
-        disclaimer: RADAR_DISCLAIMER
-      });
-    }
+    return withDebug({
+      success: true,
+      source: 'partial',
+      errors: [debug.error_message],
+      status: 'NORMAL',
+      updated_at: now,
+      updatedAt: new Date(now).toISOString(),
+      summary: 'Radar-Daten aktuell nicht verfügbar. Letzte Daten konnten nicht geladen werden.',
+      events: [],
+      disclaimer: RADAR_DISCLAIMER
+    });
   }
-}
-
-async function checkOpenTrades(env, opts = {}) {
-  const { skipYoungerThanMs = 0, outcomeSource = 'manual_admin', adminUsername = null } = opts;
-  const now = Date.now();
-  const open = await env.DB.prepare(
-    `SELECT id, symbol, direction, ai_entry, ai_tp, ai_sl, created_at FROM signals WHERE outcome = 'OPEN' OR outcome IS NULL`
-  ).all();
-
-  const results = [];
-  for (const trade of (open.results || [])) {
-    if (skipYoungerThanMs > 0 && (now - (trade.created_at || 0)) < skipYoungerThanMs) {
-      results.push({ id: trade.id, symbol: trade.symbol, direction: trade.direction, status: 'skipped', message: 'Signal zu jung (< 30min)' });
-      continue;
-    }
-    const snap = await env.DB.prepare(
-      `SELECT price FROM snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 1`
-    ).bind(trade.symbol).first();
-    if (!snap || !snap.price) {
-      results.push({ id: trade.id, symbol: trade.symbol, direction: trade.direction, entry: trade.ai_entry, tp: trade.ai_tp, sl: trade.ai_sl, status: 'no_price', message: `Kein Preis für ${trade.symbol}` });
-      continue;
-    }
-    const price = snap.price;
-    const tp = trade.ai_tp;
-    const sl = trade.ai_sl;
-    let newOutcome = null;
-    if (trade.direction === 'LONG') {
-      if (tp && price >= tp) newOutcome = 'WIN';
-      else if (sl && price <= sl) newOutcome = 'LOSS';
-    } else if (trade.direction === 'SHORT') {
-      if (tp && price <= tp) newOutcome = 'WIN';
-      else if (sl && price >= sl) newOutcome = 'LOSS';
-    }
-    if (newOutcome) {
-      const adminNote = adminUsername ? `${outcomeSource} by ${adminUsername}` : outcomeSource;
-      await env.DB.prepare(
-        `UPDATE signals SET outcome = ?, exit_price = ?, outcome_source = ?, closed_at = ?, updated_at = ? WHERE id = ?`
-      ).bind(newOutcome, price, adminNote, now, now, trade.id).run();
-      results.push({ id: trade.id, symbol: trade.symbol, direction: trade.direction, entry: trade.ai_entry, status: 'closed', outcome: newOutcome, price, tp, sl, message: `${newOutcome} — Preis ${price} hat ${newOutcome === 'WIN' ? 'TP' : 'SL'} erreicht` });
-    } else {
-      results.push({ id: trade.id, symbol: trade.symbol, direction: trade.direction, entry: trade.ai_entry, status: 'open', price, tp, sl, message: 'Weiter offen' });
-    }
-  }
-  return results;
-}
-
-async function checkOpenTradesEndOfDay(env) {
-  return checkOpenTrades(env, {
-    skipYoungerThanMs: 30 * 60 * 1000,
-    outcomeSource: 'eod_check',
-  });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1878,6 +1787,54 @@ async function sendDailySummary(env) {
   } catch (err) {
     console.error('sendDailySummary error:', err);
   }
+}
+
+function evaluateOutcomeForSignal(signal, price) {
+  if (!price || !Number.isFinite(price)) return { outcome: 'NO_PRICE', hitLevel: null };
+  if (signal.ai_tp == null || signal.ai_sl == null) return { outcome: 'OPEN', hitLevel: null };
+  const isLong = signal.direction === 'LONG';
+  if (isLong) {
+    if (price >= signal.ai_tp) return { outcome: 'WIN', hitLevel: signal.ai_tp };
+    if (price <= signal.ai_sl) return { outcome: 'LOSS', hitLevel: signal.ai_sl };
+  } else {
+    if (price <= signal.ai_tp) return { outcome: 'WIN', hitLevel: signal.ai_tp };
+    if (price >= signal.ai_sl) return { outcome: 'LOSS', hitLevel: signal.ai_sl };
+  }
+  return { outcome: 'OPEN', hitLevel: null };
+}
+
+async function checkOpenSignals(env, onlySignalId = null) {
+  await ensureTables(env);
+  const rows = await env.DB.prepare(`
+    SELECT * FROM signals
+    WHERE outcome = 'OPEN' AND ai_tp IS NOT NULL AND ai_sl IS NOT NULL
+    ${onlySignalId ? 'AND id = ?' : ''}
+    ORDER BY created_at ASC
+  `).bind(...(onlySignalId ? [onlySignalId] : [])).all();
+
+  const checked = [];
+  for (const signal of (rows.results || [])) {
+    const price = await getLivePrice(env, signal.symbol);
+    const { outcome, hitLevel } = evaluateOutcomeForSignal(signal, price);
+    const item = { id: signal.id, symbol: signal.symbol, direction: signal.direction, price, outcome };
+    if (outcome === 'WIN' || outcome === 'LOSS') {
+      const entry = signal.ai_entry || price;
+      const exitPrice = hitLevel || price;
+      const pnlPct = signal.direction === 'LONG'
+        ? ((exitPrice - entry) / entry) * 100
+        : ((entry - exitPrice) / entry) * 100;
+      const now = Date.now();
+      await env.DB.prepare(`
+        UPDATE signals
+        SET outcome = ?, exit_price = ?, pnl_pct = ?, closed_at = ?, outcome_source = 'auto', updated_at = ?, telegram_outcome_sent = COALESCE(telegram_outcome_sent,0)
+        WHERE id = ?
+      `).bind(outcome, exitPrice, parseFloat(pnlPct.toFixed(2)), now, now, signal.id).run();
+      item.updated = true;
+      item.pnl_pct = parseFloat(pnlPct.toFixed(2));
+    }
+    checked.push(item);
+  }
+  return checked;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2310,6 +2267,44 @@ export default {
         } catch (e) {
           console.error('❌ /admin/test-webhook failed:', e?.message || e);
           return jsonResponse({ ok: false, error: e.message || 'test-webhook failed' }, 200);
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/admin/check-open-trades") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const results = await checkOpenSignals(env);
+          return jsonResponse({ ok: true, checked: results.length, results });
+        } catch (e) {
+          console.error('❌ /admin/check-open-trades failed:', e?.message || e);
+          return jsonResponse({ ok: false, error: e.message || 'trade-check failed', results: [] }, 200);
+        }
+      }
+
+      if (request.method === "POST" && url.pathname.startsWith("/admin/check-trade/")) {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const signalId = url.pathname.replace("/admin/check-trade/", "");
+        try {
+          const results = await checkOpenSignals(env, signalId);
+          return jsonResponse({ ok: true, checked: results.length, results });
+        } catch (e) {
+          console.error('❌ /admin/check-trade failed:', e?.message || e);
+          return jsonResponse({ ok: false, error: e.message || 'trade-check failed', results: [] }, 200);
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/admin/eod-check") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const results = await checkOpenSignals(env);
+          const closed = results.filter(r => r.outcome === 'WIN' || r.outcome === 'LOSS').length;
+          return jsonResponse({ ok: true, checked: results.length, closed, open: results.length - closed, results });
+        } catch (e) {
+          console.error('❌ /admin/eod-check failed:', e?.message || e);
+          return jsonResponse({ ok: false, error: e.message || 'eod-check failed', results: [] }, 200);
         }
       }
 

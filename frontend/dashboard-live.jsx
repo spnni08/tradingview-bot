@@ -343,15 +343,13 @@ const RecentSignalsCard = ({ signals, onOutcomeLocal, showToast }) => {
               </td>
               <td className="mono">{s.ai_score}/100</td>
               <td>
-                {window.OutcomeEditor ? (
-                  <window.OutcomeEditor
-                    id={s.id}
-                    currentOutcome={s.outcome}
-                    type="signal"
-                    onUpdated={(next) => onOutcomeLocal?.(s.id, next)}
-                    showToast={(m) => showToast?.(m)}
-                  />
-                ) : <span className={`badge ${s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : 'badge-wait'}`}>{s.outcome}</span>}
+                <window.OutcomeEditor
+                  id={s.id}
+                  currentOutcome={s.outcome}
+                  type="signal"
+                  onUpdated={(next) => onOutcomeLocal?.(s.id, next)}
+                  showToast={(m) => showToast?.(m)}
+                />
               </td>
               <td className="mono muted" style={{fontSize:11}}>{getTimeAgo(s.created_at)}</td>
             </tr>
