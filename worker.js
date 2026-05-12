@@ -739,6 +739,16 @@ async function ensureTables(env) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); } catch (_) {}
     }
 
+    // Migrate trade_reviews table — add columns expected by frontend
+    const tradeReviewCols = [
+      ['followed_plan',      'INTEGER DEFAULT 0'],
+      ['waited_confirmation','INTEGER DEFAULT 0'],
+      ['felt_confident',     'INTEGER DEFAULT 0'],
+    ];
+    for (const [col, type] of tradeReviewCols) {
+      try { await env.DB.prepare(`ALTER TABLE trade_reviews ADD COLUMN ${col} ${type}`).run(); } catch (_) {}
+    }
+
     // Migrate snapshots table (compat with unique symbol snapshots)
     const snapshotCols = [
       ['timeframe',  'TEXT'],
@@ -1388,17 +1398,35 @@ async function getMarketRadar(env, session = null) {
   } catch (error) {
     console.error('❌ market-radar error:', error?.message || error);
     debug.error_message = String(error?.message || error || 'market-radar failed');
-    return withDebug({
-      success: true,
-      source: 'partial',
-      errors: [debug.error_message],
-      status: 'NORMAL',
-      updated_at: now,
-      updatedAt: new Date(now).toISOString(),
-      summary: 'Radar-Daten aktuell nicht verfügbar. Letzte Daten konnten nicht geladen werden.',
-      events: [],
-      disclaimer: RADAR_DISCLAIMER
-    });
+    try {
+      const stale = await env.DB.prepare(
+        `SELECT * FROM market_events WHERE status = 'ACTIVE' ORDER BY updated_at DESC LIMIT ?`
+      ).bind(MARKET_RADAR_MAX_EVENTS).all();
+      const events = (stale.results || []).map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
+      return withDebug({
+        success: true,
+        source: 'stale_cache',
+        errors: [debug.error_message],
+        status: computeRadarStatus(events),
+        updated_at: now,
+        updatedAt: new Date(now).toISOString(),
+        summary: events.length ? 'Radar zeigt letzte gespeicherte Events (Feed nicht erreichbar).' : 'Radar-Daten aktuell nicht verfügbar.',
+        events,
+        disclaimer: RADAR_DISCLAIMER
+      });
+    } catch (_) {
+      return withDebug({
+        success: true,
+        source: 'partial',
+        errors: [debug.error_message],
+        status: 'NORMAL',
+        updated_at: now,
+        updatedAt: new Date(now).toISOString(),
+        summary: 'Radar-Daten aktuell nicht verfügbar.',
+        events: [],
+        disclaimer: RADAR_DISCLAIMER
+      });
+    }
   }
 }
 
@@ -2617,10 +2645,13 @@ export default {
           ON CONFLICT(id) DO UPDATE SET bias = excluded.bias, chart_opened = excluded.chart_opened, ema200_checked = excluded.ema200_checked, ema_direction = excluded.ema_direction, key_zones_marked = excluded.key_zones_marked, zone_notes = excluded.zone_notes, bias_reason = excluded.bias_reason, completed_at = excluded.completed_at
         `).bind(
           id, session.userId, date, body.bias || 'KEIN_TRADE',
-          body.chartOpened ? 1 : 0, body.ema200Checked ? 1 : 0,
-          body.emaDirection || null, body.keyZonesMarked ? 1 : 0,
-          body.zoneNotes || null, body.biasReason || null,
-          body.completed ? now : null, now
+          (body.chart_opened ?? body.chartOpened) ? 1 : 0,
+          (body.ema200_checked ?? body.ema200Checked) ? 1 : 0,
+          body.ema_direction || body.emaDirection || null,
+          (body.key_zones_marked ?? body.keyZonesMarked) ? 1 : 0,
+          body.zone_notes || body.zoneNotes || null,
+          body.bias_reason || body.biasReason || null,
+          body.bias ? now : (body.completed ? now : null), now
         ).run();
         return jsonResponse({ success: true, id });
       }
@@ -2660,15 +2691,22 @@ export default {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET bias_match=excluded.bias_match, in_key_zone=excluded.in_key_zone, structure_confirmed=excluded.structure_confirmed, no_chop=excluded.no_chop, trend_candle=excluded.trend_candle, break_confirmed=excluded.break_confirmed, rsi_ok=excluded.rsi_ok, rsi_not_extreme=excluded.rsi_not_extreme, sl_logical=excluded.sl_logical, rr_ok=excluded.rr_ok, can_explain=excluded.can_explain, clear_minded=excluded.clear_minded, no_fomo=excluded.no_fomo, notes=excluded.notes
         `).bind(
-          id, session.userId, body.signalId || null,
+          id, session.userId, body.signal_id || body.signalId || null,
           body.date || new Date().toISOString().slice(0, 10),
-          body.biasMatch ? 1 : 0, body.inKeyZone ? 1 : 0,
-          body.structureConfirmed ? 1 : 0, body.noChop ? 1 : 0,
-          body.trendCandle ? 1 : 0, body.breakConfirmed ? 1 : 0,
-          body.rsiOk ? 1 : 0, body.rsiNotExtreme ? 1 : 0,
-          body.slLogical ? 1 : 0, body.rrOk ? 1 : 0,
-          body.canExplain ? 1 : 0, body.clearMinded ? 1 : 0,
-          body.noFomo ? 1 : 0, body.notes || null, now
+          (body.bias_match ?? body.biasMatch) ? 1 : 0,
+          (body.in_key_zone ?? body.inKeyZone) ? 1 : 0,
+          (body.structure_confirmed ?? body.structureConfirmed) ? 1 : 0,
+          (body.no_chop ?? body.noChop) ? 1 : 0,
+          (body.trend_candle ?? body.trendCandle) ? 1 : 0,
+          (body.break_confirmed ?? body.breakConfirmed) ? 1 : 0,
+          (body.rsi_ok ?? body.rsiOk) ? 1 : 0,
+          (body.rsi_not_extreme ?? body.rsiNotExtreme) ? 1 : 0,
+          (body.sl_logical ?? body.slLogical) ? 1 : 0,
+          (body.rr_ok ?? body.rrOk) ? 1 : 0,
+          (body.can_explain ?? body.canExplain) ? 1 : 0,
+          (body.clear_minded ?? body.clearMinded) ? 1 : 0,
+          (body.no_fomo ?? body.noFomo) ? 1 : 0,
+          body.notes || null, now
         ).run();
         return jsonResponse({ success: true, id });
       }
@@ -2682,7 +2720,19 @@ export default {
         const rows = await env.DB.prepare(
           `SELECT * FROM trade_reviews WHERE user_id = ? AND date = ? ORDER BY created_at DESC`
         ).bind(session.userId, date).all();
-        return jsonResponse(rows.results || []);
+        const mapped = (rows.results || []).map(r => ({
+          ...r,
+          entry_price:   r.entry_price  ?? r.entry,
+          sl_price:      r.sl_price     ?? r.stop_loss,
+          tp_price:      r.tp_price     ?? r.take_profit,
+          lessons:       r.lessons      ?? r.lesson,
+          trade_emotion: r.trade_emotion?? r.mood_before,
+          respected_sl:  r.respected_sl ?? r.sl_not_moved,
+          respected_tp:  r.respected_tp ?? r.tp_not_closed_early,
+          would_retake:  r.would_retake ?? r.would_take_again,
+          mistakes:      r.mistakes     ?? r.what_went_wrong,
+        }));
+        return jsonResponse(mapped);
       }
 
       if (request.method === "POST" && url.pathname === "/trade-review") {
@@ -2692,24 +2742,33 @@ export default {
         const id = body.id || `tr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const now = Date.now();
         await env.DB.prepare(`
-          INSERT INTO trade_reviews (id, user_id, signal_id, date, instrument, direction, entry, stop_loss, take_profit, exit_price, outcome, realized_rr, bias_clear, bias_direction, in_key_zone, structure_hl_lh, trend_candle_clean, break_confirmed, rsi_ok, sl_logical, rr_acceptable, what_went_well, what_went_wrong, discipline, mood_before, no_fomo, sl_not_moved, tp_not_closed_early, no_revenge, lesson, would_take_again, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET instrument=excluded.instrument, direction=excluded.direction, entry=excluded.entry, stop_loss=excluded.stop_loss, take_profit=excluded.take_profit, exit_price=excluded.exit_price, outcome=excluded.outcome, realized_rr=excluded.realized_rr, bias_clear=excluded.bias_clear, bias_direction=excluded.bias_direction, in_key_zone=excluded.in_key_zone, structure_hl_lh=excluded.structure_hl_lh, trend_candle_clean=excluded.trend_candle_clean, break_confirmed=excluded.break_confirmed, rsi_ok=excluded.rsi_ok, sl_logical=excluded.sl_logical, rr_acceptable=excluded.rr_acceptable, what_went_well=excluded.what_went_well, what_went_wrong=excluded.what_went_wrong, discipline=excluded.discipline, mood_before=excluded.mood_before, no_fomo=excluded.no_fomo, sl_not_moved=excluded.sl_not_moved, tp_not_closed_early=excluded.tp_not_closed_early, no_revenge=excluded.no_revenge, lesson=excluded.lesson, would_take_again=excluded.would_take_again, updated_at=excluded.updated_at
+          INSERT INTO trade_reviews (id, user_id, signal_id, date, instrument, direction, entry, stop_loss, take_profit, exit_price, outcome, realized_rr, bias_clear, bias_direction, in_key_zone, structure_hl_lh, trend_candle_clean, break_confirmed, rsi_ok, sl_logical, rr_acceptable, what_went_well, what_went_wrong, discipline, mood_before, no_fomo, sl_not_moved, tp_not_closed_early, no_revenge, lesson, would_take_again, followed_plan, waited_confirmation, felt_confident, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET instrument=excluded.instrument, direction=excluded.direction, entry=excluded.entry, stop_loss=excluded.stop_loss, take_profit=excluded.take_profit, exit_price=excluded.exit_price, outcome=excluded.outcome, realized_rr=excluded.realized_rr, what_went_wrong=excluded.what_went_wrong, mood_before=excluded.mood_before, no_fomo=excluded.no_fomo, sl_not_moved=excluded.sl_not_moved, tp_not_closed_early=excluded.tp_not_closed_early, no_revenge=excluded.no_revenge, lesson=excluded.lesson, would_take_again=excluded.would_take_again, followed_plan=excluded.followed_plan, waited_confirmation=excluded.waited_confirmation, felt_confident=excluded.felt_confident, updated_at=excluded.updated_at
         `).bind(
-          id, session.userId, body.signalId || null,
+          id, session.userId, body.signal_id || body.signalId || null,
           body.date || new Date().toISOString().slice(0, 10),
           body.instrument || null, body.direction || null,
-          body.entry || null, body.stopLoss || null, body.takeProfit || null, body.exitPrice || null,
-          body.outcome || null, body.realizedRR || null,
-          body.biasClear ? 1 : 0, body.biasDirection ? 1 : 0,
-          body.inKeyZone ? 1 : 0, body.structureHlLh ? 1 : 0,
-          body.trendCandleClean ? 1 : 0, body.breakConfirmed ? 1 : 0,
-          body.rsiOk ? 1 : 0, body.slLogical ? 1 : 0, body.rrAcceptable ? 1 : 0,
-          body.whatWentWell || null, body.whatWentWrong || null,
-          body.discipline || null, body.moodBefore || null,
-          body.noFomo ? 1 : 0, body.slNotMoved ? 1 : 0,
-          body.tpNotClosedEarly ? 1 : 0, body.noRevenge ? 1 : 0,
-          body.lesson || null, body.wouldTakeAgain ? 1 : 0,
+          body.entry_price ?? body.entry ?? null,
+          body.sl_price    ?? body.stopLoss ?? null,
+          body.tp_price    ?? body.takeProfit ?? null,
+          body.exit_price  ?? body.exitPrice ?? null,
+          body.outcome || null,
+          body.realizedRR || null,
+          0, 0, 0, 0, 0, 0, 0, 0, 0,
+          null,
+          body.mistakes    || body.whatWentWrong || null,
+          null,
+          body.trade_emotion || body.moodBefore || null,
+          (body.no_fomo ?? body.noFomo) ? 1 : 0,
+          (body.respected_sl ?? body.slNotMoved) ? 1 : 0,
+          (body.respected_tp ?? body.tpNotClosedEarly) ? 1 : 0,
+          (body.no_revenge ?? body.noRevenge) ? 1 : 0,
+          body.lessons || body.lesson || null,
+          (body.would_retake ?? body.wouldTakeAgain) ? 1 : 0,
+          (body.followed_plan ?? body.followedPlan) ? 1 : 0,
+          (body.waited_confirmation ?? body.waitedConfirmation) ? 1 : 0,
+          (body.felt_confident ?? body.feltConfident) ? 1 : 0,
           now, now
         ).run();
         return jsonResponse({ success: true, id });
