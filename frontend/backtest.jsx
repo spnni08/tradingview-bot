@@ -9,13 +9,13 @@ const API_URL = 'https://tradingview-bot.spnn08.workers.dev';
 // ─── Strategy config metadata (mirrors worker.js) ─────────────
 
 const RULE_META = {
-  rsi:                { label: 'RSI',                desc: 'Relative Strength Index',        maxW: 30 },
-  ema:                { label: 'EMA 50/200',          desc: 'EMA-Kreuzung als Trendfilter',   maxW: 30 },
-  trend:              { label: 'Trend-Label',         desc: 'BULLISH/BEARISH Bestätigung',    maxW: 30 },
-  wave_bias:          { label: 'Wave Bias',           desc: 'LONG/SHORT Wellenrichtung',      maxW: 20 },
-  support_resistance: { label: 'Support/Resistance',  desc: 'Nähe zu S/R-Niveaus',            maxW: 30 },
-  timeframe:          { label: 'Timeframe',           desc: 'Höhere TFs werden bevorzugt',    maxW: 20 },
-  confidence:         { label: 'Confidence',          desc: 'Signal-Konfidenz vom Sender',    maxW: 20 },
+  rsi:                { label: 'RSI',                desc: 'Prüft, ob Momentum zur Richtung passt und ob der Markt überkauft/überverkauft ist. Bei LONG: RSI > 40 bevorzugt. Bei SHORT: RSI < 60 bevorzugt.',                maxW: 30 },
+  ema:                { label: 'EMA 50/200',          desc: 'Bewertet, ob Preis und Trend über/unter den wichtigen EMAs liegen. EMA-Kreuzungen werden als Trendsignal gewertet.',                                           maxW: 30 },
+  trend:              { label: 'Trend-Label',         desc: 'Prüft, ob das BULLISH/BEARISH-Label mit der Trade-Richtung übereinstimmt. Gegenläufige Trades erhalten Abzüge.',                                               maxW: 30 },
+  wave_bias:          { label: 'Wave Bias',           desc: 'Bewertet, ob der Tagesbias aus der Morgenroutine mit der Signal-Richtung übereinstimmt (LONG/SHORT).',                                                         maxW: 20 },
+  support_resistance: { label: 'Support/Resistance',  desc: 'Prüft Nähe zu wichtigen S/R-Zonen. Entries in der Nähe von Zonen erhalten Bonus-Punkte.',                                                                      maxW: 30 },
+  timeframe:          { label: 'Timeframe',           desc: 'Bewertet den Zeitrahmen des Signals. Höhere Zeitrahmen (4H, 1D) erhalten mehr Gewichtung als niedrige (1M, 5M).',                                             maxW: 20 },
+  confidence:         { label: 'Confidence',          desc: 'Wertet die vom Sender gelieferte Signal-Konfidenz aus. Höhere Konfidenz erhöht den Score, niedrige reduziert ihn.',                                            maxW: 20 },
 };
 
 const LOSS_REASONS = [
@@ -1040,21 +1040,29 @@ function StrategyLabTab({ sessionId, userRole }) {
                   const rule     = editCfg.rules?.[key] || { enabled: true, weight: 10 };
                   const disabled = !!selected.protected;
                   return (
-                    <div key={key} className="settings-row">
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: rule.enabled ? 'var(--text-primary)' : 'var(--text-quaternary)' }}>{meta.label}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-quaternary)' }}>{meta.desc}</div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-                        {rule.enabled && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <input type="range" min={0} max={meta.maxW} step={1} value={rule.weight} disabled={disabled}
-                              onChange={e => updateRule(key, 'weight', parseInt(e.target.value))}
-                              style={{ width: 80, accentColor: 'var(--blue-500)', cursor: disabled ? 'not-allowed' : 'pointer' }}/>
-                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--blue-400)', minWidth: 22, textAlign: 'right' }}>{rule.weight}</span>
-                          </div>
-                        )}
-                        <Toggle on={!!rule.enabled} onChange={v => updateRule(key, 'enabled', v)} disabled={disabled}/>
+                    <div key={key} style={{ padding: '14px 0', borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1, minWidth: 200 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: rule.enabled ? 'var(--text-primary)' : 'var(--text-quaternary)', marginBottom: 4 }}>{meta.label}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{meta.desc}</div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, paddingTop: 2 }}>
+                          {rule.enabled && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <input type="range" min={0} max={meta.maxW} step={1} value={rule.weight} disabled={disabled}
+                                onChange={e => updateRule(key, 'weight', parseInt(e.target.value))}
+                                style={{ width: 180, accentColor: 'var(--blue-500)', cursor: disabled ? 'not-allowed' : 'pointer' }}/>
+                              <input type="number" min={0} max={meta.maxW} value={rule.weight} disabled={disabled}
+                                onChange={e => {
+                                  const v = Math.max(0, Math.min(meta.maxW, parseInt(e.target.value) || 0));
+                                  updateRule(key, 'weight', v);
+                                }}
+                                className="input"
+                                style={{ width: 56, textAlign: 'center', padding: '4px 6px', fontSize: 13, fontWeight: 700, color: 'var(--blue-400)' }}/>
+                            </div>
+                          )}
+                          <Toggle on={!!rule.enabled} onChange={v => updateRule(key, 'enabled', v)} disabled={disabled}/>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1066,21 +1074,30 @@ function StrategyLabTab({ sessionId, userRole }) {
               <div className="card-head"><Icon name="settings" className="ico"/><h3>Score-Schwellen</h3></div>
               <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
                 {[
-                  { key: 'min_trade_score',    label: 'Min. Trade Score',    desc: 'Ab diesem Score wird ein Trade empfohlen',                  min: 50, max: 90, def: 70 },
-                  { key: 'min_telegram_score', label: 'Min. Telegram Score', desc: 'Ab diesem Score wird eine Telegram-Meldung gesendet',        min: 30, max: 80, def: 55 },
+                  { key: 'min_trade_score',    label: 'Min. Trade Score',    desc: 'Ab diesem Score gilt ein Signal als handelsbar und wird empfohlen. Signale darunter werden als WAIT markiert.',   min: 50, max: 90, def: 70 },
+                  { key: 'min_telegram_score', label: 'Min. Telegram Score', desc: 'Ab diesem Score wird eine Telegram-Benachrichtigung gesendet. Kann niedriger als Trade Score gesetzt werden.',     min: 30, max: 80, def: 55 },
                 ].map(({ key, label, desc, min, max, def }) => {
                   const val = editCfg.thresholds?.[key] ?? def;
+                  const disabled = !!selected.protected;
                   return (
-                    <div key={key} className="settings-row">
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 500 }}>{label}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-quaternary)' }}>{desc}</div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <input type="range" min={min} max={max} step={1} value={val} disabled={!!selected.protected}
-                          onChange={e => updateThreshold(key, parseInt(e.target.value))}
-                          style={{ width: 100, accentColor: 'var(--blue-500)' }}/>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--blue-400)', minWidth: 22 }}>{val}</span>
+                    <div key={key} style={{ padding: '14px 0', borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1, minWidth: 200 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{desc}</div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, paddingTop: 2 }}>
+                          <input type="range" min={min} max={max} step={1} value={val} disabled={disabled}
+                            onChange={e => updateThreshold(key, parseInt(e.target.value))}
+                            style={{ width: 180, accentColor: 'var(--blue-500)', cursor: disabled ? 'not-allowed' : 'pointer' }}/>
+                          <input type="number" min={min} max={max} value={val} disabled={disabled}
+                            onChange={e => {
+                              const v = Math.max(min, Math.min(max, parseInt(e.target.value) || min));
+                              updateThreshold(key, v);
+                            }}
+                            className="input"
+                            style={{ width: 56, textAlign: 'center', padding: '4px 6px', fontSize: 13, fontWeight: 700, color: 'var(--blue-400)' }}/>
+                        </div>
                       </div>
                     </div>
                   );
