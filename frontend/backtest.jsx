@@ -513,7 +513,6 @@ function SignalHistoryTab({ sessionId }) {
     } catch (e) { console.error(e); } finally { setLoading(false); }
   };
 
-  const updateOutcome = async (tradeId, outcome) => {
   const setF = (key, val) => setFilters(f => ({ ...f, [key]: val }));
   const resetFilters = () => setFilters({ ...EMPTY_HIST_FILTERS });
   const isFiltered = Object.entries(filters).some(([k, v]) => v !== EMPTY_HIST_FILTERS[k]);
