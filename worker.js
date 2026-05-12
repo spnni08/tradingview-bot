@@ -571,6 +571,96 @@ async function ensureTables(env) {
       )
     `).run();
 
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS morning_routines (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        date TEXT NOT NULL,
+        symbol TEXT NOT NULL DEFAULT 'BTCUSDT',
+        bias TEXT,
+        chart_opened INTEGER DEFAULT 0,
+        ema200_checked INTEGER DEFAULT 0,
+        ema_direction TEXT,
+        key_zones_marked INTEGER DEFAULT 0,
+        zone_notes TEXT,
+        bias_reason TEXT,
+        completed_at INTEGER,
+        created_at INTEGER
+      )
+    `).run();
+
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS pre_trade_checklists (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        signal_id TEXT,
+        date TEXT NOT NULL,
+        symbol TEXT NOT NULL DEFAULT 'BTCUSDT',
+        bias_match INTEGER DEFAULT 0,
+        in_key_zone INTEGER DEFAULT 0,
+        structure_confirmed INTEGER DEFAULT 0,
+        no_chop INTEGER DEFAULT 0,
+        trend_candle INTEGER DEFAULT 0,
+        break_confirmed INTEGER DEFAULT 0,
+        rsi_ok INTEGER DEFAULT 0,
+        rsi_not_extreme INTEGER DEFAULT 0,
+        sl_logical INTEGER DEFAULT 0,
+        rr_ok INTEGER DEFAULT 0,
+        can_explain INTEGER DEFAULT 0,
+        clear_minded INTEGER DEFAULT 0,
+        no_fomo INTEGER DEFAULT 0,
+        notes TEXT,
+        created_at INTEGER
+      )
+    `).run();
+
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS trade_reviews (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        signal_id TEXT,
+        date TEXT NOT NULL,
+        symbol TEXT NOT NULL DEFAULT 'BTCUSDT',
+        instrument TEXT,
+        direction TEXT,
+        entry REAL,
+        stop_loss REAL,
+        take_profit REAL,
+        exit_price REAL,
+        outcome TEXT,
+        realized_rr REAL,
+        bias_clear INTEGER DEFAULT 0,
+        bias_direction TEXT,
+        in_key_zone INTEGER DEFAULT 0,
+        structure_hl_lh INTEGER DEFAULT 0,
+        trend_candle_clean INTEGER DEFAULT 0,
+        break_confirmed INTEGER DEFAULT 0,
+        rsi_ok INTEGER DEFAULT 0,
+        sl_logical INTEGER DEFAULT 0,
+        rr_acceptable INTEGER DEFAULT 0,
+        what_went_well TEXT,
+        what_went_wrong TEXT,
+        discipline TEXT,
+        mood_before TEXT,
+        no_fomo INTEGER DEFAULT 0,
+        sl_not_moved INTEGER DEFAULT 0,
+        tp_not_closed_early INTEGER DEFAULT 0,
+        no_revenge INTEGER DEFAULT 0,
+        lesson TEXT,
+        would_take_again INTEGER DEFAULT 0,
+        followed_plan INTEGER DEFAULT 0,
+        waited_confirmation INTEGER DEFAULT 0,
+        felt_confident INTEGER DEFAULT 0,
+        created_at INTEGER,
+        updated_at INTEGER
+      )
+    `).run();
+
+    // Migrate journal tables — add symbol column (safe, duplicate-protected)
+    for (const tbl of ['morning_routines', 'pre_trade_checklists', 'trade_reviews']) {
+      try { await env.DB.prepare(`ALTER TABLE ${tbl} ADD COLUMN symbol TEXT NOT NULL DEFAULT 'BTCUSDT'`).run(); } catch (_) {}
+    }
+
     // Migrate signals table
     const stratCols = [
       ['strategy_id',           'TEXT'],
@@ -2569,9 +2659,10 @@ export default {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+        const symbol = url.searchParams.get("symbol") || 'BTCUSDT';
         const routine = await env.DB.prepare(
-          `SELECT * FROM morning_routines WHERE user_id = ? AND date = ? ORDER BY created_at DESC LIMIT 1`
-        ).bind(session.userId, date).first();
+          `SELECT * FROM morning_routines WHERE user_id = ? AND date = ? AND symbol = ? ORDER BY created_at DESC LIMIT 1`
+        ).bind(session.userId, date, symbol).first();
         return jsonResponse(routine || null);
       }
 
@@ -2580,14 +2671,19 @@ export default {
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
         const date = body.date || new Date().toISOString().slice(0, 10);
-        const id = body.id || `mr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const symbol = body.symbol || 'BTCUSDT';
+        // Use symbol+user+date as the natural key so each symbol gets one routine per day
+        const existing = await env.DB.prepare(
+          `SELECT id FROM morning_routines WHERE user_id = ? AND date = ? AND symbol = ? ORDER BY created_at DESC LIMIT 1`
+        ).bind(session.userId, date, symbol).first();
+        const id = existing?.id || body.id || `mr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const now = Date.now();
         await env.DB.prepare(`
-          INSERT INTO morning_routines (id, user_id, date, bias, chart_opened, ema200_checked, ema_direction, key_zones_marked, zone_notes, bias_reason, completed_at, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO morning_routines (id, user_id, date, symbol, bias, chart_opened, ema200_checked, ema_direction, key_zones_marked, zone_notes, bias_reason, completed_at, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET bias = excluded.bias, chart_opened = excluded.chart_opened, ema200_checked = excluded.ema200_checked, ema_direction = excluded.ema_direction, key_zones_marked = excluded.key_zones_marked, zone_notes = excluded.zone_notes, bias_reason = excluded.bias_reason, completed_at = excluded.completed_at
         `).bind(
-          id, session.userId, date, body.bias || 'KEIN_TRADE',
+          id, session.userId, date, symbol, body.bias || 'KEIN_TRADE',
           (body.chart_opened ?? body.chartOpened) ? 1 : 0,
           (body.ema200_checked ?? body.ema200Checked) ? 1 : 0,
           body.ema_direction || body.emaDirection || null,
@@ -2640,9 +2736,13 @@ export default {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = new Date().toISOString().slice(0, 10);
-        const routine = await env.DB.prepare(
-          `SELECT bias, completed_at FROM morning_routines WHERE user_id = ? AND date = ? AND completed_at IS NOT NULL ORDER BY created_at DESC LIMIT 1`
-        ).bind(session.userId, date).first();
+        const symbol = url.searchParams.get("symbol") || null;
+        const query = symbol
+          ? `SELECT bias, completed_at FROM morning_routines WHERE user_id = ? AND date = ? AND symbol = ? AND completed_at IS NOT NULL ORDER BY created_at DESC LIMIT 1`
+          : `SELECT bias, completed_at FROM morning_routines WHERE user_id = ? AND date = ? AND completed_at IS NOT NULL ORDER BY created_at DESC LIMIT 1`;
+        const routine = symbol
+          ? await env.DB.prepare(query).bind(session.userId, date, symbol).first()
+          : await env.DB.prepare(query).bind(session.userId, date).first();
         return jsonResponse({ date, bias: routine?.bias || null, routineDone: !!routine });
       }
 
@@ -2652,9 +2752,17 @@ export default {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+        const symbol = url.searchParams.get("symbol") || 'BTCUSDT';
+        // Enforce order: morning routine must be completed first
+        const routine = await env.DB.prepare(
+          `SELECT id FROM morning_routines WHERE user_id = ? AND date = ? AND symbol = ? AND completed_at IS NOT NULL ORDER BY created_at DESC LIMIT 1`
+        ).bind(session.userId, date, symbol).first();
+        if (!routine) {
+          return jsonResponse({ locked: true, reason: `Bitte zuerst die Morgenroutine für ${symbol} abschließen.` });
+        }
         const rows = await env.DB.prepare(
-          `SELECT * FROM pre_trade_checklists WHERE user_id = ? AND date = ? ORDER BY created_at DESC`
-        ).bind(session.userId, date).all();
+          `SELECT * FROM pre_trade_checklists WHERE user_id = ? AND date = ? AND symbol = ? ORDER BY created_at DESC`
+        ).bind(session.userId, date, symbol).all();
         return jsonResponse(rows.results || []);
       }
 
@@ -2662,15 +2770,24 @@ export default {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
+        const symbol = body.symbol || 'BTCUSDT';
+        const date = body.date || new Date().toISOString().slice(0, 10);
+        // Enforce order: morning routine must be completed first
+        const routine = await env.DB.prepare(
+          `SELECT id FROM morning_routines WHERE user_id = ? AND date = ? AND symbol = ? AND completed_at IS NOT NULL ORDER BY created_at DESC LIMIT 1`
+        ).bind(session.userId, date, symbol).first();
+        if (!routine) {
+          return jsonResponse({ error: `Bitte zuerst die Morgenroutine für ${symbol} abschließen.`, locked: true }, 400);
+        }
         const id = body.id || `ptc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const now = Date.now();
         await env.DB.prepare(`
-          INSERT INTO pre_trade_checklists (id, user_id, signal_id, date, bias_match, in_key_zone, structure_confirmed, no_chop, trend_candle, break_confirmed, rsi_ok, rsi_not_extreme, sl_logical, rr_ok, can_explain, clear_minded, no_fomo, notes, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO pre_trade_checklists (id, user_id, signal_id, date, symbol, bias_match, in_key_zone, structure_confirmed, no_chop, trend_candle, break_confirmed, rsi_ok, rsi_not_extreme, sl_logical, rr_ok, can_explain, clear_minded, no_fomo, notes, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET bias_match=excluded.bias_match, in_key_zone=excluded.in_key_zone, structure_confirmed=excluded.structure_confirmed, no_chop=excluded.no_chop, trend_candle=excluded.trend_candle, break_confirmed=excluded.break_confirmed, rsi_ok=excluded.rsi_ok, rsi_not_extreme=excluded.rsi_not_extreme, sl_logical=excluded.sl_logical, rr_ok=excluded.rr_ok, can_explain=excluded.can_explain, clear_minded=excluded.clear_minded, no_fomo=excluded.no_fomo, notes=excluded.notes
         `).bind(
           id, session.userId, body.signal_id || body.signalId || null,
-          body.date || new Date().toISOString().slice(0, 10),
+          date, symbol,
           (body.bias_match ?? body.biasMatch) ? 1 : 0,
           (body.in_key_zone ?? body.inKeyZone) ? 1 : 0,
           (body.structure_confirmed ?? body.structureConfirmed) ? 1 : 0,
@@ -2695,9 +2812,10 @@ export default {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
-        const rows = await env.DB.prepare(
-          `SELECT * FROM trade_reviews WHERE user_id = ? AND date = ? ORDER BY created_at DESC`
-        ).bind(session.userId, date).all();
+        const symbol = url.searchParams.get("symbol") || null;
+        const rows = symbol
+          ? await env.DB.prepare(`SELECT * FROM trade_reviews WHERE user_id = ? AND date = ? AND symbol = ? ORDER BY created_at DESC`).bind(session.userId, date, symbol).all()
+          : await env.DB.prepare(`SELECT * FROM trade_reviews WHERE user_id = ? AND date = ? ORDER BY created_at DESC`).bind(session.userId, date).all();
         const mapped = (rows.results || []).map(r => ({
           ...r,
           entry_price:   r.entry_price  ?? r.entry,
@@ -2717,15 +2835,17 @@ export default {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
+        const symbol = body.symbol || body.instrument || 'BTCUSDT';
         const id = body.id || `tr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const now = Date.now();
         await env.DB.prepare(`
-          INSERT INTO trade_reviews (id, user_id, signal_id, date, instrument, direction, entry, stop_loss, take_profit, exit_price, outcome, realized_rr, bias_clear, bias_direction, in_key_zone, structure_hl_lh, trend_candle_clean, break_confirmed, rsi_ok, sl_logical, rr_acceptable, what_went_well, what_went_wrong, discipline, mood_before, no_fomo, sl_not_moved, tp_not_closed_early, no_revenge, lesson, would_take_again, followed_plan, waited_confirmation, felt_confident, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO trade_reviews (id, user_id, signal_id, date, symbol, instrument, direction, entry, stop_loss, take_profit, exit_price, outcome, realized_rr, bias_clear, bias_direction, in_key_zone, structure_hl_lh, trend_candle_clean, break_confirmed, rsi_ok, sl_logical, rr_acceptable, what_went_well, what_went_wrong, discipline, mood_before, no_fomo, sl_not_moved, tp_not_closed_early, no_revenge, lesson, would_take_again, followed_plan, waited_confirmation, felt_confident, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET instrument=excluded.instrument, direction=excluded.direction, entry=excluded.entry, stop_loss=excluded.stop_loss, take_profit=excluded.take_profit, exit_price=excluded.exit_price, outcome=excluded.outcome, realized_rr=excluded.realized_rr, what_went_wrong=excluded.what_went_wrong, mood_before=excluded.mood_before, no_fomo=excluded.no_fomo, sl_not_moved=excluded.sl_not_moved, tp_not_closed_early=excluded.tp_not_closed_early, no_revenge=excluded.no_revenge, lesson=excluded.lesson, would_take_again=excluded.would_take_again, followed_plan=excluded.followed_plan, waited_confirmation=excluded.waited_confirmation, felt_confident=excluded.felt_confident, updated_at=excluded.updated_at
         `).bind(
           id, session.userId, body.signal_id || body.signalId || null,
           body.date || new Date().toISOString().slice(0, 10),
+          symbol,
           body.instrument || null, body.direction || null,
           body.entry_price ?? body.entry ?? null,
           body.sl_price    ?? body.stopLoss ?? null,
