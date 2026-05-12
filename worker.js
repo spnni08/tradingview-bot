@@ -1467,20 +1467,20 @@ async function checkOpenTrades(env, opts = {}) {
   const { skipYoungerThanMs = 0, outcomeSource = 'manual_admin', adminUsername = null } = opts;
   const now = Date.now();
   const open = await env.DB.prepare(
-    `SELECT id, symbol, direction, ai_tp, ai_sl, created_at FROM signals WHERE outcome = 'OPEN' OR outcome IS NULL`
+    `SELECT id, symbol, direction, ai_entry, ai_tp, ai_sl, created_at FROM signals WHERE outcome = 'OPEN' OR outcome IS NULL`
   ).all();
 
   const results = [];
   for (const trade of (open.results || [])) {
     if (skipYoungerThanMs > 0 && (now - (trade.created_at || 0)) < skipYoungerThanMs) {
-      results.push({ id: trade.id, symbol: trade.symbol, status: 'skipped', message: 'Signal zu jung (< 30min)' });
+      results.push({ id: trade.id, symbol: trade.symbol, direction: trade.direction, status: 'skipped', message: 'Signal zu jung (< 30min)' });
       continue;
     }
     const snap = await env.DB.prepare(
       `SELECT price FROM snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 1`
     ).bind(trade.symbol).first();
     if (!snap || !snap.price) {
-      results.push({ id: trade.id, symbol: trade.symbol, status: 'no_price', message: `Kein Preis für ${trade.symbol}` });
+      results.push({ id: trade.id, symbol: trade.symbol, direction: trade.direction, entry: trade.ai_entry, tp: trade.ai_tp, sl: trade.ai_sl, status: 'no_price', message: `Kein Preis für ${trade.symbol}` });
       continue;
     }
     const price = snap.price;
@@ -1499,9 +1499,9 @@ async function checkOpenTrades(env, opts = {}) {
       await env.DB.prepare(
         `UPDATE signals SET outcome = ?, exit_price = ?, outcome_source = ?, closed_at = ?, updated_at = ? WHERE id = ?`
       ).bind(newOutcome, price, adminNote, now, now, trade.id).run();
-      results.push({ id: trade.id, symbol: trade.symbol, status: 'closed', outcome: newOutcome, price, tp, sl, message: `${newOutcome} — Preis ${price} hat ${newOutcome === 'WIN' ? 'TP' : 'SL'} erreicht` });
+      results.push({ id: trade.id, symbol: trade.symbol, direction: trade.direction, entry: trade.ai_entry, status: 'closed', outcome: newOutcome, price, tp, sl, message: `${newOutcome} — Preis ${price} hat ${newOutcome === 'WIN' ? 'TP' : 'SL'} erreicht` });
     } else {
-      results.push({ id: trade.id, symbol: trade.symbol, status: 'open', price, tp, sl, message: 'Weiter offen' });
+      results.push({ id: trade.id, symbol: trade.symbol, direction: trade.direction, entry: trade.ai_entry, status: 'open', price, tp, sl, message: 'Weiter offen' });
     }
   }
   return results;
@@ -2725,10 +2725,10 @@ export default {
         const tradeId = url.pathname.replace('/admin/check-trade/', '');
         if (!tradeId) return jsonResponse({ error: "Missing trade ID" }, 400);
         try {
-          const trade = await env.DB.prepare(`SELECT id, symbol, direction, ai_tp, ai_sl, outcome, created_at FROM signals WHERE id = ?`).bind(tradeId).first();
+          const trade = await env.DB.prepare(`SELECT id, symbol, direction, ai_entry, ai_tp, ai_sl, outcome, created_at FROM signals WHERE id = ?`).bind(tradeId).first();
           if (!trade) return jsonResponse({ error: "Signal nicht gefunden" }, 404);
           const snap = await env.DB.prepare(`SELECT price FROM snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 1`).bind(trade.symbol).first();
-          if (!snap || !snap.price) return jsonResponse({ success: true, status: 'no_price', message: `Kein aktueller Preis für ${trade.symbol}`, trade });
+          if (!snap || !snap.price) return jsonResponse({ success: true, status: 'no_price', direction: trade.direction, entry: trade.ai_entry, tp: trade.ai_tp, sl: trade.ai_sl, message: `Kein aktueller Preis für ${trade.symbol}` });
           const price = snap.price;
           const tp = trade.ai_tp;
           const sl = trade.ai_sl;
@@ -2744,9 +2744,9 @@ export default {
             const now = Date.now();
             await env.DB.prepare(`UPDATE signals SET outcome = ?, exit_price = ?, outcome_source = ?, closed_at = ?, updated_at = ? WHERE id = ?`)
               .bind(newOutcome, price, `manual_admin by ${session.username}`, now, now, tradeId).run();
-            return jsonResponse({ success: true, status: 'closed', outcome: newOutcome, price, tp, sl, message: `${newOutcome} — ${price} hat ${newOutcome === 'WIN' ? 'TP' : 'SL'} erreicht` });
+            return jsonResponse({ success: true, status: 'closed', outcome: newOutcome, direction: trade.direction, entry: trade.ai_entry, price, tp, sl, message: `${newOutcome} — ${price} hat ${newOutcome === 'WIN' ? 'TP' : 'SL'} erreicht` });
           }
-          return jsonResponse({ success: true, status: 'open', price, tp, sl, message: 'Trade weiter offen — TP/SL noch nicht erreicht' });
+          return jsonResponse({ success: true, status: 'open', direction: trade.direction, entry: trade.ai_entry, price, tp, sl, message: 'Trade weiter offen — TP/SL noch nicht erreicht' });
         } catch (error) {
           return jsonResponse({ success: false, error: error?.message || String(error) }, 500);
         }

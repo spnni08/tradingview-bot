@@ -277,11 +277,17 @@ const Sidebar = ({ page, setPage, user, onLogout, collapsed, setCollapsed }) => 
                 </div>
                 {[
                   { label: 'Einstellungen', icon: 'settings', page: 'einstellungen' },
-                  ...(isAdmin ? [{ label: 'Admin', icon: 'shield', page: 'admin' }] : []),
+                  ...(isAdmin ? [{ label: 'Admin', icon: 'shield', page: 'einstellungen', section: 'admin' }] : []),
                 ].map(item => (
-                  <button key={item.page}
+                  <button key={item.section || item.page}
                     style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)', fontFamily: 'var(--font-main)' }}
-                    onClick={() => { setUserMenuOpen(false); setPage(item.page); }}
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      setPage(item.page);
+                      if (item.section) {
+                        setTimeout(() => window.dispatchEvent(new CustomEvent('wavescout-settings-section', { detail: item.section })), 50);
+                      }
+                    }}
                   >
                     <Icon name={item.icon} size={14}/> {item.label}
                   </button>
