@@ -8,7 +8,6 @@ const DashboardPage = ({ user, navigate }) => {
   const [data, setData]           = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [toast, setToast]         = useState(null);
-  const [todayBias, setTodayBias] = useState(null);
   const [radar, setRadar]         = useState(null);
 
   const showToast = (msg, type = 'info') => {

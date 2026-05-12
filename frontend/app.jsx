@@ -43,7 +43,27 @@ class PageErrorBoundary extends React.Component {
 }
 
 const App = () => {
-  const [page, setPage] = useState('dashboard');
+  const ROUTES = {
+    '/dashboard': 'dashboard',
+    '/signals': 'backtest',
+    '/backtesting': 'backtest',
+    '/journal': 'journal',
+    '/analytics': 'statistiken',
+    '/admin': 'admin',
+    '/settings': 'einstellungen',
+    '/profile': 'einstellungen'
+  };
+  const pageToPath = {
+    dashboard: '/dashboard',
+    backtest: '/backtesting',
+    journal: '/journal',
+    statistiken: '/analytics',
+    admin: '/admin',
+    einstellungen: '/settings'
+  };
+  const resolvePage = (path) => ROUTES[path] || 'dashboard';
+
+  const [page, setPage] = useState(resolvePage(window.location.pathname));
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -64,11 +84,25 @@ const App = () => {
         return;
       }
       setUser(u);
+      const initialPage = resolvePage(window.location.pathname);
+      if (!ROUTES[window.location.pathname]) window.history.replaceState({}, '', '/dashboard');
+      if (initialPage === 'admin' && u.role !== 'admin') {
+        window.history.replaceState({}, '', '/dashboard');
+        setPage('dashboard');
+      } else {
+        setPage(initialPage);
+      }
       setReady(true);
     } catch {
       localStorage.clear();
       window.location.href = 'login.html';
     }
+  }, []);
+
+  useEffect(() => {
+    const onPop = () => setPage(resolvePage(window.location.pathname));
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
   }, []);
 
   const handleLogout = async () => {
@@ -84,7 +118,11 @@ const App = () => {
     }
   };
 
-  const navigate = (p) => setPage(p);
+  const navigate = (p) => {
+    const path = pageToPath[p] || '/dashboard';
+    if (window.location.pathname !== path) window.history.pushState({}, '', path);
+    setPage(p);
+  };
 
   useEffect(() => {
     const h = (e) => setPage(e.detail);
