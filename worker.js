@@ -82,20 +82,67 @@ async function withTimeout(promise, ms, fallbackValue = null) {
   return result;
 }
 
+function getSignalQuality(score) {
+  if (score >= 90) return 'A+ Setup – sehr stark prüfen';
+  if (score >= 80) return 'Starkes Setup – prüfen';
+  if (score >= 70) return 'Gutes Setup – mit Vorsicht prüfen';
+  if (score >= 60) return 'Schwaches Setup – eher beobachten';
+  if (score >= 50) return 'Unsicher – warten';
+  return 'Kein Trade / Skip';
+}
+
+function calcRR(entry, tp, sl, isLong) {
+  if (!entry || !tp || !sl || entry === 0) return null;
+  const reward = Math.abs(tp - entry);
+  const risk   = Math.abs(entry - sl);
+  if (risk === 0) return null;
+  return parseFloat((reward / risk).toFixed(2));
+}
+
+function safePct(a, b) {
+  if (!a || !b || b === 0) return null;
+  return parseFloat(((Math.abs(a - b) / b) * 100).toFixed(3));
+}
+
+function tryParseJSON(str) {
+  if (!str) return null;
+  try { return JSON.parse(str); } catch { return null; }
+}
+
 function formatSignalForTelegram(signal) {
   const emoji = signal.direction === 'LONG' ? '🟢' : '🔴';
-  const scoreEmoji = signal.ai_score >= 75 ? '⭐⭐⭐' : signal.ai_score >= 65 ? '⭐⭐' : '⭐';
-  return `
-${emoji} <b>${signal.symbol}</b> ${signal.direction}
+  const sc    = signal.ai_score || 0;
+  const scoreEmoji = sc >= 90 ? '⭐⭐⭐' : sc >= 75 ? '⭐⭐' : '⭐';
+  const quality = signal.signal_quality || getSignalQuality(sc);
+  const rrVal   = signal.risk_reward;
+  const rrStr   = rrVal ? `1:${rrVal.toFixed(1)}` : 'N/A';
+  const fmt     = (v) => v != null && !isNaN(v) ? `$${parseFloat(v).toFixed(2)}` : 'unbekannt';
 
-${scoreEmoji} Score: <b>${signal.ai_score}/100</b>
-📊 Timeframe: ${signal.timeframe}
-💰 Entry: $${signal.ai_entry?.toFixed(2) || signal.price?.toFixed(2)}
-🎯 TP: $${signal.ai_tp?.toFixed(2) || 'N/A'}
-🛑 SL: $${signal.ai_sl?.toFixed(2) || 'N/A'}
+  const biasLine = signal.daily_bias
+    ? `\n📐 Tagesbias: ${signal.daily_bias}${signal.bias_match ? ` · ${signal.bias_match}` : ''}` : '';
 
-${signal.ai_reason || 'Signal von TradingView'}
-  `.trim();
+  const matched = tryParseJSON(signal.matched_rules) || [];
+  const failed  = tryParseJSON(signal.failed_rules)  || [];
+  const matchedStr = matched.slice(0, 3).map(r => `✅ ${r}`).join('\n') || '–';
+  const failedStr  = failed.slice(0, 3).map(r => `❌ ${r}`).join('\n')  || '–';
+
+  const disclaimer = '\n\n⚠️ <i>Hinweis: Keine Finanzberatung. Signale dienen nur zu Analyse- und Backtesting-Zwecken. Trading birgt Risiko. Keine Garantie für Gewinne.</i>';
+
+  return `${emoji} <b>${signal.symbol}</b> ${signal.direction}
+
+${scoreEmoji} Score: <b>${sc}/100</b> · ${quality}
+💰 Entry: ${fmt(signal.ai_entry ?? signal.price)}
+🎯 TP: ${fmt(signal.ai_tp)}
+🛑 SL: ${fmt(signal.ai_sl)}
+⚖️ R:R: ${rrStr}${biasLine}
+
+✅ <b>Erfüllt:</b>
+${matchedStr}
+
+❌ <b>Fehlt / Warnung:</b>
+${failedStr}
+
+📋 ${signal.ai_reason || 'Signal von TradingView'}${disclaimer}`.trim();
 }
 
 // ═══════════════════════════════════════════════════════════════
