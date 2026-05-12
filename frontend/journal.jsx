@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-// WAVESCOUT v3.5 - TRADING JOURNAL
+// WAVESCOUT v3.6 - TRADING JOURNAL
 // A) Morgenroutine  B) Pre-Trade Checkliste  C) After-Trade Review
 // ═══════════════════════════════════════════════════════════════
 
@@ -44,10 +44,70 @@ function CheckRow({ label, checked, onChange }) {
 
 function todayDate() { return new Date().toISOString().slice(0, 10); }
 
+const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'TRXUSDT', 'XRPUSDT'];
+
+// ─── Symbol Selector ─────────────────────────────────────────
+
+function SymbolPicker({ symbol, onChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+      {SYMBOLS.map(s => (
+        <button
+          key={s}
+          onClick={() => onChange(s)}
+          style={{
+            padding: '5px 14px', borderRadius: 20, fontSize: 12, fontWeight: 600,
+            border: `1px solid ${symbol === s ? 'var(--blue-500)' : 'var(--border)'}`,
+            background: symbol === s ? 'rgba(59,130,246,.15)' : 'var(--bg-2)',
+            color: symbol === s ? 'var(--blue-500)' : 'var(--text-secondary)',
+            cursor: 'pointer', transition: 'all .15s', fontFamily: 'var(--font-mono)',
+          }}
+        >
+          {s}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── Status Banner ────────────────────────────────────────────
+
+function StatusBanner({ symbol, date, routineDone, bias }) {
+  const isToday = date === todayDate();
+  const biasColor = bias === 'LONG' ? 'var(--win)' : bias === 'SHORT' ? 'var(--loss)' : 'var(--text-secondary)';
+  return (
+    <div style={{
+      padding: '10px 16px', borderRadius: 10,
+      background: routineDone ? 'rgba(16,185,129,.08)' : 'rgba(240,68,68,.08)',
+      border: `1px solid ${routineDone ? 'rgba(16,185,129,.25)' : 'rgba(240,68,68,.2)'}`,
+      display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+    }}>
+      <span style={{
+        width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+        background: routineDone ? 'var(--win)' : 'var(--loss)',
+        display: 'inline-block', animation: routineDone ? 'none' : 'pulse 1.5s infinite',
+      }}/>
+      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>
+        {symbol}
+      </span>
+      <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+        {new Date(date + 'T00:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+      </span>
+      <span style={{ fontSize: 13, fontWeight: 600, color: routineDone ? 'var(--win)' : 'var(--loss)' }}>
+        {routineDone ? 'Routine abgeschlossen' : isToday ? 'Morgenroutine fehlt · Trading gesperrt' : 'Keine Routine für diesen Tag'}
+      </span>
+      {routineDone && bias && (
+        <span style={{ fontSize: 13, color: biasColor, fontWeight: 700 }}>
+          · Bias: {bias}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ─── Tab A: Morgenroutine ─────────────────────────────────────
 
-function MorgenroutineTab() {
-  const [date, setDate]       = useState(todayDate());
+function MorgenroutineTab({ symbol, date, onRoutineChange }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving]   = useState(false);
   const [toast, showToast]    = useToast();
@@ -62,12 +122,12 @@ function MorgenroutineTab() {
   });
   const [saved, setSaved] = useState(null);
 
-  useEffect(() => { load(date); }, [date]);
+  useEffect(() => { load(); }, [date, symbol]);
 
-  const load = async (d) => {
+  const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/morning-routine?date=${d}`, { headers: { 'X-Session-ID': sid() } });
+      const res = await fetch(`${API_URL}/morning-routine?date=${date}&symbol=${symbol}`, { headers: { 'X-Session-ID': sid() } });
       if (res.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       const data = await res.json();
       if (data && data.id) {
@@ -81,11 +141,16 @@ function MorgenroutineTab() {
           zone_notes:      data.zone_notes || '',
           bias_reason:     data.bias_reason || '',
         });
+        onRoutineChange({ done: !!data.completed_at, bias: data.bias });
       } else {
         setSaved(null);
         setForm({ bias: '', chart_opened: false, ema200_checked: false, ema_direction: '', key_zones_marked: false, zone_notes: '', bias_reason: '' });
+        onRoutineChange({ done: false, bias: null });
       }
-    } catch { setSaved(null); }
+    } catch {
+      setSaved(null);
+      onRoutineChange({ done: false, bias: null });
+    }
     setLoading(false);
   };
 
@@ -98,11 +163,11 @@ function MorgenroutineTab() {
       const res = await fetch(`${API_URL}/morning-routine`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
-        body: JSON.stringify({ date, ...form })
+        body: JSON.stringify({ date, symbol, ...form })
       });
       if (res.ok) {
         showToast('Morgenroutine gespeichert', 'success');
-        load(date);
+        load();
       } else {
         showToast('Fehler beim Speichern', 'error');
       }
@@ -110,7 +175,6 @@ function MorgenroutineTab() {
     setSaving(false);
   };
 
-  const isToday  = date === todayDate();
   const isDone   = saved?.completed_at != null;
   const checks   = [form.chart_opened, form.ema200_checked, !!form.ema_direction, form.key_zones_marked].filter(Boolean).length;
   const totalChk = 4;
@@ -123,32 +187,10 @@ function MorgenroutineTab() {
     <>
       <Toast toast={toast}/>
 
-      {/* Date + status banner */}
-      <div className="card" style={{ marginBottom: 'var(--gap)' }}>
-        <div className="card-body" style={{ padding: '12px 20px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-            <input type="date" value={date} onChange={e => { setDate(e.target.value); setLoading(true); }} className="input" style={{ maxWidth: 180 }}/>
-            {isToday && (
-              isDone ? (
-                <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--win)', fontWeight: 600 }}>
-                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--win)', display: 'inline-block' }}/>
-                  Routine abgeschlossen · Bias: <strong>{saved.bias}</strong>
-                </span>
-              ) : (
-                <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--wait)', fontWeight: 600 }}>
-                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--loss)', display: 'inline-block', animation: 'pulse 1.5s infinite' }}/>
-                  Morgenroutine noch nicht abgeschlossen
-                </span>
-              )
-            )}
-          </div>
-        </div>
-      </div>
-
       <div className="card">
         <div className="card-head">
           <Icon name="calendar" className="ico"/>
-          <h3>Morgenroutine</h3>
+          <h3>Morgenroutine · {symbol}</h3>
           <div className="actions">
             <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: pcColor, fontSize: 13 }}>
               {checks}/{totalChk} ({pct}%)
@@ -184,7 +226,7 @@ function MorgenroutineTab() {
             <textarea
               value={form.zone_notes}
               onChange={e => set('zone_notes', e.target.value)}
-              placeholder="Zonen notieren: z.B. BTC: Support bei 42.500, Resistance bei 44.200"
+              placeholder={`Zonen notieren: z.B. ${symbol}: Support bei 42.500, Resistance bei 44.200`}
               className="input"
               rows={2}
               style={{ width: '100%', marginTop: 8, resize: 'vertical' }}
@@ -244,24 +286,33 @@ const EMPTY_PRE = {
   notes: '',
 };
 
-function PreTradeTab() {
-  const [date, setDate]         = useState(todayDate());
+function PreTradeTab({ symbol, date, routineDone }) {
   const [loading, setLoading]   = useState(true);
   const [saving, setSaving]     = useState(false);
   const [checklists, setChecklists] = useState([]);
+  const [locked, setLocked]     = useState(false);
+  const [lockReason, setLockReason] = useState('');
   const [showNew, setShowNew]   = useState(false);
   const [form, setForm]         = useState({ ...EMPTY_PRE });
   const [toast, showToast]      = useToast();
 
-  useEffect(() => { load(date); }, [date]);
+  useEffect(() => { load(); }, [date, symbol]);
 
-  const load = async (d) => {
+  const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/pre-trade-checklist?date=${d}`, { headers: { 'X-Session-ID': sid() } });
+      const res = await fetch(`${API_URL}/pre-trade-checklist?date=${date}&symbol=${symbol}`, { headers: { 'X-Session-ID': sid() } });
       if (res.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       const data = await res.json();
-      setChecklists(Array.isArray(data) ? data : []);
+      if (data && data.locked) {
+        setLocked(true);
+        setLockReason(data.reason || `Bitte zuerst die Morgenroutine für ${symbol} abschließen.`);
+        setChecklists([]);
+      } else {
+        setLocked(false);
+        setLockReason('');
+        setChecklists(Array.isArray(data) ? data : []);
+      }
     } catch { setChecklists([]); }
     setLoading(false);
   };
@@ -274,15 +325,16 @@ function PreTradeTab() {
       const res = await fetch(`${API_URL}/pre-trade-checklist`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
-        body: JSON.stringify({ date, ...form })
+        body: JSON.stringify({ date, symbol, ...form })
       });
       if (res.ok) {
         showToast('Checkliste gespeichert', 'success');
         setForm({ ...EMPTY_PRE });
         setShowNew(false);
-        load(date);
+        load();
       } else {
-        showToast('Fehler beim Speichern', 'error');
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Fehler beim Speichern', 'error');
       }
     } catch { showToast('Fehler beim Speichern', 'error'); }
     setSaving(false);
@@ -308,6 +360,22 @@ function PreTradeTab() {
 
   if (loading) return <div style={{ padding: 40, textAlign: 'center' }}><div className="spinner-lg"/></div>;
 
+  // Locked state
+  if (locked) {
+    return (
+      <div className="card">
+        <div className="card-body" style={{ padding: '32px 24px', textAlign: 'center' }}>
+          <div style={{ fontSize: 32, marginBottom: 14 }}>🔒</div>
+          <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>Pre-Trade Checkliste gesperrt</p>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{lockReason}</p>
+          <p style={{ color: 'var(--text-tertiary)', fontSize: 12, marginTop: 8 }}>
+            Gehe zum Tab <strong>Morgenroutine</strong>, fülle die Routine für <strong>{symbol}</strong> aus und schließe sie ab.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <Toast toast={toast}/>
@@ -315,8 +383,7 @@ function PreTradeTab() {
       <div className="card" style={{ marginBottom: 'var(--gap)' }}>
         <div className="card-body" style={{ padding: '12px 20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-            <input type="date" value={date} onChange={e => { setDate(e.target.value); setLoading(true); }} className="input" style={{ maxWidth: 180 }}/>
-            <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{checklists.length} Einträge</span>
+            <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{checklists.length} Einträge für {symbol}</span>
             <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setShowNew(s => !s)}>
               <Icon name="plus" size={13}/> {showNew ? 'Schließen' : 'Neue Checkliste'}
             </button>
@@ -328,7 +395,7 @@ function PreTradeTab() {
         <div className="card" style={{ marginBottom: 'var(--gap)' }}>
           <div className="card-head">
             <Icon name="checklist" className="ico"/>
-            <h3>Pre-Trade Checkliste</h3>
+            <h3>Pre-Trade Checkliste · {symbol}</h3>
             <div className="actions">
               <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: pcColor, fontSize: 13 }}>
                 {completedCount}/{PRE_CHECKS.length} ({pct}%)
@@ -398,7 +465,7 @@ function PreTradeTab() {
         <div className="card">
           <div className="card-body" style={{ padding: 60, textAlign: 'center' }}>
             <Icon name="checklist" size={40} style={{ opacity: 0.15, marginBottom: 14 }}/>
-            <p style={{ color: 'var(--text-tertiary)' }}>Noch keine Pre-Trade Checklisten für diesen Tag</p>
+            <p style={{ color: 'var(--text-tertiary)' }}>Für {symbol} wurden heute noch keine Pre-Trade Checklisten dokumentiert</p>
           </div>
         </div>
       ) : (
@@ -435,7 +502,6 @@ function PreTradeTab() {
 
 const EMPTY_REVIEW = {
   signal_id: '',
-  instrument: '',
   direction: '',
   entry_price: '',
   sl_price: '',
@@ -455,8 +521,7 @@ const EMPTY_REVIEW = {
   would_retake: false,
 };
 
-function AfterTradeTab() {
-  const [date, setDate]       = useState(todayDate());
+function AfterTradeTab({ symbol, date }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving]   = useState(false);
   const [reviews, setReviews] = useState([]);
@@ -464,12 +529,12 @@ function AfterTradeTab() {
   const [form, setForm]       = useState({ ...EMPTY_REVIEW });
   const [toast, showToast]    = useToast();
 
-  useEffect(() => { load(date); }, [date]);
+  useEffect(() => { load(); }, [date, symbol]);
 
-  const load = async (d) => {
+  const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/trade-review?date=${d}`, { headers: { 'X-Session-ID': sid() } });
+      const res = await fetch(`${API_URL}/trade-review?date=${date}&symbol=${symbol}`, { headers: { 'X-Session-ID': sid() } });
       if (res.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       const data = await res.json();
       setReviews(Array.isArray(data) ? data : []);
@@ -480,8 +545,8 @@ function AfterTradeTab() {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   const save = async () => {
-    if (!form.instrument || !form.direction || !form.outcome) {
-      showToast('Instrument, Richtung und Ergebnis sind Pflichtfelder', 'error');
+    if (!form.direction || !form.outcome) {
+      showToast('Richtung und Ergebnis sind Pflichtfelder', 'error');
       return;
     }
     setSaving(true);
@@ -491,6 +556,8 @@ function AfterTradeTab() {
         headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
         body: JSON.stringify({
           date,
+          symbol,
+          instrument: symbol,
           ...form,
           entry_price: parseFloat(form.entry_price) || null,
           sl_price:    parseFloat(form.sl_price)    || null,
@@ -502,7 +569,7 @@ function AfterTradeTab() {
         showToast('Review gespeichert', 'success');
         setForm({ ...EMPTY_REVIEW });
         setShowNew(false);
-        load(date);
+        load();
       } else {
         showToast('Fehler beim Speichern', 'error');
       }
@@ -530,8 +597,7 @@ function AfterTradeTab() {
       <div className="card" style={{ marginBottom: 'var(--gap)' }}>
         <div className="card-body" style={{ padding: '12px 20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-            <input type="date" value={date} onChange={e => { setDate(e.target.value); setLoading(true); }} className="input" style={{ maxWidth: 180 }}/>
-            <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{reviews.length} Reviews</span>
+            <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{reviews.length} Reviews für {symbol}</span>
             <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setShowNew(s => !s)}>
               <Icon name="plus" size={13}/> {showNew ? 'Schließen' : 'Neues Review'}
             </button>
@@ -543,18 +609,14 @@ function AfterTradeTab() {
         <div className="card" style={{ marginBottom: 'var(--gap)' }}>
           <div className="card-head">
             <Icon name="book" className="ico"/>
-            <h3>After-Trade Review</h3>
+            <h3>After-Trade Review · {symbol}</h3>
           </div>
           <div className="card-body">
 
             {/* Trade-Daten */}
             <div className="checklist-group">
-              <div className="checklist-group-title">Trade-Daten</div>
+              <div className="checklist-group-title">Trade-Daten · {symbol}</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 4 }}>Instrument *</div>
-                  <input type="text" value={form.instrument} onChange={e => set('instrument', e.target.value)} placeholder="z.B. BTCUSDT" className="input" style={{ width: '100%' }}/>
-                </div>
                 <div>
                   <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 4 }}>Richtung *</div>
                   <select value={form.direction} onChange={e => set('direction', e.target.value)} className="input" style={{ width: '100%' }}>
@@ -644,7 +706,7 @@ function AfterTradeTab() {
         <div className="card">
           <div className="card-body" style={{ padding: 60, textAlign: 'center' }}>
             <Icon name="book" size={40} style={{ opacity: 0.15, marginBottom: 14 }}/>
-            <p style={{ color: 'var(--text-tertiary)' }}>Noch keine After-Trade Reviews für diesen Tag</p>
+            <p style={{ color: 'var(--text-tertiary)' }}>Für {symbol} wurden heute noch keine Trades dokumentiert</p>
           </div>
         </div>
       ) : (
@@ -654,7 +716,7 @@ function AfterTradeTab() {
             <div className="card" key={r.id || i} style={{ marginBottom: 'var(--gap)' }}>
               <div className="card-head">
                 <Icon name="book" className="ico"/>
-                <span style={{ fontWeight: 600 }}>{r.instrument || '–'}</span>
+                <span style={{ fontWeight: 600, fontFamily: 'var(--font-mono)', fontSize: 13 }}>{r.instrument || symbol}</span>
                 {r.direction && (
                   <span className={`badge ${r.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{r.direction}</span>
                 )}
@@ -694,11 +756,23 @@ function AfterTradeTab() {
 
 const JournalPage = ({ user }) => {
   const [activeTab, setActiveTab] = useState('morgen');
+  const [symbol, setSymbol]       = useState(() => localStorage.getItem('journal_symbol') || 'BTCUSDT');
+  const [date, setDate]           = useState(todayDate());
+  const [routineStatus, setRoutineStatus] = useState({ done: false, bias: null });
+
+  // Persist symbol choice
+  const changeSymbol = (s) => {
+    localStorage.setItem('journal_symbol', s);
+    setSymbol(s);
+    setRoutineStatus({ done: false, bias: null });
+  };
+
+  const handleRoutineChange = (status) => setRoutineStatus(status);
 
   const tabs = [
-    { id: 'morgen',    label: 'Morgenroutine'       },
-    { id: 'pretrade',  label: 'Pre-Trade Checkliste' },
-    { id: 'aftertrade',label: 'After-Trade Review'   },
+    { id: 'morgen',     label: 'Morgenroutine',        unlocked: true },
+    { id: 'pretrade',   label: 'Pre-Trade Checkliste',  unlocked: routineStatus.done },
+    { id: 'aftertrade', label: 'After-Trade Review',    unlocked: true },
   ];
 
   return (
@@ -708,23 +782,49 @@ const JournalPage = ({ user }) => {
         <p className="subtitle">Morgenroutine · Pre-Trade Checkliste · After-Trade Review</p>
       </div>
 
+      {/* Symbol + Date Selector */}
+      <div className="card" style={{ marginBottom: 'var(--gap)' }}>
+        <div className="card-body" style={{ padding: '14px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontWeight: 600, whiteSpace: 'nowrap' }}>SYMBOL</span>
+            <SymbolPicker symbol={symbol} onChange={changeSymbol}/>
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontWeight: 600 }}>DATUM</span>
+              <input
+                type="date"
+                value={date}
+                onChange={e => setDate(e.target.value)}
+                className="input"
+                style={{ maxWidth: 160 }}
+              />
+            </div>
+          </div>
+          <StatusBanner symbol={symbol} date={date} routineDone={routineStatus.done} bias={routineStatus.bias}/>
+        </div>
+      </div>
+
+      {/* Tab Navigation */}
       <div style={{ overflowX: 'auto', marginBottom: 20, paddingBottom: 1 }}>
         <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', minWidth: 'max-content' }}>
           {tabs.map(tab => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
               background: 'none', border: 'none', padding: '10px 18px', cursor: 'pointer',
               fontSize: 14, fontWeight: activeTab === tab.id ? 600 : 400,
-              color: activeTab === tab.id ? 'var(--blue-500)' : 'var(--text-secondary)',
+              color: activeTab === tab.id ? 'var(--blue-500)' : tab.unlocked ? 'var(--text-secondary)' : 'var(--text-tertiary)',
               borderBottom: activeTab === tab.id ? '2px solid var(--blue-500)' : '2px solid transparent',
-              marginBottom: -1, transition: 'all .15s', whiteSpace: 'nowrap', fontFamily: 'var(--font-main)'
-            }}>{tab.label}</button>
+              marginBottom: -1, transition: 'all .15s', whiteSpace: 'nowrap', fontFamily: 'var(--font-main)',
+              opacity: tab.unlocked ? 1 : 0.55,
+            }}>
+              {!tab.unlocked && tab.id === 'pretrade' && <span style={{ marginRight: 5, fontSize: 11 }}>🔒</span>}
+              {tab.label}
+            </button>
           ))}
         </div>
       </div>
 
-      {activeTab === 'morgen'     && <MorgenroutineTab/>}
-      {activeTab === 'pretrade'   && <PreTradeTab/>}
-      {activeTab === 'aftertrade' && <AfterTradeTab/>}
+      {activeTab === 'morgen'     && <MorgenroutineTab symbol={symbol} date={date} onRoutineChange={handleRoutineChange}/>}
+      {activeTab === 'pretrade'   && <PreTradeTab symbol={symbol} date={date} routineDone={routineStatus.done}/>}
+      {activeTab === 'aftertrade' && <AfterTradeTab symbol={symbol} date={date}/>}
     </div>
   );
 };
