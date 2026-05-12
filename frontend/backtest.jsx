@@ -504,12 +504,17 @@ function PracticeTradesTab({ sessionId }) {
 
 // ─── Signal History Tab ────────────────────────────────────────
 
+const EMPTY_HIST_FILTERS = {
+  outcome: 'all', symbol: 'all', direction: 'all',
+  quality: 'all', official: 'all', biasMatch: 'all',
+  scoreMin: '', scoreMax: '', ruleSearch: '',
+};
+
 function SignalHistoryTab({ sessionId }) {
   const [history,   setHistory]   = useState([]);
   const [stats,     setStats]     = useState(null);
   const [loading,   setLoading]   = useState(true);
-  const [fOutcome,  setFOutcome]  = useState('all');
-  const [fSymbol,   setFSymbol]   = useState('all');
+  const [filters,   setFilters]   = useState({ ...EMPTY_HIST_FILTERS });
   const [selected,  setSelected]  = useState(null);
   const [lossModal, setLossModal] = useState(null);
 
@@ -518,7 +523,7 @@ function SignalHistoryTab({ sessionId }) {
     setLoading(true);
     try {
       const [hRes, sRes] = await Promise.all([
-        fetch(`${API_URL}/history?limit=200`, { headers: { 'X-Session-ID': sessionId } }),
+        fetch(`${API_URL}/history?limit=500`, { headers: { 'X-Session-ID': sessionId } }),
         fetch(`${API_URL}/stats`,             { headers: { 'X-Session-ID': sessionId } }),
       ]);
       if (hRes.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
@@ -527,9 +532,47 @@ function SignalHistoryTab({ sessionId }) {
     } catch (e) { console.error(e); } finally { setLoading(false); }
   };
 
-  const updateOutcome = async (tradeId, outcome) => {
+  const setF = (key, val) => setFilters(f => ({ ...f, [key]: val }));
+  const resetFilters = () => setFilters({ ...EMPTY_HIST_FILTERS });
+  const isFiltered = Object.entries(filters).some(([k, v]) => v !== EMPTY_HIST_FILTERS[k]);
+
+  const updateOutcome = (tradeId, outcome) => {
     setHistory(prev => prev.map(t => t.id === tradeId ? { ...t, outcome } : t));
   };
+
+  const parseRules = (val) => { try { return JSON.parse(val || '[]'); } catch { return []; } };
+
+  const filtered = history.filter(h => {
+    if (filters.outcome   !== 'all' && h.outcome !== filters.outcome) return false;
+    if (filters.symbol    !== 'all' && h.symbol  !== filters.symbol)  return false;
+    if (filters.direction !== 'all' && h.direction !== filters.direction) return false;
+    if (filters.quality   !== 'all' && h.signal_quality !== filters.quality) return false;
+    if (filters.official  !== 'all') {
+      if (filters.official === 'official'   && !(h.counts_for_strategy === 1)) return false;
+      if (filters.official === 'unofficial' &&   h.counts_for_strategy === 1)  return false;
+    }
+    if (filters.biasMatch !== 'all' && h.bias_match !== filters.biasMatch) return false;
+    if (filters.scoreMin !== '' && (h.ai_score || 0) < Number(filters.scoreMin)) return false;
+    if (filters.scoreMax !== '' && (h.ai_score || 0) > Number(filters.scoreMax)) return false;
+    if (filters.ruleSearch !== '') {
+      const q = filters.ruleSearch.toLowerCase();
+      const matched = parseRules(h.matched_rules).map(r => (r.rule || r).toLowerCase()).join(' ');
+      const failed  = parseRules(h.failed_rules).map(r => (r.rule || r).toLowerCase()).join(' ');
+      if (!matched.includes(q) && !failed.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const fWins   = filtered.filter(t => t.outcome === 'WIN').length;
+  const fLosses = filtered.filter(t => t.outcome === 'LOSS').length;
+  const fBE     = filtered.filter(t => t.outcome === 'BE').length;
+  const fOpen   = filtered.filter(t => t.outcome === 'OPEN' || !t.outcome).length;
+  const fClosed = fWins + fLosses;
+  const fWinRate = fClosed > 0 ? ((fWins / fClosed) * 100).toFixed(1) : '–';
+  const fScores = filtered.map(t => t.ai_score).filter(s => s != null);
+  const fAvgScore = fScores.length ? (fScores.reduce((a, b) => a + b, 0) / fScores.length).toFixed(1) : '–';
+  const fRRs = filtered.map(t => parseFloat(t.risk_reward)).filter(r => r > 0);
+  const fAvgRR = fRRs.length ? (fRRs.reduce((a, b) => a + b, 0) / fRRs.length).toFixed(2) : '–';
 
   const totalClosed = (stats?.wins || 0) + (stats?.losses || 0);
   const winRate     = totalClosed > 0 ? (stats.wins / totalClosed) * 100 : 0;
@@ -537,11 +580,6 @@ function SignalHistoryTab({ sessionId }) {
   const closedTrades = history.filter(t => t.outcome === 'WIN' || t.outcome === 'LOSS').slice().reverse();
   let cumulative = 0;
   const pnlPoints = closedTrades.map(t => { cumulative += calculatePnL(t); return cumulative; });
-  const filtered  = history.filter(h => {
-    if (fOutcome !== 'all' && h.outcome !== fOutcome) return false;
-    if (fSymbol  !== 'all' && h.symbol  !== fSymbol)  return false;
-    return true;
-  });
 
   if (loading) return <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}><div className="spinner-lg" style={{ margin: '0 auto 16px' }}/>Lade Signal-History…</div>;
 
@@ -553,7 +591,7 @@ function SignalHistoryTab({ sessionId }) {
       <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <div className="kpi-card"><div className="kpi-val">{history.length}</div><div className="kpi-lbl">Total Signale</div></div>
         <div className="kpi-card"><div className="kpi-val">{totalClosed}</div><div className="kpi-lbl">Abgeschlossen</div></div>
-        <div className="kpi-card"><div className="kpi-val" style={{ color: winRate >= 50 ? 'var(--win)' : 'var(--loss)' }}>{winRate.toFixed(1)}%</div><div className="kpi-lbl">Win-Rate</div></div>
+        <div className="kpi-card"><div className="kpi-val" style={{ color: winRate >= 50 ? 'var(--win)' : 'var(--loss)' }}>{winRate.toFixed(1)}%</div><div className="kpi-lbl">Win-Rate (gesamt)</div></div>
         <div className="kpi-card"><div className="kpi-val" style={{ color: 'var(--text-tertiary)' }}>{stats?.open || 0}</div><div className="kpi-lbl">Offen</div></div>
       </div>
 
@@ -566,28 +604,101 @@ function SignalHistoryTab({ sessionId }) {
         </div>
       )}
 
+      {/* Extended Filters */}
       <div className="card">
         <div className="card-head">
           <Icon name="filter" className="ico"/><h3>Filter</h3>
-          {(fOutcome !== 'all' || fSymbol !== 'all') && <div className="actions"><button className="btn btn-ghost btn-sm" onClick={() => { setFOutcome('all'); setFSymbol('all'); }}>Zurücksetzen</button></div>}
+          {isFiltered && <div className="actions"><button className="btn btn-ghost btn-sm" onClick={resetFilters}>Zurücksetzen</button></div>}
         </div>
         <div className="card-body">
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
             <div>
-              <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500 }}>Ergebnis</label>
-              <select value={fOutcome} onChange={e => setFOutcome(e.target.value)} className="input" style={{ minWidth: 140 }}>
-                <option value="all">Alle</option><option value="WIN">Wins</option><option value="LOSS">Losses</option><option value="OPEN">Offen</option><option value="IGNORED">Ignoriert</option>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>ERGEBNIS</label>
+              <select value={filters.outcome} onChange={e => setF('outcome', e.target.value)} className="input">
+                <option value="all">Alle</option>
+                <option value="WIN">Win</option>
+                <option value="LOSS">Loss</option>
+                <option value="BE">Break Even</option>
+                <option value="OPEN">Offen</option>
+                <option value="IGNORED">Ignoriert</option>
               </select>
             </div>
             <div>
-              <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500 }}>Symbol</label>
-              <select value={fSymbol} onChange={e => setFSymbol(e.target.value)} className="input" style={{ minWidth: 140 }}>
-                {symbols.map(s => <option key={s} value={s}>{s === 'all' ? 'Alle Symbole' : s}</option>)}
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>SYMBOL</label>
+              <select value={filters.symbol} onChange={e => setF('symbol', e.target.value)} className="input">
+                {symbols.map(s => <option key={s} value={s}>{s === 'all' ? 'Alle' : s}</option>)}
               </select>
             </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>RICHTUNG</label>
+              <select value={filters.direction} onChange={e => setF('direction', e.target.value)} className="input">
+                <option value="all">Alle</option>
+                <option value="LONG">LONG</option>
+                <option value="SHORT">SHORT</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>QUALITÄT</label>
+              <select value={filters.quality} onChange={e => setF('quality', e.target.value)} className="input">
+                <option value="all">Alle</option>
+                <option value="STRONG">Strong</option>
+                <option value="GOOD">Good</option>
+                <option value="WEAK">Weak</option>
+                <option value="POOR">Poor</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>BIAS-MATCH</label>
+              <select value={filters.biasMatch} onChange={e => setF('biasMatch', e.target.value)} className="input">
+                <option value="all">Alle</option>
+                <option value="conform">Bias-Konform</option>
+                <option value="against">Gegen Bias</option>
+                <option value="none">Kein Bias</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>STRATEGIE</label>
+              <select value={filters.official} onChange={e => setF('official', e.target.value)} className="input">
+                <option value="all">Alle</option>
+                <option value="official">Offiziell</option>
+                <option value="unofficial">Inoffiziell</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>SCORE MIN</label>
+              <input type="number" value={filters.scoreMin} onChange={e => setF('scoreMin', e.target.value)} placeholder="0" className="input" min="0" max="100"/>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>SCORE MAX</label>
+              <input type="number" value={filters.scoreMax} onChange={e => setF('scoreMax', e.target.value)} placeholder="100" className="input" min="0" max="100"/>
+            </div>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>REGEL ENTHÄLT (matched oder failed)</label>
+            <input type="text" value={filters.ruleSearch} onChange={e => setF('ruleSearch', e.target.value)} placeholder="z.B. rsi, ema, trend…" className="input" style={{ maxWidth: 320 }}/>
           </div>
         </div>
       </div>
+
+      {/* Filtered Stats Bar */}
+      {isFiltered && (
+        <div className="card">
+          <div className="card-head"><Icon name="stats" className="ico"/><h3>Gefilterte Statistiken</h3>
+            <span className="badge badge-tag" style={{ marginLeft: 'auto' }}>{filtered.length} Signale</span>
+          </div>
+          <div className="card-body">
+            <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))' }}>
+              <div className="kpi-card"><div className="kpi-val win">{fWins}</div><div className="kpi-lbl">Wins</div></div>
+              <div className="kpi-card"><div className="kpi-val loss">{fLosses}</div><div className="kpi-lbl">Losses</div></div>
+              <div className="kpi-card"><div className="kpi-val">{fBE}</div><div className="kpi-lbl">Break Even</div></div>
+              <div className="kpi-card"><div className="kpi-val" style={{ color: 'var(--text-tertiary)' }}>{fOpen}</div><div className="kpi-lbl">Offen</div></div>
+              <div className="kpi-card"><div className="kpi-val" style={{ color: parseFloat(fWinRate) >= 50 ? 'var(--win)' : 'var(--loss)' }}>{fWinRate === '–' ? '–' : `${fWinRate}%`}</div><div className="kpi-lbl">Win-Rate</div></div>
+              <div className="kpi-card"><div className="kpi-val">{fAvgScore}</div><div className="kpi-lbl">Ø Score</div></div>
+              <div className="kpi-card"><div className="kpi-val">{fAvgRR === '–' ? '–' : `1:${fAvgRR}`}</div><div className="kpi-lbl">Ø R:R</div></div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-head"><Icon name="signal" className="ico"/><h3>Trade History</h3>
@@ -600,10 +711,11 @@ function SignalHistoryTab({ sessionId }) {
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="tbl">
-              <thead><tr><th>Datum</th><th>Symbol</th><th>Richtung</th><th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>PnL</th><th>Score</th><th>R:R</th><th>Strategie</th><th>Ergebnis</th></tr></thead>
+              <thead><tr><th>Datum</th><th>Symbol</th><th>Richtung</th><th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>PnL</th><th>Score</th><th>R:R</th><th>Qualität</th><th>Strategie</th><th>Ergebnis</th></tr></thead>
               <tbody>
                 {filtered.map((trade, i) => {
                   const pnl = calculatePnL(trade);
+                  const qualColor = trade.signal_quality === 'STRONG' ? 'var(--win)' : trade.signal_quality === 'GOOD' ? 'var(--blue-400)' : trade.signal_quality === 'WEAK' ? 'var(--wait)' : trade.signal_quality === 'POOR' ? 'var(--loss)' : 'var(--text-tertiary)';
                   return (
                     <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setSelected(trade)}>
                       <td className="mono muted" style={{ fontSize: 11 }}>{fmtDate(trade.created_at)}</td>
@@ -618,6 +730,7 @@ function SignalHistoryTab({ sessionId }) {
                       <td className="mono" style={{ fontSize: 11 }}>
                         {trade.risk_reward ? `1:${parseFloat(trade.risk_reward).toFixed(1)}` : '–'}
                       </td>
+                      <td style={{ fontSize: 11, fontWeight: 600, color: qualColor }}>{trade.signal_quality || '–'}</td>
                       <td style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{trade.strategy_name || 'Standard'} <span style={{ color: 'var(--text-quaternary)' }}>{trade.strategy_version || ''}</span></td>
                       <td onClick={e => e.stopPropagation()}>
                         <OutcomeSelector tradeId={trade.id} current={trade.outcome} onChange={updateOutcome}/>
@@ -630,6 +743,129 @@ function SignalHistoryTab({ sessionId }) {
             <div style={{ padding: '10px 20px', fontSize: 12, color: 'var(--text-tertiary)', borderTop: '1px solid var(--border)' }}>
               Klicke auf eine Zeile für Details
             </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Rule Frequency Tab ────────────────────────────────────────
+
+function RuleFrequencyTab({ sessionId }) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { load(); }, []);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/history?limit=500`, { headers: { 'X-Session-ID': sessionId } });
+      if (res.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
+      const signals = res.ok ? await res.json() : [];
+
+      const parseRules = (val) => { try { const arr = JSON.parse(val || '[]'); return arr.map(r => typeof r === 'string' ? r : (r.rule || r.name || JSON.stringify(r))); } catch { return []; } };
+
+      const matchedInWins  = {};
+      const failedInLosses = {};
+      const matchedTotal   = {};
+      const failedTotal    = {};
+
+      for (const s of signals) {
+        const matched = parseRules(s.matched_rules);
+        const failed  = parseRules(s.failed_rules);
+        matched.forEach(r => {
+          matchedTotal[r] = (matchedTotal[r] || 0) + 1;
+          if (s.outcome === 'WIN') matchedInWins[r] = (matchedInWins[r] || 0) + 1;
+        });
+        failed.forEach(r => {
+          failedTotal[r] = (failedTotal[r] || 0) + 1;
+          if (s.outcome === 'LOSS') failedInLosses[r] = (failedInLosses[r] || 0) + 1;
+        });
+      }
+
+      const wins   = signals.filter(s => s.outcome === 'WIN').length;
+      const losses = signals.filter(s => s.outcome === 'LOSS').length;
+
+      const matchedRows = Object.entries(matchedTotal).map(([rule, total]) => {
+        const inWins = matchedInWins[rule] || 0;
+        return { rule, total, inWins, winRate: total > 0 ? ((inWins / total) * 100).toFixed(1) : '0.0' };
+      }).sort((a, b) => b.inWins - a.inWins);
+
+      const failedRows = Object.entries(failedTotal).map(([rule, total]) => {
+        const inLosses = failedInLosses[rule] || 0;
+        return { rule, total, inLosses, lossRate: total > 0 ? ((inLosses / total) * 100).toFixed(1) : '0.0' };
+      }).sort((a, b) => b.inLosses - a.inLosses);
+
+      setData({ matchedRows, failedRows, wins, losses, total: signals.length });
+    } catch (e) { console.error(e); } finally { setLoading(false); }
+  };
+
+  if (loading) return <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}><div className="spinner-lg" style={{ margin: '0 auto 16px' }}/>Analysiere Regeln…</div>;
+  if (!data || data.total === 0) return (
+    <div className="card"><div className="card-body" style={{ padding: 60, textAlign: 'center' }}>
+      <p style={{ color: 'var(--text-tertiary)' }}>Noch keine Signale mit Regel-Daten vorhanden</p>
+    </div></div>
+  );
+
+  const labelMap = { rsi: 'RSI', ema: 'EMA 50/200', trend: 'Trend-Label', wave_bias: 'Wave Bias', support_resistance: 'Support/Resistance', timeframe: 'Timeframe', confidence: 'Confidence' };
+  const ruleLabel = r => labelMap[r] || r;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+        <div className="kpi-card"><div className="kpi-val">{data.total}</div><div className="kpi-lbl">Analysierte Signale</div></div>
+        <div className="kpi-card"><div className="kpi-val win">{data.wins}</div><div className="kpi-lbl">Wins</div></div>
+        <div className="kpi-card"><div className="kpi-val loss">{data.losses}</div><div className="kpi-lbl">Losses</div></div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><Icon name="chart" className="ico"/><h3>Matched Rules → Wins</h3>
+          <span style={{ fontSize: 12, color: 'var(--text-tertiary)', marginLeft: 8 }}>Welche gematchten Regeln kommen in Wins vor?</span>
+        </div>
+        {data.matchedRows.length === 0 ? (
+          <div className="card-body"><p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>Keine Daten (Signale haben noch keine matched_rules)</p></div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="tbl">
+              <thead><tr><th>Regel</th><th>In Wins</th><th>Total matched</th><th>Win-Rate wenn matched</th></tr></thead>
+              <tbody>
+                {data.matchedRows.map((row, i) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600 }}>{ruleLabel(row.rule)}</td>
+                    <td className="mono win">{row.inWins}</td>
+                    <td className="mono">{row.total}</td>
+                    <td className="mono" style={{ color: parseFloat(row.winRate) >= 50 ? 'var(--win)' : 'var(--loss)' }}>{row.winRate}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><Icon name="chart" className="ico"/><h3>Failed Rules → Losses</h3>
+          <span style={{ fontSize: 12, color: 'var(--text-tertiary)', marginLeft: 8 }}>Welche nicht-erfüllten Regeln kommen in Losses vor?</span>
+        </div>
+        {data.failedRows.length === 0 ? (
+          <div className="card-body"><p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>Keine Daten (Signale haben noch keine failed_rules)</p></div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="tbl">
+              <thead><tr><th>Regel</th><th>In Losses</th><th>Total failed</th><th>Loss-Rate wenn gefailed</th></tr></thead>
+              <tbody>
+                {data.failedRows.map((row, i) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600 }}>{ruleLabel(row.rule)}</td>
+                    <td className="mono loss">{row.inLosses}</td>
+                    <td className="mono">{row.total}</td>
+                    <td className="mono" style={{ color: parseFloat(row.lossRate) >= 50 ? 'var(--loss)' : 'var(--win)' }}>{row.lossRate}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
@@ -1292,15 +1528,16 @@ const BacktestPage = ({ user }) => {
   const isTraderOrAdmin = userRole === 'admin' || userRole === 'trader';
 
   const tabs = [
-    { id: 'practice',    label: 'Übungstrades'       },
-    { id: 'history',     label: 'Signal-Historie'     },
+    { id: 'practice',      label: 'Übungstrades'       },
+    { id: 'history',       label: 'Signal-Historie'     },
     ...(isTraderOrAdmin ? [
-      { id: 'strategy',  label: 'Strategie-Labor'     },
-      { id: 'compare',   label: 'Strategie-Vergleich' },
+      { id: 'strategy',    label: 'Strategie-Labor'     },
+      { id: 'compare',     label: 'Strategie-Vergleich' },
+      { id: 'regelanalyse',label: 'Regel-Analyse'       },
     ] : []),
-    { id: 'loss',        label: 'Loss-Analyse'        },
-    { id: 'biasstats',   label: 'Bias-Statistiken'    },
-    { id: 'suggestions', label: 'Vorschläge'          },
+    { id: 'loss',          label: 'Loss-Analyse'        },
+    { id: 'biasstats',     label: 'Bias-Statistiken'    },
+    { id: 'suggestions',   label: 'Vorschläge'          },
   ];
 
   return (
@@ -1324,13 +1561,14 @@ const BacktestPage = ({ user }) => {
         </div>
       </div>
 
-      {activeTab === 'practice'    && <PracticeTradesTab  sessionId={sessionId}/>}
-      {activeTab === 'history'     && <SignalHistoryTab   sessionId={sessionId}/>}
-      {activeTab === 'strategy'    && <StrategyLabTab     sessionId={sessionId} userRole={userRole}/>}
-      {activeTab === 'compare'     && <StrategyCompareTab sessionId={sessionId}/>}
-      {activeTab === 'loss'        && <LossAnalysisTab    sessionId={sessionId}/>}
-      {activeTab === 'biasstats'   && <BiasStatsTab       sessionId={sessionId}/>}
-      {activeTab === 'suggestions' && <SuggestionsTab     sessionId={sessionId}/>}
+      {activeTab === 'practice'      && <PracticeTradesTab  sessionId={sessionId}/>}
+      {activeTab === 'history'       && <SignalHistoryTab   sessionId={sessionId}/>}
+      {activeTab === 'strategy'      && <StrategyLabTab     sessionId={sessionId} userRole={userRole}/>}
+      {activeTab === 'compare'       && <StrategyCompareTab sessionId={sessionId}/>}
+      {activeTab === 'regelanalyse'  && <RuleFrequencyTab   sessionId={sessionId}/>}
+      {activeTab === 'loss'          && <LossAnalysisTab    sessionId={sessionId}/>}
+      {activeTab === 'biasstats'     && <BiasStatsTab       sessionId={sessionId}/>}
+      {activeTab === 'suggestions'   && <SuggestionsTab     sessionId={sessionId}/>}
     </div>
   );
 };
