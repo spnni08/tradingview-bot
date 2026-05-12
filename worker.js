@@ -82,6 +82,35 @@ async function withTimeout(promise, ms, fallbackValue = null) {
   return result;
 }
 
+// ─── Signal helper functions ─────────────────────────────────
+
+function getSignalQuality(score) {
+  if (score == null || isNaN(score)) return 'UNBEKANNT';
+  if (score >= 90) return 'PREMIUM';
+  if (score >= 75) return 'GUT';
+  if (score >= 60) return 'OKAY';
+  if (score >= 45) return 'SCHWACH';
+  return 'SKIP';
+}
+
+function safePct(target, base) {
+  if (!target || !base || base === 0) return null;
+  return parseFloat(((Math.abs(target - base) / Math.abs(base)) * 100).toFixed(2));
+}
+
+function calcRR(entry, tp, sl, isLong) {
+  const e = parseFloat(entry);
+  const t = parseFloat(tp);
+  const s = parseFloat(sl);
+  if (!isFinite(e) || !isFinite(t) || !isFinite(s)) return null;
+  const reward = isLong ? t - e : e - t;
+  const risk   = isLong ? e - s : s - e;
+  if (risk <= 0) return null;
+  return parseFloat((reward / risk).toFixed(2));
+}
+
+// ─── Telegram formatting ──────────────────────────────────────
+
 function formatSignalForTelegram(signal) {
   const emoji = signal.direction === 'LONG' ? '🟢' : '🔴';
   const sc    = signal.ai_score || 0;
