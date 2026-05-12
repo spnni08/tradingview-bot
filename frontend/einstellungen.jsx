@@ -43,7 +43,8 @@ function AdminTradeCheckPanel() {
       const res = await fetch(`${API_URL}/admin/check-trade/${id}`, {
         method: 'POST', headers: { 'X-Session-ID': sid() }
       });
-      setRowResults(p => ({ ...p, [id]: await res.json() }));
+      const data = await res.json();
+      setRowResults(p => ({ ...p, [id]: data }));
     } catch (e) { setRowResults(p => ({ ...p, [id]: { success: false, error: e.message } })); }
     setRowLoading(p => ({ ...p, [id]: false }));
   };
