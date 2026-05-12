@@ -2,20 +2,20 @@
 // WAVESCOUT v3.5 - BACKTESTING & STRATEGIE-LABOR
 // ═══════════════════════════════════════════════════════════════
 
-const { useState, useEffect, useRef } = React;
+const { useState, useEffect, useRef, useCallback } = React;
 
 const API_URL = 'https://tradingview-bot.spnn08.workers.dev';
 
 // ─── Strategy config metadata (mirrors worker.js) ─────────────
 
 const RULE_META = {
-  rsi:                { label: 'RSI',                desc: 'Relative Strength Index',        maxW: 30 },
-  ema:                { label: 'EMA 50/200',          desc: 'EMA-Kreuzung als Trendfilter',   maxW: 30 },
-  trend:              { label: 'Trend-Label',         desc: 'BULLISH/BEARISH Bestätigung',    maxW: 30 },
-  wave_bias:          { label: 'Wave Bias',           desc: 'LONG/SHORT Wellenrichtung',      maxW: 20 },
-  support_resistance: { label: 'Support/Resistance',  desc: 'Nähe zu S/R-Niveaus',            maxW: 30 },
-  timeframe:          { label: 'Timeframe',           desc: 'Höhere TFs werden bevorzugt',    maxW: 20 },
-  confidence:         { label: 'Confidence',          desc: 'Signal-Konfidenz vom Sender',    maxW: 20 },
+  rsi:                { label: 'RSI',                desc: 'Prüft, ob Momentum zur Richtung passt und ob der Markt überkauft/überverkauft ist. Bei LONG: RSI > 40 bevorzugt. Bei SHORT: RSI < 60 bevorzugt.',                maxW: 30 },
+  ema:                { label: 'EMA 50/200',          desc: 'Bewertet, ob Preis und Trend über/unter den wichtigen EMAs liegen. EMA-Kreuzungen werden als Trendsignal gewertet.',                                           maxW: 30 },
+  trend:              { label: 'Trend-Label',         desc: 'Prüft, ob das BULLISH/BEARISH-Label mit der Trade-Richtung übereinstimmt. Gegenläufige Trades erhalten Abzüge.',                                               maxW: 30 },
+  wave_bias:          { label: 'Wave Bias',           desc: 'Bewertet, ob der Tagesbias aus der Morgenroutine mit der Signal-Richtung übereinstimmt (LONG/SHORT).',                                                         maxW: 20 },
+  support_resistance: { label: 'Support/Resistance',  desc: 'Prüft Nähe zu wichtigen S/R-Zonen. Entries in der Nähe von Zonen erhalten Bonus-Punkte.',                                                                      maxW: 30 },
+  timeframe:          { label: 'Timeframe',           desc: 'Bewertet den Zeitrahmen des Signals. Höhere Zeitrahmen (4H, 1D) erhalten mehr Gewichtung als niedrige (1M, 5M).',                                             maxW: 20 },
+  confidence:         { label: 'Confidence',          desc: 'Wertet die vom Sender gelieferte Signal-Konfidenz aus. Höhere Konfidenz erhöht den Score, niedrige reduziert ihn.',                                            maxW: 20 },
 };
 
 const LOSS_REASONS = [
@@ -189,29 +189,168 @@ function SignalDetailModal({ signal, onClose, onMarkLoss }) {
   ];
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-box" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
-        <div className="modal-head">
+      <div className="modal-box" style={{ maxWidth: 640, maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="modal-head" style={{ position: 'sticky', top: 0, background: 'var(--bg-1)', zIndex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className={`badge ${signal.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{signal.direction}</span>
             <h3 style={{ margin: 0 }}>{signal.symbol}</h3>
+            <span className="badge badge-tag" style={{ fontSize: 11 }}>{signal.timeframe ? signal.timeframe + 'm' : '–'}</span>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
-        <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 24px', fontSize: 13 }}>
-          {fields.map(([l, v]) => (
-            <div key={l}>
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 2 }}>{l}</div>
-              <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{v}</div>
+
+        <div style={{ padding: '0 20px 20px' }}>
+
+          {/* Score + Quality */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '16px 0 12px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ textAlign: 'center', flexShrink: 0 }}>
+              <div style={{ fontSize: 32, fontWeight: 800, fontFamily: 'var(--font-mono)', color: scoreColor, lineHeight: 1 }}>{sc}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.08em', marginTop: 2 }}>Score</div>
             </div>
-          ))}
-        </div>
-        {signal.ai_reason && (
-          <div style={{ padding: '0 20px 14px' }}>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 4 }}>Analyse-Begründung</div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', background: 'var(--bg-3)', borderRadius: 8, padding: '8px 12px', lineHeight: 1.5 }}>{signal.ai_reason}</div>
+            <div style={{ width: 1, height: 40, background: 'var(--border)', flexShrink: 0 }}/>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: scoreColor }}>{scoreLabel}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>{signal.signal_quality || '–'}</div>
+            </div>
+            <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Ergebnis</div>
+              <span className={`badge ${signal.outcome === 'WIN' ? 'badge-win' : signal.outcome === 'LOSS' ? 'badge-loss' : signal.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`} style={{ marginTop: 4 }}>
+                {signal.outcome || 'OPEN'}
+              </span>
+            </div>
           </div>
-        )}
-        <div className="modal-foot">
+
+          {/* Prices grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, padding: '14px 0', borderBottom: '1px solid var(--border)' }}>
+            {[
+              ['Entry',      fmt(signal.ai_entry ?? signal.price), 'var(--text-primary)'],
+              ['Take Profit', fmt(signal.ai_tp),                    'var(--win)'],
+              ['Stop Loss',   fmt(signal.ai_sl),                    'var(--loss)'],
+              ['Exit',        fmt(signal.exit_price),               pnl > 0 ? 'var(--win)' : pnl < 0 ? 'var(--loss)' : 'var(--text-primary)'],
+              ['R:R',         rrStr,                                rr && rr >= 1.5 ? 'var(--win)' : rr ? 'var(--wait)' : 'var(--text-tertiary)'],
+              ['PnL',         pnl !== 0 ? fmtPct(pnl) : '–',      pnl > 0 ? 'var(--win)' : pnl < 0 ? 'var(--loss)' : 'var(--text-tertiary)'],
+            ].map(([l, v, c]) => (
+              <div key={l} style={{ background: 'var(--bg-0)', borderRadius: 8, padding: '8px 12px' }}>
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 3 }}>{l}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 13, color: c }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Planned profit/risk */}
+          {(signal.planned_profit_pct != null || signal.planned_risk_pct != null) && (
+            <div style={{ display: 'flex', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
+              {signal.planned_profit_pct != null && (
+                <span style={{ color: 'var(--win)' }}>Geplanter Gewinn: +{parseFloat(signal.planned_profit_pct).toFixed(2)}%</span>
+              )}
+              {signal.planned_risk_pct != null && (
+                <span style={{ color: 'var(--loss)' }}>Geplantes Risiko: -{parseFloat(signal.planned_risk_pct).toFixed(2)}%</span>
+              )}
+            </div>
+          )}
+
+          {/* Strategy status */}
+          <div style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 8 }}>STRATEGIE-STATUS</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, fontSize: 12 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: signal.counts_for_strategy !== 0 ? 'var(--win)' : 'var(--loss)', display: 'inline-block' }}/>
+                {signal.counts_for_strategy !== 0 ? 'Zählt zur Strategie' : 'Zählt nicht zur Strategie'}
+              </span>
+              <span style={{ color: biasStatus.color }}>{biasStatus.icon} {biasStatus.label}</span>
+              {signal.strategy_name && (
+                <span style={{ color: 'var(--text-tertiary)' }}>
+                  {signal.strategy_name} {signal.strategy_version || ''}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Score breakdown */}
+          {breakdownEntries.length > 0 && (
+            <div style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 8 }}>SCORE-AUFSCHLÜSSELUNG</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-quaternary)', marginBottom: 2 }}>
+                  <span>Basis</span><span style={{ fontFamily: 'var(--font-mono)' }}>+50</span>
+                </div>
+                {breakdownEntries.map(([key, val]) => (
+                  <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>{RULE_LABELS[key] || key}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: val > 0 ? 'var(--win)' : 'var(--loss)' }}>
+                      {val > 0 ? '+' : ''}{val}
+                    </span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 700, borderTop: '1px solid var(--border)', paddingTop: 6, marginTop: 2 }}>
+                  <span>Gesamt</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: scoreColor }}>{sc}/100</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Matched / Failed / Unknown rules */}
+          {(matchedRules.length > 0 || failedRules.length > 0 || unknownRules.length > 0) && (
+            <div style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 8 }}>STRATEGIE-CHECK</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {matchedRules.map((r, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12 }}>
+                    <span style={{ color: 'var(--win)', flexShrink: 0, marginTop: 1 }}>✓</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{r}</span>
+                  </div>
+                ))}
+                {failedRules.map((r, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12 }}>
+                    <span style={{ color: 'var(--loss)', flexShrink: 0, marginTop: 1 }}>✗</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{r}</span>
+                  </div>
+                ))}
+                {unknownRules.map((r, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12 }}>
+                    <span style={{ color: 'var(--text-tertiary)', flexShrink: 0, marginTop: 1 }}>?</span>
+                    <span style={{ color: 'var(--text-tertiary)' }}>{r}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* AI Reason */}
+          {signal.ai_reason && (
+            <div style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 6 }}>ANALYSE-BEGRÜNDUNG</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', background: 'var(--bg-0)', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6 }}>{signal.ai_reason}</div>
+            </div>
+          )}
+
+          {/* Meta info */}
+          <div style={{ paddingTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 20px', fontSize: 12 }}>
+            {[
+              ['Datum',          fmtDate(signal.created_at)],
+              ['RSI',            signal.rsi ?? '–'],
+              ['EMA 50',         signal.ema50  ? signal.ema50.toFixed(0)  : '–'],
+              ['EMA 200',        signal.ema200 ? signal.ema200.toFixed(0) : '–'],
+              ['Trend',          signal.trend     || '–'],
+              ['Wave Bias',      signal.wave_bias || '–'],
+              ['Risiko-Level',   signal.ai_risk   || '–'],
+              ['Empfehlung',     signal.ai_recommendation || '–'],
+              ['Telegram',       signal.telegram_sent ? `✓ Gesendet (${signal.telegram_reason || ''})` : `– ${signal.telegram_reason || 'nicht gesendet'}`],
+              ['Quelle',         signal.source || 'WEBHOOK'],
+            ].map(([l, v]) => (
+              <div key={l}>
+                <span style={{ color: 'var(--text-quaternary)' }}>{l}: </span>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="modal-foot" style={{ position: 'sticky', bottom: 0, background: 'var(--bg-1)' }}>
           {signal.outcome === 'LOSS' && (
             <button className="btn btn-ghost" style={{ color: 'var(--loss)', marginRight: 'auto' }} onClick={() => { onMarkLoss?.(); onClose(); }}>
               Loss-Grund markieren
@@ -346,12 +485,17 @@ function PracticeTradesTab({ sessionId }) {
 
 // ─── Signal History Tab ────────────────────────────────────────
 
+const EMPTY_HIST_FILTERS = {
+  outcome: 'all', symbol: 'all', direction: 'all',
+  quality: 'all', official: 'all', biasMatch: 'all',
+  scoreMin: '', scoreMax: '', ruleSearch: '',
+};
+
 function SignalHistoryTab({ sessionId }) {
   const [history,   setHistory]   = useState([]);
   const [stats,     setStats]     = useState(null);
   const [loading,   setLoading]   = useState(true);
-  const [fOutcome,  setFOutcome]  = useState('all');
-  const [fSymbol,   setFSymbol]   = useState('all');
+  const [filters,   setFilters]   = useState({ ...EMPTY_HIST_FILTERS });
   const [selected,  setSelected]  = useState(null);
   const [lossModal, setLossModal] = useState(null);
 
@@ -360,7 +504,7 @@ function SignalHistoryTab({ sessionId }) {
     setLoading(true);
     try {
       const [hRes, sRes] = await Promise.all([
-        fetch(`${API_URL}/history?limit=200`, { headers: { 'X-Session-ID': sessionId } }),
+        fetch(`${API_URL}/history?limit=500`, { headers: { 'X-Session-ID': sessionId } }),
         fetch(`${API_URL}/stats`,             { headers: { 'X-Session-ID': sessionId } }),
       ]);
       if (hRes.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
@@ -370,8 +514,47 @@ function SignalHistoryTab({ sessionId }) {
   };
 
   const updateOutcome = async (tradeId, outcome) => {
+  const setF = (key, val) => setFilters(f => ({ ...f, [key]: val }));
+  const resetFilters = () => setFilters({ ...EMPTY_HIST_FILTERS });
+  const isFiltered = Object.entries(filters).some(([k, v]) => v !== EMPTY_HIST_FILTERS[k]);
+
+  const updateOutcome = (tradeId, outcome) => {
     setHistory(prev => prev.map(t => t.id === tradeId ? { ...t, outcome } : t));
   };
+
+  const parseRules = (val) => { try { return JSON.parse(val || '[]'); } catch { return []; } };
+
+  const filtered = history.filter(h => {
+    if (filters.outcome   !== 'all' && h.outcome !== filters.outcome) return false;
+    if (filters.symbol    !== 'all' && h.symbol  !== filters.symbol)  return false;
+    if (filters.direction !== 'all' && h.direction !== filters.direction) return false;
+    if (filters.quality   !== 'all' && h.signal_quality !== filters.quality) return false;
+    if (filters.official  !== 'all') {
+      if (filters.official === 'official'   && !(h.counts_for_strategy === 1)) return false;
+      if (filters.official === 'unofficial' &&   h.counts_for_strategy === 1)  return false;
+    }
+    if (filters.biasMatch !== 'all' && h.bias_match !== filters.biasMatch) return false;
+    if (filters.scoreMin !== '' && (h.ai_score || 0) < Number(filters.scoreMin)) return false;
+    if (filters.scoreMax !== '' && (h.ai_score || 0) > Number(filters.scoreMax)) return false;
+    if (filters.ruleSearch !== '') {
+      const q = filters.ruleSearch.toLowerCase();
+      const matched = parseRules(h.matched_rules).map(r => (r.rule || r).toLowerCase()).join(' ');
+      const failed  = parseRules(h.failed_rules).map(r => (r.rule || r).toLowerCase()).join(' ');
+      if (!matched.includes(q) && !failed.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const fWins   = filtered.filter(t => t.outcome === 'WIN').length;
+  const fLosses = filtered.filter(t => t.outcome === 'LOSS').length;
+  const fBE     = filtered.filter(t => t.outcome === 'BE').length;
+  const fOpen   = filtered.filter(t => t.outcome === 'OPEN' || !t.outcome).length;
+  const fClosed = fWins + fLosses;
+  const fWinRate = fClosed > 0 ? ((fWins / fClosed) * 100).toFixed(1) : '–';
+  const fScores = filtered.map(t => t.ai_score).filter(s => s != null);
+  const fAvgScore = fScores.length ? (fScores.reduce((a, b) => a + b, 0) / fScores.length).toFixed(1) : '–';
+  const fRRs = filtered.map(t => parseFloat(t.risk_reward)).filter(r => r > 0);
+  const fAvgRR = fRRs.length ? (fRRs.reduce((a, b) => a + b, 0) / fRRs.length).toFixed(2) : '–';
 
   const totalClosed = (stats?.wins || 0) + (stats?.losses || 0);
   const winRate     = totalClosed > 0 ? (stats.wins / totalClosed) * 100 : 0;
@@ -379,11 +562,6 @@ function SignalHistoryTab({ sessionId }) {
   const closedTrades = history.filter(t => t.outcome === 'WIN' || t.outcome === 'LOSS').slice().reverse();
   let cumulative = 0;
   const pnlPoints = closedTrades.map(t => { cumulative += calculatePnL(t); return cumulative; });
-  const filtered  = history.filter(h => {
-    if (fOutcome !== 'all' && h.outcome !== fOutcome) return false;
-    if (fSymbol  !== 'all' && h.symbol  !== fSymbol)  return false;
-    return true;
-  });
 
   if (loading) return <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}><div className="spinner-lg" style={{ margin: '0 auto 16px' }}/>Lade Signal-History…</div>;
 
@@ -395,7 +573,7 @@ function SignalHistoryTab({ sessionId }) {
       <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <div className="kpi-card"><div className="kpi-val">{history.length}</div><div className="kpi-lbl">Total Signale</div></div>
         <div className="kpi-card"><div className="kpi-val">{totalClosed}</div><div className="kpi-lbl">Abgeschlossen</div></div>
-        <div className="kpi-card"><div className="kpi-val" style={{ color: winRate >= 50 ? 'var(--win)' : 'var(--loss)' }}>{winRate.toFixed(1)}%</div><div className="kpi-lbl">Win-Rate</div></div>
+        <div className="kpi-card"><div className="kpi-val" style={{ color: winRate >= 50 ? 'var(--win)' : 'var(--loss)' }}>{winRate.toFixed(1)}%</div><div className="kpi-lbl">Win-Rate (gesamt)</div></div>
         <div className="kpi-card"><div className="kpi-val" style={{ color: 'var(--text-tertiary)' }}>{stats?.open || 0}</div><div className="kpi-lbl">Offen</div></div>
       </div>
 
@@ -408,28 +586,101 @@ function SignalHistoryTab({ sessionId }) {
         </div>
       )}
 
+      {/* Extended Filters */}
       <div className="card">
         <div className="card-head">
           <Icon name="filter" className="ico"/><h3>Filter</h3>
-          {(fOutcome !== 'all' || fSymbol !== 'all') && <div className="actions"><button className="btn btn-ghost btn-sm" onClick={() => { setFOutcome('all'); setFSymbol('all'); }}>Zurücksetzen</button></div>}
+          {isFiltered && <div className="actions"><button className="btn btn-ghost btn-sm" onClick={resetFilters}>Zurücksetzen</button></div>}
         </div>
         <div className="card-body">
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
             <div>
-              <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500 }}>Ergebnis</label>
-              <select value={fOutcome} onChange={e => setFOutcome(e.target.value)} className="input" style={{ minWidth: 140 }}>
-                <option value="all">Alle</option><option value="WIN">Wins</option><option value="LOSS">Losses</option><option value="OPEN">Offen</option><option value="IGNORED">Ignoriert</option>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>ERGEBNIS</label>
+              <select value={filters.outcome} onChange={e => setF('outcome', e.target.value)} className="input">
+                <option value="all">Alle</option>
+                <option value="WIN">Win</option>
+                <option value="LOSS">Loss</option>
+                <option value="BE">Break Even</option>
+                <option value="OPEN">Offen</option>
+                <option value="IGNORED">Ignoriert</option>
               </select>
             </div>
             <div>
-              <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500 }}>Symbol</label>
-              <select value={fSymbol} onChange={e => setFSymbol(e.target.value)} className="input" style={{ minWidth: 140 }}>
-                {symbols.map(s => <option key={s} value={s}>{s === 'all' ? 'Alle Symbole' : s}</option>)}
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>SYMBOL</label>
+              <select value={filters.symbol} onChange={e => setF('symbol', e.target.value)} className="input">
+                {symbols.map(s => <option key={s} value={s}>{s === 'all' ? 'Alle' : s}</option>)}
               </select>
             </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>RICHTUNG</label>
+              <select value={filters.direction} onChange={e => setF('direction', e.target.value)} className="input">
+                <option value="all">Alle</option>
+                <option value="LONG">LONG</option>
+                <option value="SHORT">SHORT</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>QUALITÄT</label>
+              <select value={filters.quality} onChange={e => setF('quality', e.target.value)} className="input">
+                <option value="all">Alle</option>
+                <option value="STRONG">Strong</option>
+                <option value="GOOD">Good</option>
+                <option value="WEAK">Weak</option>
+                <option value="POOR">Poor</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>BIAS-MATCH</label>
+              <select value={filters.biasMatch} onChange={e => setF('biasMatch', e.target.value)} className="input">
+                <option value="all">Alle</option>
+                <option value="conform">Bias-Konform</option>
+                <option value="against">Gegen Bias</option>
+                <option value="none">Kein Bias</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>STRATEGIE</label>
+              <select value={filters.official} onChange={e => setF('official', e.target.value)} className="input">
+                <option value="all">Alle</option>
+                <option value="official">Offiziell</option>
+                <option value="unofficial">Inoffiziell</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>SCORE MIN</label>
+              <input type="number" value={filters.scoreMin} onChange={e => setF('scoreMin', e.target.value)} placeholder="0" className="input" min="0" max="100"/>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>SCORE MAX</label>
+              <input type="number" value={filters.scoreMax} onChange={e => setF('scoreMax', e.target.value)} placeholder="100" className="input" min="0" max="100"/>
+            </div>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>REGEL ENTHÄLT (matched oder failed)</label>
+            <input type="text" value={filters.ruleSearch} onChange={e => setF('ruleSearch', e.target.value)} placeholder="z.B. rsi, ema, trend…" className="input" style={{ maxWidth: 320 }}/>
           </div>
         </div>
       </div>
+
+      {/* Filtered Stats Bar */}
+      {isFiltered && (
+        <div className="card">
+          <div className="card-head"><Icon name="stats" className="ico"/><h3>Gefilterte Statistiken</h3>
+            <span className="badge badge-tag" style={{ marginLeft: 'auto' }}>{filtered.length} Signale</span>
+          </div>
+          <div className="card-body">
+            <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))' }}>
+              <div className="kpi-card"><div className="kpi-val win">{fWins}</div><div className="kpi-lbl">Wins</div></div>
+              <div className="kpi-card"><div className="kpi-val loss">{fLosses}</div><div className="kpi-lbl">Losses</div></div>
+              <div className="kpi-card"><div className="kpi-val">{fBE}</div><div className="kpi-lbl">Break Even</div></div>
+              <div className="kpi-card"><div className="kpi-val" style={{ color: 'var(--text-tertiary)' }}>{fOpen}</div><div className="kpi-lbl">Offen</div></div>
+              <div className="kpi-card"><div className="kpi-val" style={{ color: parseFloat(fWinRate) >= 50 ? 'var(--win)' : 'var(--loss)' }}>{fWinRate === '–' ? '–' : `${fWinRate}%`}</div><div className="kpi-lbl">Win-Rate</div></div>
+              <div className="kpi-card"><div className="kpi-val">{fAvgScore}</div><div className="kpi-lbl">Ø Score</div></div>
+              <div className="kpi-card"><div className="kpi-val">{fAvgRR === '–' ? '–' : `1:${fAvgRR}`}</div><div className="kpi-lbl">Ø R:R</div></div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-head"><Icon name="signal" className="ico"/><h3>Trade History</h3>
@@ -442,10 +693,11 @@ function SignalHistoryTab({ sessionId }) {
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="tbl">
-              <thead><tr><th>Datum</th><th>Symbol</th><th>Richtung</th><th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>PnL</th><th>Score</th><th>Strategie</th><th>Ergebnis</th></tr></thead>
+              <thead><tr><th>Datum</th><th>Symbol</th><th>Richtung</th><th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>PnL</th><th>Score</th><th>R:R</th><th>Qualität</th><th>Strategie</th><th>Ergebnis</th></tr></thead>
               <tbody>
                 {filtered.map((trade, i) => {
                   const pnl = calculatePnL(trade);
+                  const qualColor = trade.signal_quality === 'STRONG' ? 'var(--win)' : trade.signal_quality === 'GOOD' ? 'var(--blue-400)' : trade.signal_quality === 'WEAK' ? 'var(--wait)' : trade.signal_quality === 'POOR' ? 'var(--loss)' : 'var(--text-tertiary)';
                   return (
                     <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setSelected(trade)}>
                       <td className="mono muted" style={{ fontSize: 11 }}>{fmtDate(trade.created_at)}</td>
@@ -457,6 +709,10 @@ function SignalHistoryTab({ sessionId }) {
                       <td className="mono">{trade.exit_price ? `$${fmtPrice(trade.exit_price, trade.symbol)}` : '—'}</td>
                       <td className={`mono ${pnl > 0 ? 'win' : pnl < 0 ? 'loss' : ''}`}>{pnl !== 0 ? fmtPct(pnl) : '—'}</td>
                       <td className="mono">{trade.ai_score || 0}</td>
+                      <td className="mono" style={{ fontSize: 11 }}>
+                        {trade.risk_reward ? `1:${parseFloat(trade.risk_reward).toFixed(1)}` : '–'}
+                      </td>
+                      <td style={{ fontSize: 11, fontWeight: 600, color: qualColor }}>{trade.signal_quality || '–'}</td>
                       <td style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{trade.strategy_name || 'Standard'} <span style={{ color: 'var(--text-quaternary)' }}>{trade.strategy_version || ''}</span></td>
                       <td onClick={e => e.stopPropagation()}>
                         <OutcomeSelector tradeId={trade.id} current={trade.outcome} onChange={updateOutcome}/>
@@ -469,6 +725,129 @@ function SignalHistoryTab({ sessionId }) {
             <div style={{ padding: '10px 20px', fontSize: 12, color: 'var(--text-tertiary)', borderTop: '1px solid var(--border)' }}>
               Klicke auf eine Zeile für Details
             </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Rule Frequency Tab ────────────────────────────────────────
+
+function RuleFrequencyTab({ sessionId }) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { load(); }, []);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/history?limit=500`, { headers: { 'X-Session-ID': sessionId } });
+      if (res.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
+      const signals = res.ok ? await res.json() : [];
+
+      const parseRules = (val) => { try { const arr = JSON.parse(val || '[]'); return arr.map(r => typeof r === 'string' ? r : (r.rule || r.name || JSON.stringify(r))); } catch { return []; } };
+
+      const matchedInWins  = {};
+      const failedInLosses = {};
+      const matchedTotal   = {};
+      const failedTotal    = {};
+
+      for (const s of signals) {
+        const matched = parseRules(s.matched_rules);
+        const failed  = parseRules(s.failed_rules);
+        matched.forEach(r => {
+          matchedTotal[r] = (matchedTotal[r] || 0) + 1;
+          if (s.outcome === 'WIN') matchedInWins[r] = (matchedInWins[r] || 0) + 1;
+        });
+        failed.forEach(r => {
+          failedTotal[r] = (failedTotal[r] || 0) + 1;
+          if (s.outcome === 'LOSS') failedInLosses[r] = (failedInLosses[r] || 0) + 1;
+        });
+      }
+
+      const wins   = signals.filter(s => s.outcome === 'WIN').length;
+      const losses = signals.filter(s => s.outcome === 'LOSS').length;
+
+      const matchedRows = Object.entries(matchedTotal).map(([rule, total]) => {
+        const inWins = matchedInWins[rule] || 0;
+        return { rule, total, inWins, winRate: total > 0 ? ((inWins / total) * 100).toFixed(1) : '0.0' };
+      }).sort((a, b) => b.inWins - a.inWins);
+
+      const failedRows = Object.entries(failedTotal).map(([rule, total]) => {
+        const inLosses = failedInLosses[rule] || 0;
+        return { rule, total, inLosses, lossRate: total > 0 ? ((inLosses / total) * 100).toFixed(1) : '0.0' };
+      }).sort((a, b) => b.inLosses - a.inLosses);
+
+      setData({ matchedRows, failedRows, wins, losses, total: signals.length });
+    } catch (e) { console.error(e); } finally { setLoading(false); }
+  };
+
+  if (loading) return <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}><div className="spinner-lg" style={{ margin: '0 auto 16px' }}/>Analysiere Regeln…</div>;
+  if (!data || data.total === 0) return (
+    <div className="card"><div className="card-body" style={{ padding: 60, textAlign: 'center' }}>
+      <p style={{ color: 'var(--text-tertiary)' }}>Noch keine Signale mit Regel-Daten vorhanden</p>
+    </div></div>
+  );
+
+  const labelMap = { rsi: 'RSI', ema: 'EMA 50/200', trend: 'Trend-Label', wave_bias: 'Wave Bias', support_resistance: 'Support/Resistance', timeframe: 'Timeframe', confidence: 'Confidence' };
+  const ruleLabel = r => labelMap[r] || r;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+        <div className="kpi-card"><div className="kpi-val">{data.total}</div><div className="kpi-lbl">Analysierte Signale</div></div>
+        <div className="kpi-card"><div className="kpi-val win">{data.wins}</div><div className="kpi-lbl">Wins</div></div>
+        <div className="kpi-card"><div className="kpi-val loss">{data.losses}</div><div className="kpi-lbl">Losses</div></div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><Icon name="chart" className="ico"/><h3>Matched Rules → Wins</h3>
+          <span style={{ fontSize: 12, color: 'var(--text-tertiary)', marginLeft: 8 }}>Welche gematchten Regeln kommen in Wins vor?</span>
+        </div>
+        {data.matchedRows.length === 0 ? (
+          <div className="card-body"><p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>Keine Daten (Signale haben noch keine matched_rules)</p></div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="tbl">
+              <thead><tr><th>Regel</th><th>In Wins</th><th>Total matched</th><th>Win-Rate wenn matched</th></tr></thead>
+              <tbody>
+                {data.matchedRows.map((row, i) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600 }}>{ruleLabel(row.rule)}</td>
+                    <td className="mono win">{row.inWins}</td>
+                    <td className="mono">{row.total}</td>
+                    <td className="mono" style={{ color: parseFloat(row.winRate) >= 50 ? 'var(--win)' : 'var(--loss)' }}>{row.winRate}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><Icon name="chart" className="ico"/><h3>Failed Rules → Losses</h3>
+          <span style={{ fontSize: 12, color: 'var(--text-tertiary)', marginLeft: 8 }}>Welche nicht-erfüllten Regeln kommen in Losses vor?</span>
+        </div>
+        {data.failedRows.length === 0 ? (
+          <div className="card-body"><p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>Keine Daten (Signale haben noch keine failed_rules)</p></div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="tbl">
+              <thead><tr><th>Regel</th><th>In Losses</th><th>Total failed</th><th>Loss-Rate wenn gefailed</th></tr></thead>
+              <tbody>
+                {data.failedRows.map((row, i) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600 }}>{ruleLabel(row.rule)}</td>
+                    <td className="mono loss">{row.inLosses}</td>
+                    <td className="mono">{row.total}</td>
+                    <td className="mono" style={{ color: parseFloat(row.lossRate) >= 50 ? 'var(--loss)' : 'var(--win)' }}>{row.lossRate}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
@@ -643,21 +1022,29 @@ function StrategyLabTab({ sessionId, userRole }) {
                   const rule     = editCfg.rules?.[key] || { enabled: true, weight: 10 };
                   const disabled = !!selected.protected;
                   return (
-                    <div key={key} className="settings-row">
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: rule.enabled ? 'var(--text-primary)' : 'var(--text-quaternary)' }}>{meta.label}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-quaternary)' }}>{meta.desc}</div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-                        {rule.enabled && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <input type="range" min={0} max={meta.maxW} step={1} value={rule.weight} disabled={disabled}
-                              onChange={e => updateRule(key, 'weight', parseInt(e.target.value))}
-                              style={{ width: 80, accentColor: 'var(--blue-500)', cursor: disabled ? 'not-allowed' : 'pointer' }}/>
-                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--blue-400)', minWidth: 22, textAlign: 'right' }}>{rule.weight}</span>
-                          </div>
-                        )}
-                        <Toggle on={!!rule.enabled} onChange={v => updateRule(key, 'enabled', v)} disabled={disabled}/>
+                    <div key={key} style={{ padding: '14px 0', borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1, minWidth: 200 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: rule.enabled ? 'var(--text-primary)' : 'var(--text-quaternary)', marginBottom: 4 }}>{meta.label}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{meta.desc}</div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, paddingTop: 2 }}>
+                          {rule.enabled && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <input type="range" min={0} max={meta.maxW} step={1} value={rule.weight} disabled={disabled}
+                                onChange={e => updateRule(key, 'weight', parseInt(e.target.value))}
+                                style={{ width: 180, accentColor: 'var(--blue-500)', cursor: disabled ? 'not-allowed' : 'pointer' }}/>
+                              <input type="number" min={0} max={meta.maxW} value={rule.weight} disabled={disabled}
+                                onChange={e => {
+                                  const v = Math.max(0, Math.min(meta.maxW, parseInt(e.target.value) || 0));
+                                  updateRule(key, 'weight', v);
+                                }}
+                                className="input"
+                                style={{ width: 56, textAlign: 'center', padding: '4px 6px', fontSize: 13, fontWeight: 700, color: 'var(--blue-400)' }}/>
+                            </div>
+                          )}
+                          <Toggle on={!!rule.enabled} onChange={v => updateRule(key, 'enabled', v)} disabled={disabled}/>
+                        </div>
                       </div>
                     </div>
                   );
@@ -669,21 +1056,30 @@ function StrategyLabTab({ sessionId, userRole }) {
               <div className="card-head"><Icon name="settings" className="ico"/><h3>Score-Schwellen</h3></div>
               <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
                 {[
-                  { key: 'min_trade_score',    label: 'Min. Trade Score',    desc: 'Ab diesem Score wird ein Trade empfohlen',                  min: 50, max: 90, def: 70 },
-                  { key: 'min_telegram_score', label: 'Min. Telegram Score', desc: 'Ab diesem Score wird eine Telegram-Meldung gesendet',        min: 30, max: 80, def: 55 },
+                  { key: 'min_trade_score',    label: 'Min. Trade Score',    desc: 'Ab diesem Score gilt ein Signal als handelsbar und wird empfohlen. Signale darunter werden als WAIT markiert.',   min: 50, max: 90, def: 70 },
+                  { key: 'min_telegram_score', label: 'Min. Telegram Score', desc: 'Ab diesem Score wird eine Telegram-Benachrichtigung gesendet. Kann niedriger als Trade Score gesetzt werden.',     min: 30, max: 80, def: 55 },
                 ].map(({ key, label, desc, min, max, def }) => {
                   const val = editCfg.thresholds?.[key] ?? def;
+                  const disabled = !!selected.protected;
                   return (
-                    <div key={key} className="settings-row">
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 500 }}>{label}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-quaternary)' }}>{desc}</div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <input type="range" min={min} max={max} step={1} value={val} disabled={!!selected.protected}
-                          onChange={e => updateThreshold(key, parseInt(e.target.value))}
-                          style={{ width: 100, accentColor: 'var(--blue-500)' }}/>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--blue-400)', minWidth: 22 }}>{val}</span>
+                    <div key={key} style={{ padding: '14px 0', borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1, minWidth: 200 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{desc}</div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, paddingTop: 2 }}>
+                          <input type="range" min={min} max={max} step={1} value={val} disabled={disabled}
+                            onChange={e => updateThreshold(key, parseInt(e.target.value))}
+                            style={{ width: 180, accentColor: 'var(--blue-500)', cursor: disabled ? 'not-allowed' : 'pointer' }}/>
+                          <input type="number" min={min} max={max} value={val} disabled={disabled}
+                            onChange={e => {
+                              const v = Math.max(min, Math.min(max, parseInt(e.target.value) || min));
+                              updateThreshold(key, v);
+                            }}
+                            className="input"
+                            style={{ width: 56, textAlign: 'center', padding: '4px 6px', fontSize: 13, fontWeight: 700, color: 'var(--blue-400)' }}/>
+                        </div>
                       </div>
                     </div>
                   );
@@ -997,6 +1393,130 @@ function SuggestionsTab({ sessionId }) {
   );
 }
 
+// ─── Bias Stats Tab ────────────────────────────────────────────
+
+function BiasStatsTab({ sessionId }) {
+  const [stats,   setStats]   = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [filter,  setFilter]  = useState({ strategy: '', direction: '' });
+
+  useEffect(() => { load(); }, []);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (filter.strategy)  params.set('strategy', filter.strategy);
+      if (filter.direction) params.set('direction', filter.direction);
+      const res = await fetch(`${API_URL}/bias-stats?${params}`, { headers: { 'X-Session-ID': sessionId } });
+      if (res.ok) setStats(await res.json());
+    } catch (e) { console.error(e); } finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, [filter.strategy, filter.direction]);
+
+  if (loading) return <div style={{ textAlign: 'center', padding: 60 }}><div className="spinner-lg" style={{ margin: '0 auto 16px' }}/>Lade Bias-Statistiken…</div>;
+
+  if (!stats) return <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}>Keine Daten verfügbar</div>;
+
+  const pct = (a, b) => b > 0 ? ((a / b) * 100).toFixed(1) : '0.0';
+
+  const StatBox = ({ label, value, sub, color }) => (
+    <div style={{ background: 'var(--bg-1)', borderRadius: 10, padding: '14px 18px', border: '1px solid var(--border)' }}>
+      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 5 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'var(--font-mono)', color: color || 'var(--text-primary)' }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
+
+  const BiasBlock = ({ title, data, accentColor }) => {
+    if (!data) return null;
+    const wr = pct(data.wins, data.total);
+    return (
+      <div className="card">
+        <div className="card-head">
+          <span style={{ width: 10, height: 10, borderRadius: '50%', background: accentColor, display: 'inline-block', flexShrink: 0 }}/>
+          <h3 style={{ color: accentColor }}>{title}</h3>
+          <span className="badge badge-tag" style={{ marginLeft: 'auto' }}>{data.total} Trades</span>
+        </div>
+        <div className="card-body">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 12 }}>
+            <StatBox label="Win-Rate" value={`${wr}%`} color={parseFloat(wr) >= 50 ? 'var(--win)' : 'var(--loss)'}/>
+            <StatBox label="Wins" value={data.wins} color="var(--win)"/>
+            <StatBox label="Losses" value={data.losses} color="var(--loss)"/>
+            <StatBox label="Ø Score" value={data.avg_score != null ? data.avg_score.toFixed(1) : '–'}/>
+          </div>
+          {data.strategies && data.strategies.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 10 }}>STRATEGIE-AUFSCHLÜSSELUNG</div>
+              <div style={{ overflowX: 'auto' }}>
+                <table className="tbl">
+                  <thead>
+                    <tr><th>Strategie</th><th>Total</th><th>Wins</th><th>Losses</th><th>Win-Rate</th><th>Ø Score</th></tr>
+                  </thead>
+                  <tbody>
+                    {data.strategies.map((s, i) => (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 500 }}>{s.strategy_name || '–'}</td>
+                        <td className="mono">{s.total}</td>
+                        <td className="mono win">{s.wins}</td>
+                        <td className="mono loss">{s.losses}</td>
+                        <td className="mono" style={{ color: parseFloat(pct(s.wins, s.total)) >= 50 ? 'var(--win)' : 'var(--loss)' }}>
+                          {pct(s.wins, s.total)}%
+                        </td>
+                        <td className="mono">{s.avg_score != null ? s.avg_score.toFixed(1) : '–'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Filters */}
+      <div className="card">
+        <div className="card-body" style={{ padding: '12px 20px' }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 600 }}>Filter:</span>
+            <select value={filter.direction} onChange={e => setFilter(f => ({ ...f, direction: e.target.value }))} className="input" style={{ width: 'auto', minWidth: 140 }}>
+              <option value="">Alle Richtungen</option>
+              <option value="LONG">LONG</option>
+              <option value="SHORT">SHORT</option>
+            </select>
+            <button className="btn btn-ghost btn-sm" onClick={() => setFilter({ strategy: '', direction: '' })}>Zurücksetzen</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Overview */}
+      {stats.overview && (
+        <div className="card">
+          <div className="card-head"><Icon name="chart" className="ico"/><h3>Gesamtübersicht</h3></div>
+          <div className="card-body">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 12 }}>
+              <StatBox label="Gesamt" value={stats.overview.total}/>
+              <StatBox label="Win-Rate" value={`${pct(stats.overview.wins, stats.overview.total)}%`} color={parseFloat(pct(stats.overview.wins, stats.overview.total)) >= 50 ? 'var(--win)' : 'var(--loss)'}/>
+              <StatBox label="Mit Bias" value={stats.overview.with_bias || 0} sub="Morgenroutine gemacht"/>
+              <StatBox label="Ohne Bias" value={stats.overview.without_bias || 0} sub="Vor Morgenroutine"/>
+              <StatBox label="Bias-Match" value={stats.overview.bias_match || 0} sub="Richtung passte"/>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <BiasBlock title="Mit Bias (Morgenroutine abgeschlossen)" data={stats.with_bias} accentColor="var(--win)"/>
+      <BiasBlock title="Ohne Bias (vor Morgenroutine)" data={stats.without_bias} accentColor="var(--wait)"/>
+      <BiasBlock title="Bias-Match (Richtung entsprach Tages-Bias)" data={stats.bias_match} accentColor="var(--blue-400)"/>
+    </div>
+  );
+}
+
 // ─── Main Page ─────────────────────────────────────────────────
 
 const BacktestPage = ({ user }) => {
@@ -1004,13 +1524,19 @@ const BacktestPage = ({ user }) => {
   const sessionId = localStorage.getItem('wavescout_session');
   const userRole  = user?.role || 'user';
 
+  const isTraderOrAdmin = userRole === 'admin' || userRole === 'trader';
+
   const tabs = [
-    { id: 'practice',    label: 'Übungstrades'       },
-    { id: 'history',     label: 'Signal-Historie'     },
-    { id: 'strategy',    label: 'Strategie-Labor'     },
-    { id: 'compare',     label: 'Strategie-Vergleich' },
-    { id: 'loss',        label: 'Loss-Analyse'        },
-    { id: 'suggestions', label: 'Vorschläge'          },
+    { id: 'practice',      label: 'Übungstrades'       },
+    { id: 'history',       label: 'Signal-Historie'     },
+    ...(isTraderOrAdmin ? [
+      { id: 'strategy',    label: 'Strategie-Labor'     },
+      { id: 'compare',     label: 'Strategie-Vergleich' },
+      { id: 'regelanalyse',label: 'Regel-Analyse'       },
+    ] : []),
+    { id: 'loss',          label: 'Loss-Analyse'        },
+    { id: 'biasstats',     label: 'Bias-Statistiken'    },
+    { id: 'suggestions',   label: 'Vorschläge'          },
   ];
 
   return (
@@ -1034,12 +1560,14 @@ const BacktestPage = ({ user }) => {
         </div>
       </div>
 
-      {activeTab === 'practice'    && <PracticeTradesTab  sessionId={sessionId}/>}
-      {activeTab === 'history'     && <SignalHistoryTab   sessionId={sessionId}/>}
-      {activeTab === 'strategy'    && <StrategyLabTab     sessionId={sessionId} userRole={userRole}/>}
-      {activeTab === 'compare'     && <StrategyCompareTab sessionId={sessionId}/>}
-      {activeTab === 'loss'        && <LossAnalysisTab    sessionId={sessionId}/>}
-      {activeTab === 'suggestions' && <SuggestionsTab     sessionId={sessionId}/>}
+      {activeTab === 'practice'      && <PracticeTradesTab  sessionId={sessionId}/>}
+      {activeTab === 'history'       && <SignalHistoryTab   sessionId={sessionId}/>}
+      {activeTab === 'strategy'      && <StrategyLabTab     sessionId={sessionId} userRole={userRole}/>}
+      {activeTab === 'compare'       && <StrategyCompareTab sessionId={sessionId}/>}
+      {activeTab === 'regelanalyse'  && <RuleFrequencyTab   sessionId={sessionId}/>}
+      {activeTab === 'loss'          && <LossAnalysisTab    sessionId={sessionId}/>}
+      {activeTab === 'biasstats'     && <BiasStatsTab       sessionId={sessionId}/>}
+      {activeTab === 'suggestions'   && <SuggestionsTab     sessionId={sessionId}/>}
     </div>
   );
 };
