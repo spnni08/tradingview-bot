@@ -86,6 +86,12 @@ const App = () => {
 
   const navigate = (p) => setPage(p);
 
+  useEffect(() => {
+    const h = (e) => setPage(e.detail);
+    window.addEventListener('wavescout-navigate', h);
+    return () => window.removeEventListener('wavescout-navigate', h);
+  }, []);
+
   if (!ready) {
     return (
       <div style={{
@@ -105,6 +111,7 @@ const App = () => {
       case 'journal':       return <JournalPage       key="journal"       {...props}/>;
       case 'backtest':      return <BacktestPage      key="backtest"      {...props}/>;
       case 'statistiken':   return <StatistikenPage   key="statistiken"   {...props}/>;
+      case 'news':          return <NewsPage          key="news"          {...props}/>;
       case 'einstellungen': return <EinstellungenPage key="einstellungen" {...props}/>;
       case 'admin':
         return user?.role === 'admin'

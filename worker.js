@@ -749,6 +749,16 @@ async function ensureTables(env) {
       try { await env.DB.prepare(`ALTER TABLE trade_reviews ADD COLUMN ${col} ${type}`).run(); } catch (_) {}
     }
 
+    // Migrate market_events table — extended news fields
+    const marketEventsCols = [
+      ['long_text',          'TEXT'],
+      ['affected_symbols',   'TEXT'],
+      ['affected_scope',     'TEXT'],
+    ];
+    for (const [col, type] of marketEventsCols) {
+      try { await env.DB.prepare(`ALTER TABLE market_events ADD COLUMN ${col} ${type}`).run(); } catch (_) {}
+    }
+
     // Migrate snapshots table (compat with unique symbol snapshots)
     const snapshotCols = [
       ['timeframe',  'TEXT'],
@@ -1315,6 +1325,25 @@ function safeIdPart(input = '') {
   return Math.abs(hash).toString(36);
 }
 
+function extractAffectedSymbols(text) {
+  const syms = [];
+  if (/bitcoin|btc/i.test(text)) syms.push('BTC');
+  if (/ethereum|eth/i.test(text)) syms.push('ETH');
+  if (/solana|sol/i.test(text)) syms.push('SOL');
+  if (/bnb|binance coin/i.test(text)) syms.push('BNB');
+  if (/xrp|ripple/i.test(text)) syms.push('XRP');
+  if (/cardano|ada/i.test(text)) syms.push('ADA');
+  return JSON.stringify(syms.length ? syms : ['ALL']);
+}
+
+function mapAffectedScope(text) {
+  if (/\bfed\b|cpi|nfp|gdp|inflation|interest rate|macro|recession/i.test(text)) return 'MACRO';
+  if (/regulation|sec|government|law|ban|legal|regulatory|compliance/i.test(text)) return 'REGULATION';
+  if (/binance|bybit|mexc|blofin|okx|kraken|coinbase|ftx|exchange/i.test(text)) return 'EXCHANGE';
+  if (/bitcoin|btc|ethereum|eth|solana|sol|ripple|xrp/i.test(text)) return 'COIN_SPECIFIC';
+  return 'GLOBAL';
+}
+
 async function getMarketRadar(env, session = null) {
   await ensureTables(env);
   const now = Date.now();
@@ -1363,6 +1392,9 @@ async function getMarketRadar(env, session = null) {
         source: 'RSS',
         source_url: item.link,
         summary: item.description.slice(0, 180) || 'Relevantes Krypto-Markt-Event.',
+        long_text: item.description || '',
+        affected_symbols: extractAffectedSymbols(text),
+        affected_scope: mapAffectedScope(text),
       };
     });
   debug.items_relevant = relevant.length;
@@ -1371,11 +1403,12 @@ async function getMarketRadar(env, session = null) {
   for (const event of relevant) {
     await env.DB.prepare(`
       INSERT OR REPLACE INTO market_events
-      (id, created_at, updated_at, event_time, title, category, impact, affected_markets, source, source_url, summary, radar_status, raw_json, status)
-      VALUES (?, COALESCE((SELECT created_at FROM market_events WHERE id = ?), ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+      (id, created_at, updated_at, event_time, title, category, impact, affected_markets, source, source_url, summary, radar_status, raw_json, long_text, affected_symbols, affected_scope, status)
+      VALUES (?, COALESCE((SELECT created_at FROM market_events WHERE id = ?), ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
     `).bind(
       event.id, event.id, now, now, event.event_time, event.title, event.category, event.impact,
-      JSON.stringify(event.affected_markets), event.source, event.source_url, event.summary, status, JSON.stringify(event)
+      JSON.stringify(event.affected_markets), event.source, event.source_url, event.summary, status, JSON.stringify(event),
+      event.long_text || '', event.affected_symbols || '[]', event.affected_scope || 'GLOBAL'
     ).run();
     debug.db_saved += 1;
   }
@@ -1428,6 +1461,57 @@ async function getMarketRadar(env, session = null) {
       });
     }
   }
+}
+
+async function checkOpenTrades(env, opts = {}) {
+  const { skipYoungerThanMs = 0, outcomeSource = 'manual_admin', adminUsername = null } = opts;
+  const now = Date.now();
+  const open = await env.DB.prepare(
+    `SELECT id, symbol, direction, ai_tp, ai_sl, created_at FROM signals WHERE outcome = 'OPEN' OR outcome IS NULL`
+  ).all();
+
+  const results = [];
+  for (const trade of (open.results || [])) {
+    if (skipYoungerThanMs > 0 && (now - (trade.created_at || 0)) < skipYoungerThanMs) {
+      results.push({ id: trade.id, symbol: trade.symbol, status: 'skipped', message: 'Signal zu jung (< 30min)' });
+      continue;
+    }
+    const snap = await env.DB.prepare(
+      `SELECT price FROM snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 1`
+    ).bind(trade.symbol).first();
+    if (!snap || !snap.price) {
+      results.push({ id: trade.id, symbol: trade.symbol, status: 'no_price', message: `Kein Preis für ${trade.symbol}` });
+      continue;
+    }
+    const price = snap.price;
+    const tp = trade.ai_tp;
+    const sl = trade.ai_sl;
+    let newOutcome = null;
+    if (trade.direction === 'LONG') {
+      if (tp && price >= tp) newOutcome = 'WIN';
+      else if (sl && price <= sl) newOutcome = 'LOSS';
+    } else if (trade.direction === 'SHORT') {
+      if (tp && price <= tp) newOutcome = 'WIN';
+      else if (sl && price >= sl) newOutcome = 'LOSS';
+    }
+    if (newOutcome) {
+      const adminNote = adminUsername ? `${outcomeSource} by ${adminUsername}` : outcomeSource;
+      await env.DB.prepare(
+        `UPDATE signals SET outcome = ?, exit_price = ?, outcome_source = ?, closed_at = ?, updated_at = ? WHERE id = ?`
+      ).bind(newOutcome, price, adminNote, now, now, trade.id).run();
+      results.push({ id: trade.id, symbol: trade.symbol, status: 'closed', outcome: newOutcome, price, tp, sl, message: `${newOutcome} — Preis ${price} hat ${newOutcome === 'WIN' ? 'TP' : 'SL'} erreicht` });
+    } else {
+      results.push({ id: trade.id, symbol: trade.symbol, status: 'open', price, tp, sl, message: 'Weiter offen' });
+    }
+  }
+  return results;
+}
+
+async function checkOpenTradesEndOfDay(env) {
+  return checkOpenTrades(env, {
+    skipYoungerThanMs: 30 * 60 * 1000,
+    outcomeSource: 'eod_check',
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2618,6 +2702,66 @@ export default {
           await env.DB.prepare(`UPDATE sessions SET role = ? WHERE user_id = ?`).bind(role, userId).run();
         } catch (_) {}
         return jsonResponse({ success: true });
+      }
+
+      if (request.method === "POST" && url.pathname === "/admin/check-open-trades") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const results = await checkOpenTrades(env, { outcomeSource: 'manual_admin', adminUsername: session.username });
+          const closed = results.filter(r => r.status === 'closed');
+          const open   = results.filter(r => r.status === 'open');
+          const skipped = results.filter(r => r.status === 'skipped');
+          const noprice = results.filter(r => r.status === 'no_price');
+          return jsonResponse({ success: true, checked: results.length, closed: closed.length, open: open.length, skipped: skipped.length, no_price: noprice.length, results });
+        } catch (error) {
+          return jsonResponse({ success: false, error: error?.message || String(error) }, 500);
+        }
+      }
+
+      if (request.method === "POST" && url.pathname.startsWith("/admin/check-trade/")) {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const tradeId = url.pathname.replace('/admin/check-trade/', '');
+        if (!tradeId) return jsonResponse({ error: "Missing trade ID" }, 400);
+        try {
+          const trade = await env.DB.prepare(`SELECT id, symbol, direction, ai_tp, ai_sl, outcome, created_at FROM signals WHERE id = ?`).bind(tradeId).first();
+          if (!trade) return jsonResponse({ error: "Signal nicht gefunden" }, 404);
+          const snap = await env.DB.prepare(`SELECT price FROM snapshots WHERE symbol = ? ORDER BY created_at DESC LIMIT 1`).bind(trade.symbol).first();
+          if (!snap || !snap.price) return jsonResponse({ success: true, status: 'no_price', message: `Kein aktueller Preis für ${trade.symbol}`, trade });
+          const price = snap.price;
+          const tp = trade.ai_tp;
+          const sl = trade.ai_sl;
+          let newOutcome = null;
+          if (trade.direction === 'LONG') {
+            if (tp && price >= tp) newOutcome = 'WIN';
+            else if (sl && price <= sl) newOutcome = 'LOSS';
+          } else if (trade.direction === 'SHORT') {
+            if (tp && price <= tp) newOutcome = 'WIN';
+            else if (sl && price >= sl) newOutcome = 'LOSS';
+          }
+          if (newOutcome) {
+            const now = Date.now();
+            await env.DB.prepare(`UPDATE signals SET outcome = ?, exit_price = ?, outcome_source = ?, closed_at = ?, updated_at = ? WHERE id = ?`)
+              .bind(newOutcome, price, `manual_admin by ${session.username}`, now, now, tradeId).run();
+            return jsonResponse({ success: true, status: 'closed', outcome: newOutcome, price, tp, sl, message: `${newOutcome} — ${price} hat ${newOutcome === 'WIN' ? 'TP' : 'SL'} erreicht` });
+          }
+          return jsonResponse({ success: true, status: 'open', price, tp, sl, message: 'Trade weiter offen — TP/SL noch nicht erreicht' });
+        } catch (error) {
+          return jsonResponse({ success: false, error: error?.message || String(error) }, 500);
+        }
+      }
+
+      if (request.method === "POST" && url.pathname === "/admin/eod-check") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const results = await checkOpenTradesEndOfDay(env);
+          const closed = results.filter(r => r.status === 'closed');
+          return jsonResponse({ success: true, checked: results.length, closed: closed.length, results });
+        } catch (error) {
+          return jsonResponse({ success: false, error: error?.message || String(error) }, 500);
+        }
       }
 
       // ── MORNING ROUTINE ──────────────────────────────────────

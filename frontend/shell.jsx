@@ -187,11 +187,11 @@ const Sidebar = ({ page, setPage, user, onLogout, collapsed, setCollapsed }) => 
   const isAdmin = role === 'admin';
 
   const NAV = [
-    { id: 'dashboard',     label: 'Dashboard',    icon: 'home'    },
-    { id: 'backtest',      label: 'Backtesting',   icon: 'chart'   },
-    { id: 'journal',       label: 'Journal',       icon: 'book'    },
-    { id: 'statistiken',   label: 'Statistiken',   icon: 'stats'   },
-    { id: 'einstellungen', label: 'Einstellungen', icon: 'settings'},
+    { id: 'dashboard',   label: 'Dashboard',   icon: 'home'    },
+    { id: 'backtest',    label: 'Backtesting',  icon: 'chart'   },
+    { id: 'journal',     label: 'Journal',      icon: 'book'    },
+    { id: 'news',        label: 'News',         icon: 'bell'    },
+    { id: 'statistiken', label: 'Statistiken',  icon: 'stats'   },
   ];
 
   const timeStr = time.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
@@ -240,32 +240,6 @@ const Sidebar = ({ page, setPage, user, onLogout, collapsed, setCollapsed }) => 
             {!collapsed && <span className="link-label">{n.label}</span>}
           </button>
         ))}
-
-        {/* Waveboard external link */}
-        <a
-          href="https://waveboard-e54ed.web.app/waveboard/dashboard"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="sidebar-link"
-          title={collapsed ? 'Waveboard' : ''}
-        >
-          <Icon name="external" size={16} style={{ flexShrink: 0 }}/>
-          {!collapsed && <span className="link-label">Waveboard</span>}
-        </a>
-
-        {isAdmin && (
-          <>
-            <div className="sidebar-sep"/>
-            <button
-              className={`sidebar-link${page === 'admin' ? ' active' : ''}`}
-              onClick={() => setPage('admin')}
-              title={collapsed ? 'Admin' : ''}
-            >
-              <Icon name="shield" size={16} style={{ flexShrink: 0 }}/>
-              {!collapsed && <span className="link-label">Admin</span>}
-            </button>
-          </>
-        )}
       </div>
 
       {/* Bottom: theme + user */}
@@ -295,18 +269,33 @@ const Sidebar = ({ page, setPage, user, onLogout, collapsed, setCollapsed }) => 
                 position: 'absolute', bottom: '100%', left: 0, right: 0,
                 background: 'var(--bg-1)', border: '1px solid var(--border)',
                 borderRadius: 10, overflow: 'hidden', boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
-                marginBottom: 4, minWidth: 160, zIndex: 200
+                marginBottom: 4, minWidth: 180, zIndex: 200
               }}>
                 <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
                   <div style={{ fontWeight: 600, fontSize: 13 }}>{user.username}</div>
                   <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{user.role}</div>
                 </div>
-                <button
-                  style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)', fontFamily: 'var(--font-main)' }}
-                  onClick={() => { setUserMenuOpen(false); setPage('einstellungen'); }}
+                {[
+                  { label: 'Einstellungen', icon: 'settings', page: 'einstellungen' },
+                  ...(isAdmin ? [{ label: 'Admin', icon: 'shield', page: 'admin' }] : []),
+                ].map(item => (
+                  <button key={item.page}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)', fontFamily: 'var(--font-main)' }}
+                    onClick={() => { setUserMenuOpen(false); setPage(item.page); }}
+                  >
+                    <Icon name={item.icon} size={14}/> {item.label}
+                  </button>
+                ))}
+                <a
+                  href="https://waveboard-e54ed.web.app/waveboard/dashboard"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)', fontFamily: 'var(--font-main)', textDecoration: 'none' }}
+                  onClick={() => setUserMenuOpen(false)}
                 >
-                  <Icon name="settings" size={14}/> Einstellungen
-                </button>
+                  <Icon name="external" size={14}/> Waveboard
+                </a>
+                <div style={{ borderTop: '1px solid var(--border)' }}/>
                 <button
                   style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--loss)', fontFamily: 'var(--font-main)' }}
                   onClick={() => { setUserMenuOpen(false); onLogout(); }}
