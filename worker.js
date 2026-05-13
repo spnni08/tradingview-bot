@@ -84,6 +84,11 @@ async function withTimeout(promise, ms, fallbackValue = null) {
 
 // ─── Signal helper functions ─────────────────────────────────
 
+function tryParseJSON(str) {
+  if (!str) return null;
+  try { return JSON.parse(str); } catch (_) { return null; }
+}
+
 function getSignalQuality(score) {
   if (score == null || isNaN(score)) return 'UNBEKANNT';
   if (score >= 90) return 'PREMIUM';
@@ -172,20 +177,35 @@ const DEFAULT_STRATEGY_CONFIG = {
 // AI ANALYSIS
 // ═══════════════════════════════════════════════════════════════
 
+// Guard: ensure prompt is a non-empty string before sending to the API.
+// Returns the trimmed prompt, or throws with a clear log message.
+function requireNonEmptyPrompt(prompt, context = 'AI call') {
+  if (typeof prompt !== 'string' || prompt.trim().length === 0) {
+    const msg = `❌ [${context}] Blocked: prompt is empty or non-string. Falling back to rule-based analysis.`;
+    console.error(msg);
+    throw new Error(msg);
+  }
+  return prompt.trim();
+}
+
 async function analyzeSignalWithAI(env, signal, strategyConfig = null) {
   if (!env.ANTHROPIC_API_KEY) {
     console.log('⚠️ No AI API key, using rule-based analysis');
     return analyzeWithRules(signal);
   }
   try {
-    const prompt = `Analyze this trading signal and provide a recommendation.
+    const rawPrompt = `Analyze this trading signal and provide a recommendation.
 
 Signal:
-- Symbol: ${signal.symbol}
-- Direction: ${signal.direction}
-- Price: ${signal.price}
-- Timeframe: ${signal.timeframe}
-- Trigger: ${signal.trigger}
+- Symbol: ${signal.symbol || 'UNKNOWN'}
+- Direction: ${signal.direction || 'UNKNOWN'}
+- Price: ${signal.price ?? 0}
+- Timeframe: ${signal.timeframe || 'UNKNOWN'}
+- Trigger: ${signal.trigger || 'WEBHOOK'}
+- RSI: ${signal.rsi ?? 'n/a'}
+- EMA50: ${signal.ema50 ?? 'n/a'}
+- EMA200: ${signal.ema200 ?? 'n/a'}
+- Trend: ${signal.trend || 'n/a'}
 
 Provide:
 1. Recommendation: RECOMMENDED, WAIT, or SKIP
@@ -207,6 +227,8 @@ Format as JSON:
   "reason": "..."
 }`;
 
+    const prompt = requireNonEmptyPrompt(rawPrompt, 'analyzeSignalWithAI');
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -221,8 +243,18 @@ Format as JSON:
       })
     });
 
+    if (!response.ok) {
+      const errBody = await response.text();
+      console.error(`❌ Anthropic API error ${response.status}:`, errBody);
+      return analyzeWithRules(signal, strategyConfig);
+    }
+
     const data = await response.json();
-    const text = data.content[0].text;
+    const text = data.content?.[0]?.text;
+    if (!text) {
+      console.error('❌ Anthropic API returned empty content block');
+      return analyzeWithRules(signal, strategyConfig);
+    }
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) return JSON.parse(jsonMatch[0]);
   } catch (error) {
@@ -709,6 +741,38 @@ async function ensureTables(env) {
       ['exit_price',            'REAL'],
     ];
     for (const [col, type] of stratCols) {
+      try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); }
+      catch (_) {}
+    }
+
+    // Migrate signals table — technical indicator + scoring columns
+    const signalIndicatorCols = [
+      ['action',               'TEXT'],
+      ['rsi',                  'REAL'],
+      ['ema50',                'REAL'],
+      ['ema200',               'REAL'],
+      ['trend',                'TEXT'],
+      ['support',              'REAL'],
+      ['resistance',           'REAL'],
+      ['wave_bias',            'TEXT'],
+      ['ai_direction',         'TEXT'],
+      ['ai_confidence',        'REAL'],
+      ['matched_rules',        'TEXT'],
+      ['failed_rules',         'TEXT'],
+      ['unknown_rules',        'TEXT'],
+      ['score_breakdown',      'TEXT'],
+      ['signal_quality',       'TEXT'],
+      ['risk_reward',          'REAL'],
+      ['planned_profit_pct',   'REAL'],
+      ['planned_risk_pct',     'REAL'],
+      ['trigger_reason',       'TEXT'],
+      ['disclaimer_shown',     'INTEGER DEFAULT 0'],
+      ['daily_bias',           'TEXT'],
+      ['bias_match',           'TEXT'],
+      ['before_morning_routine','INTEGER DEFAULT 0'],
+      ['counts_for_strategy',  'INTEGER DEFAULT 0'],
+    ];
+    for (const [col, type] of signalIndicatorCols) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); }
       catch (_) {}
     }
