@@ -156,20 +156,30 @@ ${failedStr}
 // STRATEGY SYSTEM
 // ═══════════════════════════════════════════════════════════════
 
+// Top-Down Daytrading Strategie v2.0
+// Setup A (Pullback) · Setup B (Continuation-Breakout)
+// Fokus: BTC/USDT · ETH/USDT · (opt. SOL/USDT) | Entry 5–15min | Bias auf 4H
 const DEFAULT_STRATEGY_CONFIG = {
+  version: 'v2.0',
   rules: {
-    rsi:                { enabled: true, weight: 18 },
-    ema:                { enabled: true, weight: 12 },
+    rsi:                { enabled: true, weight: 18 }, // Setup A: oversold/bought; Setup B: trend-range (45-65)
+    ema:                { enabled: true, weight: 15 }, // EMA50/200 alignment + EMA200 distance (min 1%)
     trend:              { enabled: true, weight: 10 },
-    wave_bias:          { enabled: true, weight: 10 },
-    support_resistance: { enabled: true, weight: 8  },
-    timeframe:          { enabled: true, weight: 8  },
-    confidence:         { enabled: true, weight: 10 }
+    wave_bias:          { enabled: true, weight: 8  },
+    support_resistance: { enabled: true, weight: 10 }, // "Preis in Key-Zone" ist Pflicht in v2.0
+    timeframe:          { enabled: true, weight: 7  }, // 5min/15min bevorzugt (Entry-Timeframes)
+    confidence:         { enabled: true, weight: 7  },
+    session_filter:     { enabled: true, weight: 5  }, // London 07-10 UTC / US-Open 13:30-16 UTC
   },
   thresholds: {
     min_trade_score:    70,
     min_telegram_score: 55,
-    max_risk:           'MEDIUM'
+    max_risk:           'MEDIUM',
+    min_rr:             1.5,      // TP1 mind. 1:1.5R laut Strategie
+    risk_per_trade_pct: 1.0,      // 1% Risiko pro Trade
+    daily_stop_loss_r:  2,        // -2R Daily Stop
+    daily_win_stop_r:   3,        // +3R Daily Win-Stop
+    max_trades_per_day: 3,
   }
 };
 
@@ -194,37 +204,55 @@ async function analyzeSignalWithAI(env, signal, strategyConfig = null) {
     return analyzeWithRules(signal);
   }
   try {
-    const rawPrompt = `Analyze this trading signal and provide a recommendation.
+    const setupType   = String(signal.setup_type || signal.trigger || '').toUpperCase();
+    const isSetupB    = setupType.includes('CONTINUATION') || setupType.includes('BREAKOUT') || setupType.includes('SETUP_B');
+    const setupLabel  = isSetupB ? 'Setup B – Continuation-Breakout' : 'Setup A – Pullback-Trade';
+    const ema200Dist  = signal.price && signal.ema200
+      ? ((Math.abs(signal.price - signal.ema200) / signal.ema200) * 100).toFixed(2)
+      : 'n/a';
+    const priceVsEma200 = signal.price && signal.ema200
+      ? (signal.price > signal.ema200 ? 'ABOVE' : 'BELOW')
+      : 'n/a';
 
-Signal:
+    const rawPrompt = `Du analysierst ein Trading-Signal nach der Top-Down Daytrading Strategie v2.0.
+
+Strategie-Kontext:
+- Setup: ${setupLabel}
+- Fokus: BTC/USDT, ETH/USDT (optional SOL/USDT)
+- Entry-Timeframes: 5min / 15min | Bias auf 4H
+- Bias gilt nur wenn: EMA50/200 Alignment UND Preis klar über/unter EMA200 (min. 1% Abstand)
+- Preis direkt am EMA200 (<0.5% Abstand) = Ausschluss
+- Setup A (Pullback): RSI überverkauft/überkauft = gut; in Key-Zone; Struktur dreht; Bestätigungs-Pattern
+- Setup B (Continuation): Starker 4H-Trend; RSI im Trend-Bereich (45-65 für Long); Konsolidierung bricht in Trendrichtung
+- TP gestaffelt: TP1 bei 1:1.5R (50% schließen + SL auf BE), TP2 bei 1:3R
+- Bevorzugte Sessions: London (07-10 UTC), US-Open (13:30-16 UTC)
+- Ausschluss: Seitwärtsmarkt, R/R < 1:1.5, RSI extrem (>75 / <25), Major News innerhalb 15min
+
+Signal-Daten:
 - Symbol: ${signal.symbol || 'UNKNOWN'}
-- Direction: ${signal.direction || 'UNKNOWN'}
-- Price: ${signal.price ?? 0}
+- Richtung: ${signal.direction || 'UNKNOWN'}
+- Preis: ${signal.price ?? 0}
 - Timeframe: ${signal.timeframe || 'UNKNOWN'}
 - Trigger: ${signal.trigger || 'WEBHOOK'}
 - RSI: ${signal.rsi ?? 'n/a'}
 - EMA50: ${signal.ema50 ?? 'n/a'}
-- EMA200: ${signal.ema200 ?? 'n/a'}
+- EMA200: ${signal.ema200 ?? 'n/a'} (Preis ist ${priceVsEma200} dem EMA200, Abstand: ${ema200Dist}%)
 - Trend: ${signal.trend || 'n/a'}
+- Wave Bias: ${signal.wave_bias || 'n/a'}
+- Support: ${signal.support ?? 'n/a'}
+- Resistance: ${signal.resistance ?? 'n/a'}
+- Konfidenz: ${signal.confidence ?? 'n/a'}%
 
-Provide:
-1. Recommendation: RECOMMENDED, WAIT, or SKIP
-2. Score: 0-100
-3. Risk: LOW, MEDIUM, or HIGH
-4. Entry price
-5. Take Profit price
-6. Stop Loss price
-7. Brief reason (max 100 characters)
-
-Format as JSON:
+Bewerte das Signal nach v2.0 Kriterien. Antworte NUR als JSON:
 {
-  "recommendation": "...",
+  "recommendation": "RECOMMENDED|WAIT|SKIP",
   "score": 0,
-  "risk": "...",
+  "risk": "LOW|MEDIUM|HIGH",
   "entry": 0,
   "tp": 0,
+  "tp2": 0,
   "sl": 0,
-  "reason": "..."
+  "reason": "Max 100 Zeichen. Setup-Typ + Hauptgrund."
 }`;
 
     const prompt = requireNonEmptyPrompt(rawPrompt, 'analyzeSignalWithAI');
@@ -269,13 +297,18 @@ function analyzeWithRules(signal, strategyConfig = null) {
   const isLong  = dir === 'LONG';
   const isShort = dir === 'SHORT';
 
-  const rW  = cfg.rules?.rsi?.enabled                !== false ? (cfg.rules?.rsi?.weight                ?? 18) : 0;
-  const eW  = cfg.rules?.ema?.enabled                !== false ? (cfg.rules?.ema?.weight                ?? 12) : 0;
-  const tW  = cfg.rules?.trend?.enabled              !== false ? (cfg.rules?.trend?.weight              ?? 10) : 0;
-  const wW  = cfg.rules?.wave_bias?.enabled          !== false ? (cfg.rules?.wave_bias?.weight          ?? 10) : 0;
-  const srW = cfg.rules?.support_resistance?.enabled !== false ? (cfg.rules?.support_resistance?.weight ?? 8)  : 0;
-  const tfW = cfg.rules?.timeframe?.enabled          !== false ? (cfg.rules?.timeframe?.weight          ?? 8)  : 0;
-  const cW  = cfg.rules?.confidence?.enabled         !== false ? (cfg.rules?.confidence?.weight         ?? 10) : 0;
+  // Detect setup type: Setup A (Pullback) vs Setup B (Continuation-Breakout)
+  const setupType = String(signal.setup_type || signal.trigger || '').toUpperCase();
+  const isSetupB  = setupType.includes('CONTINUATION') || setupType.includes('BREAKOUT') || setupType.includes('SETUP_B');
+
+  const rW    = cfg.rules?.rsi?.enabled                !== false ? (cfg.rules?.rsi?.weight                ?? 18) : 0;
+  const eW    = cfg.rules?.ema?.enabled                !== false ? (cfg.rules?.ema?.weight                ?? 15) : 0;
+  const tW    = cfg.rules?.trend?.enabled              !== false ? (cfg.rules?.trend?.weight              ?? 10) : 0;
+  const wW    = cfg.rules?.wave_bias?.enabled          !== false ? (cfg.rules?.wave_bias?.weight          ?? 8)  : 0;
+  const srW   = cfg.rules?.support_resistance?.enabled !== false ? (cfg.rules?.support_resistance?.weight ?? 10) : 0;
+  const sfW   = cfg.rules?.session_filter?.enabled     !== false ? (cfg.rules?.session_filter?.weight     ?? 5)  : 0;
+  const tfW   = cfg.rules?.timeframe?.enabled         !== false ? (cfg.rules?.timeframe?.weight          ?? 7)  : 0;
+  const cW    = cfg.rules?.confidence?.enabled        !== false ? (cfg.rules?.confidence?.weight         ?? 7)  : 0;
 
   let score = 50;
   const matched_rules  = [];
@@ -283,7 +316,9 @@ function analyzeWithRules(signal, strategyConfig = null) {
   const unknown_rules  = [];
   const score_breakdown = {};
 
-  // ── RSI ──────────────────────────────────────────────────────
+  // ── RSI (v2.0: Setup A = Pullback, Setup B = Continuation) ────
+  // Setup A: we buy the oversold pullback (RSI low = good for LONG)
+  // Setup B: we trade momentum continuation (RSI in trend-range 45-65 = good, extreme = bad)
   const rsi = signal.rsi != null ? parseFloat(signal.rsi) : null;
   if (rW > 0) {
     if (rsi == null) {
@@ -291,40 +326,98 @@ function analyzeWithRules(signal, strategyConfig = null) {
       score_breakdown.rsi = 0;
     } else {
       let rsiDelta = 0;
-      if (isLong) {
-        if      (rsi < 30) { rsiDelta = rW;                        matched_rules.push(`RSI überverkauft (${rsi.toFixed(0)}) – günstig für LONG`); }
-        else if (rsi < 40) { rsiDelta = Math.round(rW * 0.56);    matched_rules.push(`RSI niedrig (${rsi.toFixed(0)}) – passt zu LONG`); }
-        else if (rsi < 50) { rsiDelta = Math.round(rW * 0.22);    matched_rules.push(`RSI neutral-niedrig (${rsi.toFixed(0)})`); }
-        else if (rsi > 70) { rsiDelta = -rW;                       failed_rules.push(`RSI überkauft (${rsi.toFixed(0)}) – ungünstig für LONG`); }
-        else if (rsi > 60) { rsiDelta = -Math.round(rW * 0.33);   failed_rules.push(`RSI hoch (${rsi.toFixed(0)}) – Vorsicht bei LONG`); }
-        else               {                                        matched_rules.push(`RSI neutral (${rsi.toFixed(0)})`); }
-      } else if (isShort) {
-        if      (rsi > 70) { rsiDelta = rW;                        matched_rules.push(`RSI überkauft (${rsi.toFixed(0)}) – günstig für SHORT`); }
-        else if (rsi > 60) { rsiDelta = Math.round(rW * 0.56);    matched_rules.push(`RSI hoch (${rsi.toFixed(0)}) – passt zu SHORT`); }
-        else if (rsi > 50) { rsiDelta = Math.round(rW * 0.22);    matched_rules.push(`RSI neutral-hoch (${rsi.toFixed(0)})`); }
-        else if (rsi < 30) { rsiDelta = -rW;                       failed_rules.push(`RSI überverkauft (${rsi.toFixed(0)}) – ungünstig für SHORT`); }
-        else if (rsi < 40) { rsiDelta = -Math.round(rW * 0.33);   failed_rules.push(`RSI niedrig (${rsi.toFixed(0)}) – Vorsicht bei SHORT`); }
-        else               {                                        matched_rules.push(`RSI neutral (${rsi.toFixed(0)})`); }
+      // Extreme RSI is always an exclusion signal (>75 or <25 → reversal likely)
+      if (rsi > 75) {
+        if (isLong)  { rsiDelta = -rW; failed_rules.push(`RSI extrem überkauft (${rsi.toFixed(0)}) – Reversal-Risiko, kein LONG`); }
+        if (isShort && !isSetupB) { rsiDelta = Math.round(rW * 0.5); matched_rules.push(`RSI extrem überkauft (${rsi.toFixed(0)}) – Setup A SHORT`); }
+        if (isShort && isSetupB)  { rsiDelta = -Math.round(rW * 0.5); failed_rules.push(`RSI extrem überkauft (${rsi.toFixed(0)}) – kein Continuation`); }
+      } else if (rsi < 25) {
+        if (isShort) { rsiDelta = -rW; failed_rules.push(`RSI extrem überverkauft (${rsi.toFixed(0)}) – Reversal-Risiko, kein SHORT`); }
+        if (isLong && !isSetupB)  { rsiDelta = Math.round(rW * 0.5); matched_rules.push(`RSI extrem überverkauft (${rsi.toFixed(0)}) – Setup A LONG`); }
+        if (isLong && isSetupB)   { rsiDelta = -Math.round(rW * 0.5); failed_rules.push(`RSI extrem überverkauft (${rsi.toFixed(0)}) – kein Continuation`); }
+      } else if (isSetupB) {
+        // Setup B: RSI in trend range (45-65 for LONG, 35-55 for SHORT) = desired
+        if (isLong) {
+          if      (rsi >= 45 && rsi <= 65) { rsiDelta = rW;                    matched_rules.push(`RSI ${rsi.toFixed(0)} im Trend-Bereich (45-65) – Setup B LONG`); }
+          else if (rsi >= 40 && rsi < 45)  { rsiDelta = Math.round(rW * 0.4);  matched_rules.push(`RSI ${rsi.toFixed(0)} – leicht unter Trend-Bereich`); }
+          else if (rsi > 65 && rsi <= 75)  { rsiDelta = Math.round(rW * 0.4);  matched_rules.push(`RSI ${rsi.toFixed(0)} – Stärke passt zu Setup B LONG`); }
+          else                             { rsiDelta = -Math.round(rW * 0.3); failed_rules.push(`RSI ${rsi.toFixed(0)} – außerhalb Setup B Bereich`); }
+        } else if (isShort) {
+          if      (rsi >= 35 && rsi <= 55) { rsiDelta = rW;                    matched_rules.push(`RSI ${rsi.toFixed(0)} im Trend-Bereich (35-55) – Setup B SHORT`); }
+          else if (rsi > 55 && rsi <= 60)  { rsiDelta = Math.round(rW * 0.4);  matched_rules.push(`RSI ${rsi.toFixed(0)} – leicht über Trend-Bereich`); }
+          else if (rsi >= 25 && rsi < 35)  { rsiDelta = Math.round(rW * 0.4);  matched_rules.push(`RSI ${rsi.toFixed(0)} – Schwäche passt zu Setup B SHORT`); }
+          else                             { rsiDelta = -Math.round(rW * 0.3); failed_rules.push(`RSI ${rsi.toFixed(0)} – außerhalb Setup B Bereich`); }
+        }
+      } else {
+        // Setup A (Pullback): standard oversold/overbought logic
+        if (isLong) {
+          if      (rsi < 30) { rsiDelta = rW;                        matched_rules.push(`RSI überverkauft (${rsi.toFixed(0)}) – Pullback günstig für LONG`); }
+          else if (rsi < 40) { rsiDelta = Math.round(rW * 0.56);    matched_rules.push(`RSI niedrig (${rsi.toFixed(0)}) – passt zu Setup A LONG`); }
+          else if (rsi < 50) { rsiDelta = Math.round(rW * 0.22);    matched_rules.push(`RSI neutral-niedrig (${rsi.toFixed(0)})`); }
+          else if (rsi > 70) { rsiDelta = -rW;                       failed_rules.push(`RSI überkauft (${rsi.toFixed(0)}) – kein Pullback-Entry`); }
+          else if (rsi > 60) { rsiDelta = -Math.round(rW * 0.33);   failed_rules.push(`RSI hoch (${rsi.toFixed(0)}) – Vorsicht bei LONG`); }
+          else               {                                        matched_rules.push(`RSI neutral (${rsi.toFixed(0)})`); }
+        } else if (isShort) {
+          if      (rsi > 70) { rsiDelta = rW;                        matched_rules.push(`RSI überkauft (${rsi.toFixed(0)}) – Pullback günstig für SHORT`); }
+          else if (rsi > 60) { rsiDelta = Math.round(rW * 0.56);    matched_rules.push(`RSI hoch (${rsi.toFixed(0)}) – passt zu Setup A SHORT`); }
+          else if (rsi > 50) { rsiDelta = Math.round(rW * 0.22);    matched_rules.push(`RSI neutral-hoch (${rsi.toFixed(0)})`); }
+          else if (rsi < 30) { rsiDelta = -rW;                       failed_rules.push(`RSI überverkauft (${rsi.toFixed(0)}) – kein Pullback-Entry`); }
+          else if (rsi < 40) { rsiDelta = -Math.round(rW * 0.33);   failed_rules.push(`RSI niedrig (${rsi.toFixed(0)}) – Vorsicht bei SHORT`); }
+          else               {                                        matched_rules.push(`RSI neutral (${rsi.toFixed(0)})`); }
+        }
       }
       score += rsiDelta;
       score_breakdown.rsi = rsiDelta;
     }
   }
 
-  // ── EMA trend alignment ──────────────────────────────────────
+  // ── EMA v2.0: alignment + EMA200 distance (≥1% required) ─────
+  // Bias gilt nur wenn: EMA50/200 Alignment UND Preis klar über/unter EMA200 (>1%)
+  // Preis direkt am EMA200 (<0.5%) → Ausschlusskriterium
   const ema50  = parseFloat(signal.ema50  ?? 0);
   const ema200 = parseFloat(signal.ema200 ?? 0);
+  const priceForEma = parseFloat(signal.price ?? 0);
   if (eW > 0) {
     if (!ema50 || !ema200) {
       unknown_rules.push('EMA 50/200 (keine Daten)');
       score_breakdown.ema = 0;
     } else {
-      const bullish = ema50 > ema200;
+      const bullish       = ema50 > ema200;
+      const ema200Dist    = priceForEma && ema200 ? Math.abs(priceForEma - ema200) / ema200 : 0;
+      const aboveEma200   = priceForEma > ema200;
       let emaDelta = 0;
-      if (isLong  && bullish)  { emaDelta = eW;   matched_rules.push('EMA 50 > EMA 200 – bullisher Trend passt zu LONG'); }
-      if (isShort && !bullish) { emaDelta = eW;   matched_rules.push('EMA 50 < EMA 200 – bearisher Trend passt zu SHORT'); }
-      if (isLong  && !bullish) { emaDelta = -eW;  failed_rules.push('EMA 50 < EMA 200 – bearisher Trend gegen LONG'); }
-      if (isShort && bullish)  { emaDelta = -eW;  failed_rules.push('EMA 50 > EMA 200 – bullisher Trend gegen SHORT'); }
+
+      // EMA200 distance check (v2.0: min 1% Abstand, <0.5% = Ausschluss)
+      if (priceForEma && ema200Dist < 0.005) {
+        // Price within 0.5% of EMA200 → exclusion criterion
+        emaDelta = -Math.round(eW * 0.8);
+        failed_rules.push(`Preis zu nah an EMA 200 (${(ema200Dist*100).toFixed(2)}%) – Ausschluss v2.0`);
+      } else {
+        // EMA50/200 alignment
+        if (isLong  && bullish)  {
+          const distBonus = ema200Dist > 0.03 ? eW : ema200Dist > 0.01 ? Math.round(eW * 0.7) : Math.round(eW * 0.4);
+          emaDelta = distBonus;
+          matched_rules.push(`EMA bullish (EMA50>EMA200, Dist ${(ema200Dist*100).toFixed(1)}%) – LONG`);
+        } else if (isShort && !bullish) {
+          const distBonus = ema200Dist > 0.03 ? eW : ema200Dist > 0.01 ? Math.round(eW * 0.7) : Math.round(eW * 0.4);
+          emaDelta = distBonus;
+          matched_rules.push(`EMA bearish (EMA50<EMA200, Dist ${(ema200Dist*100).toFixed(1)}%) – SHORT`);
+        } else if (isLong  && !bullish) {
+          emaDelta = -eW;
+          failed_rules.push('EMA bearish – Trend gegen LONG, kein Bias');
+        } else if (isShort && bullish)  {
+          emaDelta = -eW;
+          failed_rules.push('EMA bullish – Trend gegen SHORT, kein Bias');
+        }
+        // Additional EMA200 position check
+        if (isLong && !aboveEma200 && priceForEma) {
+          emaDelta -= Math.round(eW * 0.4);
+          failed_rules.push('Preis unter EMA 200 – kein Long-Bias nach v2.0');
+        } else if (isShort && aboveEma200 && priceForEma) {
+          emaDelta -= Math.round(eW * 0.4);
+          failed_rules.push('Preis über EMA 200 – kein Short-Bias nach v2.0');
+        }
+      }
       score += emaDelta;
       score_breakdown.ema = emaDelta;
     }
@@ -376,14 +469,16 @@ function analyzeWithRules(signal, strategyConfig = null) {
     }
   }
 
-  // ── Timeframe ────────────────────────────────────────────────
+  // ── Timeframe (v2.0: 5min/15min = Entry-TF, volle Wertung) ───
   if (tfW > 0) {
     const tf = String(signal.timeframe || '').replace('m','').replace('h','H');
     let tfDelta = 0;
-    if      (['60','240','1H','4H'].includes(tf)) { tfDelta = tfW;                    matched_rules.push(`Timeframe ${tf} – hohes Gewicht`); }
-    else if (['15','30'].includes(tf))             { tfDelta = Math.round(tfW * 0.5); matched_rules.push(`Timeframe ${tf} – mittleres Gewicht`); }
-    else if (tf)                                   {                                   failed_rules.push(`Timeframe ${tf} – niedrigers Gewicht`); }
-    else                                           { unknown_rules.push('Timeframe (keine Daten)'); }
+    if      (['5','15'].includes(tf))             { tfDelta = tfW;                    matched_rules.push(`Timeframe ${tf}min – Entry-Timeframe v2.0`); }
+    else if (['1','3'].includes(tf))              { tfDelta = Math.round(tfW * 0.6);  matched_rules.push(`Timeframe ${tf}min – kurz, aber gültig`); }
+    else if (['30','60','1H'].includes(tf))       { tfDelta = Math.round(tfW * 0.3);  matched_rules.push(`Timeframe ${tf} – höherer TF, Entry bevorzugt auf 5/15min`); }
+    else if (['240','4H'].includes(tf))           { tfDelta = Math.round(tfW * 0.2);  matched_rules.push(`Timeframe ${tf} – Bias-TF, kein Entry-TF`); }
+    else if (tf)                                  {                                    failed_rules.push(`Timeframe ${tf} – unbekannt`); }
+    else                                          { unknown_rules.push('Timeframe (keine Daten)'); }
     score += tfDelta;
     score_breakdown.timeframe = tfDelta;
   }
@@ -431,6 +526,27 @@ function analyzeWithRules(signal, strategyConfig = null) {
     }
   }
 
+  // ── Session filter (v2.0: London 07-10 UTC, US-Open 13:30-16 UTC) ──
+  if (sfW > 0) {
+    const utcHour = new Date().getUTCHours();
+    const utcMin  = new Date().getUTCMinutes();
+    const utcTime = utcHour * 60 + utcMin;
+    const inLondon  = utcTime >= 7*60     && utcTime <= 10*60;
+    const inUSOpen  = utcTime >= 13*60+30 && utcTime <= 16*60;
+    if (inLondon) {
+      score += sfW;
+      score_breakdown.session_filter = sfW;
+      matched_rules.push('London-Open Session (07-10 UTC) – bevorzugte Zeit');
+    } else if (inUSOpen) {
+      score += sfW;
+      score_breakdown.session_filter = sfW;
+      matched_rules.push('US-Open Session (13:30-16 UTC) – bevorzugte Zeit');
+    } else {
+      score_breakdown.session_filter = 0;
+      unknown_rules.push('Außerhalb bevorzugter Sessions (London/US-Open)');
+    }
+  }
+
   // ── Clamp ────────────────────────────────────────────────────
   score = Math.max(0, Math.min(100, Math.round(score)));
 
@@ -450,29 +566,35 @@ function analyzeWithRules(signal, strategyConfig = null) {
     risk = 'HIGH';
   }
 
-  // ── TP / SL ──────────────────────────────────────────────────
-  const entry = price || 0;
-  const tp    = isLong  ? entry * 1.02 : entry * 0.98;
-  const sl    = isLong  ? entry * 0.99 : entry * 1.01;
+  // ── TP / SL (v2.0: TP1 = 1.5R, TP2 = 3R) ────────────────────
+  const entry   = price || 0;
+  // SL: 1% distance; TP: 1.5x SL distance (TP1 target)
+  const slDist  = entry * 0.01;
+  const tp      = isLong  ? entry + slDist * 1.5 : entry - slDist * 1.5;
+  const sl      = isLong  ? entry - slDist       : entry + slDist;
+  const tp2     = isLong  ? entry + slDist * 3   : entry - slDist * 3;
 
   // ── Reason ───────────────────────────────────────────────────
   const reasons = [];
-  if (rsi != null && (rsi < 35 || rsi > 65)) reasons.push(`RSI ${rsi}`);
+  const setupLabel = isSetupB ? 'Setup B (Continuation)' : 'Setup A (Pullback)';
+  reasons.push(setupLabel);
+  if (rsi != null && (rsi < 35 || rsi > 65)) reasons.push(`RSI ${rsi.toFixed(0)}`);
   if (ema50 && ema200) reasons.push(`EMA ${ema50 > ema200 ? 'bullish' : 'bearish'}`);
   if (trend)    reasons.push(`Trend: ${trend}`);
   if (waveBias) reasons.push(`Bias: ${waveBias}`);
-  const reason = reasons.length > 0 ? reasons.join(' · ') : 'Rule-based analysis';
+  const reason = reasons.join(' · ');
 
   // ── R:R & quality ────────────────────────────────────────────
-  const risk_reward       = calcRR(entry, tp, sl, isLong);
+  const risk_reward        = calcRR(entry, tp, sl, isLong);
   const planned_profit_pct = safePct(tp, entry);
   const planned_risk_pct   = safePct(sl, entry);
   const signal_quality     = getSignalQuality(score);
 
   return {
-    recommendation, score, risk, entry, tp, sl, reason, direction: dir,
+    recommendation, score, risk, entry, tp, sl, tp2, reason, direction: dir,
     matched_rules, failed_rules, unknown_rules, score_breakdown,
     risk_reward, planned_profit_pct, planned_risk_pct, signal_quality,
+    setup_type: isSetupB ? 'SETUP_B' : 'SETUP_A',
   };
 }
 
@@ -901,67 +1023,47 @@ async function saveSnapshot(env, data) {
   await ensureTables(env);
   const nowIso = new Date().toISOString();
   const symbol = data.symbol || 'UNKNOWN';
+  const tf     = String(data.timeframe || '5');
   const rawSignal = JSON.stringify(data);
 
-  await env.DB.prepare(`
-    INSERT INTO snapshots (
-      symbol,
-      timeframe,
-      price,
-      rsi,
-      ema50,
-      ema200,
-      support,
-      resistance,
-      trend,
-      trend_1h,
-      trend_4h,
-      direction,
-      trigger,
-      strength,
-      timestamp,
-      raw_signal,
-      created_at,
-      updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(symbol) DO UPDATE SET
-      timeframe = excluded.timeframe,
-      price = excluded.price,
-      rsi = excluded.rsi,
-      ema50 = excluded.ema50,
-      ema200 = excluded.ema200,
-      support = excluded.support,
-      resistance = excluded.resistance,
-      trend = excluded.trend,
-      trend_1h = excluded.trend_1h,
-      trend_4h = excluded.trend_4h,
-      direction = excluded.direction,
-      trigger = excluded.trigger,
-      strength = excluded.strength,
-      timestamp = excluded.timestamp,
-      raw_signal = excluded.raw_signal,
-      updated_at = excluded.updated_at
-  `).bind(
-    symbol,
-    String(data.timeframe || '5'),
-    data.price || 0,
-    data.rsi ?? null,
-    data.ema50 ?? null,
-    data.ema200 ?? null,
-    data.support ?? null,
-    data.resistance ?? null,
-    data.trend || null,
-    data.trend_1h || null,
-    data.trend_4h || null,
-    data.direction || null,
-    data.trigger || null,
-    data.strength || null,
-    data.timestamp || nowIso,
-    rawSignal,
-    nowIso,
-    nowIso
-  ).run();
+  // Use UPDATE first, INSERT only if no existing row for this symbol+timeframe.
+  // D1 has no UNIQUE constraint on snapshots(symbol) so ON CONFLICT would fail.
+  const existing = await env.DB.prepare(
+    `SELECT id FROM snapshots WHERE symbol = ? AND timeframe = ? ORDER BY created_at DESC LIMIT 1`
+  ).bind(symbol, tf).first();
+
+  if (existing) {
+    await env.DB.prepare(`
+      UPDATE snapshots SET
+        price = ?, rsi = ?, ema50 = ?, ema200 = ?,
+        support = ?, resistance = ?, trend = ?, trend_1h = ?, trend_4h = ?,
+        direction = ?, trigger = ?, strength = ?, timestamp = ?,
+        raw_signal = ?, updated_at = ?
+      WHERE id = ?
+    `).bind(
+      data.price || 0, data.rsi ?? null, data.ema50 ?? null, data.ema200 ?? null,
+      data.support ?? null, data.resistance ?? null, data.trend || null,
+      data.trend_1h || null, data.trend_4h || null,
+      data.direction || null, data.trigger || null, data.strength || null,
+      data.timestamp || nowIso, rawSignal, nowIso,
+      existing.id
+    ).run();
+  } else {
+    await env.DB.prepare(`
+      INSERT INTO snapshots (
+        symbol, timeframe, price, rsi, ema50, ema200,
+        support, resistance, trend, trend_1h, trend_4h,
+        direction, trigger, strength, timestamp, raw_signal, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      symbol, tf,
+      data.price || 0, data.rsi ?? null, data.ema50 ?? null, data.ema200 ?? null,
+      data.support ?? null, data.resistance ?? null, data.trend || null,
+      data.trend_1h || null, data.trend_4h || null,
+      data.direction || null, data.trigger || null, data.strength || null,
+      data.timestamp || nowIso, rawSignal, nowIso, nowIso
+    ).run();
+  }
 
   if (data.price && data.symbol) {
     await checkPracticeTrades(env, data.symbol, data.price);
@@ -1733,6 +1835,99 @@ async function getUsers(env) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// 3H PROFIT-CLOSE (cron every 3h)
+// Offene Trades die ≥ 3h alt sind: wenn im Profit → schließen;
+// wenn nicht → offen lassen und beim nächsten 3h-Check erneut prüfen.
+// ═══════════════════════════════════════════════════════════════
+
+async function check3hProfitClose(env) {
+  const THREE_H_MS  = 3 * 60 * 60 * 1000;
+  const cutoff      = Date.now() - THREE_H_MS;
+  const results     = [];
+
+  try {
+    const open = await env.DB.prepare(`
+      SELECT * FROM signals
+      WHERE outcome = 'OPEN' AND created_at <= ?
+      ORDER BY created_at ASC
+    `).bind(cutoff).all();
+
+    console.log(`⏳ 3h profit-check: ${(open.results || []).length} offene Trades ≥ 3h`);
+
+    for (const signal of (open.results || [])) {
+      const currentPrice = await getLivePrice(env, signal.symbol);
+      if (!currentPrice) {
+        results.push({ id: signal.id, status: 'no_price' });
+        continue;
+      }
+
+      const isLong    = signal.direction === 'LONG';
+      const entryPrice = parseFloat(signal.ai_entry || signal.price || 0);
+      if (!entryPrice) { results.push({ id: signal.id, status: 'no_entry' }); continue; }
+
+      const inProfit  = isLong ? currentPrice > entryPrice : currentPrice < entryPrice;
+
+      if (inProfit) {
+        const pnlPct  = isLong
+          ? ((currentPrice - entryPrice) / entryPrice) * 100
+          : ((entryPrice - currentPrice) / entryPrice) * 100;
+        const now     = Date.now();
+        const duration = formatDuration(now - (signal.created_at || now));
+
+        await env.DB.prepare(`
+          UPDATE signals SET
+            outcome = 'WIN', exit_price = ?, pnl_pct = ?,
+            closed_at = ?, updated_at = ?,
+            outcome_source = '3H_PROFIT_CLOSE'
+          WHERE id = ?
+        `).bind(currentPrice, parseFloat(pnlPct.toFixed(2)), now, now, signal.id).run();
+
+        await sendTelegramMessage(env,
+          `⏱️ <b>3H-PROFIT-CLOSE — ${signal.symbol} ${signal.direction}</b>\n\n` +
+          `✅ Im Profit nach ${duration} geschlossen\n` +
+          `Entry: $${entryPrice.toFixed(2)} · Exit: $${currentPrice.toFixed(2)}\n` +
+          `PnL: <b>+${pnlPct.toFixed(2)}%</b>\n\n` +
+          `<i>Automatisch geschlossen nach 3h-Profit-Check</i>`
+        );
+
+        console.log(`✅ 3h-Profit-Close: ${signal.id} | ${signal.symbol} | +${pnlPct.toFixed(2)}%`);
+        results.push({ id: signal.id, status: 'closed_profit', pnlPct: pnlPct.toFixed(2), symbol: signal.symbol });
+      } else {
+        results.push({ id: signal.id, status: 'open_no_profit', symbol: signal.symbol });
+        console.log(`⏳ 3h-Check: ${signal.id} | ${signal.symbol} – noch nicht im Profit, weiter offen`);
+      }
+    }
+
+    // Also check practice trades ≥ 3h
+    const openPT = await env.DB.prepare(`
+      SELECT * FROM practice_trades
+      WHERE status = 'OPEN' AND created_at <= ?
+    `).bind(new Date(cutoff).toISOString()).all();
+
+    for (const pt of (openPT.results || [])) {
+      const currentPrice = await getLivePrice(env, pt.symbol);
+      if (!currentPrice) continue;
+      const isLong   = pt.direction === 'LONG';
+      const inProfit = isLong ? currentPrice > pt.entry_price : currentPrice < pt.entry_price;
+      if (inProfit) {
+        const resultPct = isLong
+          ? ((currentPrice - pt.entry_price) / pt.entry_price) * 100
+          : ((pt.entry_price - currentPrice) / pt.entry_price) * 100;
+        await env.DB.prepare(`
+          UPDATE practice_trades
+          SET status = 'WIN', exit_price = ?, result_pct = ?, closed_at = ?
+          WHERE id = ?
+        `).bind(currentPrice, parseFloat(resultPct.toFixed(2)), new Date().toISOString(), pt.id).run();
+      }
+    }
+  } catch (err) {
+    console.error('❌ check3hProfitClose error:', err.message);
+  }
+  return results;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // AUTO-EVALUATION (cron)
 // ═══════════════════════════════════════════════════════════════
 
@@ -2308,6 +2503,21 @@ export default {
         } catch (e) {
           console.error('❌ /admin/test-webhook failed:', e?.message || e);
           return jsonResponse({ ok: false, error: e.message || 'test-webhook failed' }, 200);
+        }
+      }
+
+      // ── 3H PROFIT-CLOSE (manual trigger) ────────────────────────
+      if (request.method === "POST" && url.pathname === "/admin/check-3h-profit") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const results  = await check3hProfitClose(env);
+          const closed   = results.filter(r => r.status === 'closed_profit').length;
+          const open     = results.filter(r => r.status === 'open_no_profit').length;
+          const noPrice  = results.filter(r => r.status === 'no_price').length;
+          return jsonResponse({ success: true, checked: results.length, closed_profit: closed, still_open: open, no_price: noPrice, results });
+        } catch (e) {
+          return jsonResponse({ success: false, error: e.message }, 500);
         }
       }
 
@@ -3054,12 +3264,14 @@ export default {
 
           return jsonResponse({ success: true, type: eventType, message: 'Unsupported event_type accepted' });
         } catch (processingErr) {
-          console.error('❌ Webhook processing error:', processingErr?.message || processingErr);
+          const errMsg = processingErr?.message || String(processingErr);
+          console.error('❌ Webhook processing error:', errMsg, processingErr?.stack);
           return jsonResponse({
-            success: true,
+            success: false,
             type: eventType,
-            message: 'Accepted with processing error (logged)'
-          });
+            error: errMsg,
+            message: 'Processing failed — signal NOT saved. Check Worker logs.'
+          }, 500);
         }
       }
 
@@ -3088,7 +3300,16 @@ export default {
 
   async scheduled(event, env, ctx) {
     console.log('⏰ Cron triggered:', event.cron);
-    await evaluateOpenTrades(env);
+
+    // Every 3h: close open trades that are in profit
+    if (event.cron === "0 */3 * * *" || event.cron === "0 */4 * * *") {
+      await check3hProfitClose(env);
+    }
+
+    // Every 4h: evaluate TP/SL hits
+    if (event.cron === "0 */4 * * *") {
+      await evaluateOpenTrades(env);
+    }
 
     // Re-evaluate open practice trades with latest snapshot prices
     try {
