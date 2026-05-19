@@ -9,13 +9,72 @@ const API_URL = 'https://tradingview-bot.spnn08.workers.dev';
 // ─── Strategy config metadata (mirrors worker.js) ─────────────
 
 const RULE_META = {
-  rsi:                { label: 'RSI',                desc: 'Prüft, ob Momentum zur Richtung passt und ob der Markt überkauft/überverkauft ist. Bei LONG: RSI > 40 bevorzugt. Bei SHORT: RSI < 60 bevorzugt.',                maxW: 30 },
-  ema:                { label: 'EMA 50/200',          desc: 'Bewertet, ob Preis und Trend über/unter den wichtigen EMAs liegen. EMA-Kreuzungen werden als Trendsignal gewertet.',                                           maxW: 30 },
-  trend:              { label: 'Trend-Label',         desc: 'Prüft, ob das BULLISH/BEARISH-Label mit der Trade-Richtung übereinstimmt. Gegenläufige Trades erhalten Abzüge.',                                               maxW: 30 },
-  wave_bias:          { label: 'Wave Bias',           desc: 'Bewertet, ob der Tagesbias aus der Morgenroutine mit der Signal-Richtung übereinstimmt (LONG/SHORT).',                                                         maxW: 20 },
-  support_resistance: { label: 'Support/Resistance',  desc: 'Prüft Nähe zu wichtigen S/R-Zonen. Entries in der Nähe von Zonen erhalten Bonus-Punkte.',                                                                      maxW: 30 },
-  timeframe:          { label: 'Timeframe',           desc: 'Bewertet den Zeitrahmen des Signals. Höhere Zeitrahmen (4H, 1D) erhalten mehr Gewichtung als niedrige (1M, 5M).',                                             maxW: 20 },
-  confidence:         { label: 'Confidence',          desc: 'Wertet die vom Sender gelieferte Signal-Konfidenz aus. Höhere Konfidenz erhöht den Score, niedrige reduziert ihn.',                                            maxW: 20 },
+  rsi: {
+    label: 'RSI',
+    desc: 'Prüft, ob Momentum zur Richtung passt und ob der Markt überkauft/überverkauft ist.',
+    tooltip: 'RSI (Relative Strength Index) misst die Kursdynamik zwischen 0–100. Überverkauft (<lowerBound) = potenzielle LONG-Chance (Setup A). Überkauft (>upperBound) = potenzielle SHORT-Chance.',
+    maxW: 30,
+    params: {
+      lowerBound:          { label: 'Überverkauft-Grenze',         default: 30, min: 10, max: 50, desc: 'RSI unter diesem Wert = überverkauft → Setup A LONG-Chance' },
+      upperBound:          { label: 'Überkauft-Grenze',            default: 70, min: 50, max: 90, desc: 'RSI über diesem Wert = überkauft → Setup A SHORT-Chance' },
+      longPreferredAbove:  { label: 'LONG bevorzugt ab RSI ≥',     default: 40, min: 20, max: 65, desc: 'LONG-Trades erzielen Teilpunkte ab diesem RSI-Wert aufwärts' },
+      shortPreferredBelow: { label: 'SHORT bevorzugt unter RSI ≤', default: 60, min: 35, max: 80, desc: 'SHORT-Trades erzielen Teilpunkte unter diesem RSI-Wert' },
+    }
+  },
+  ema: {
+    label: 'EMA 50/200',
+    desc: 'Bewertet, ob Preis und Trend über/unter den wichtigen EMAs liegen. EMA-Kreuzungen werden als Trendsignal gewertet.',
+    tooltip: 'EMA50 = kurzfristiger Trend, EMA200 = langfristiger Trend. EMA50 > EMA200 = bullish. Preis direkt am EMA200 (<0.5% Abstand) gilt als Ausschlusskriterium (zu unsicher).',
+    maxW: 30,
+    params: null
+  },
+  trend: {
+    label: 'Trend-Label',
+    desc: 'Prüft, ob das BULLISH/BEARISH-Label mit der Trade-Richtung übereinstimmt. Gegenläufige Trades erhalten Abzüge.',
+    tooltip: 'Das Trend-Label kommt direkt aus TradingView (BULLISH/BEARISH). Passt es zur Trade-Richtung, erhält das Signal volle Punkte. Gegenläufig = Abzug.',
+    maxW: 30,
+    params: null
+  },
+  wave_bias: {
+    label: 'Wave Bias',
+    desc: 'Bewertet, ob der Tagesbias aus der Morgenroutine mit der Signal-Richtung übereinstimmt (LONG/SHORT).',
+    tooltip: 'Der Wave Bias wird täglich in der Morgenroutine festgelegt. Stimmt ein Signal damit überein, erhält es Bonus-Punkte. NEUTRAL = kein Abzug, aber auch kein Bonus.',
+    maxW: 20,
+    params: null
+  },
+  support_resistance: {
+    label: 'Support/Resistance',
+    desc: 'Prüft Nähe zu wichtigen S/R-Zonen. Entries in der Nähe von Zonen erhalten Bonus-Punkte.',
+    tooltip: 'Support = Kaufzone (Preis springt hoch), Resistance = Verkaufszone (Preis dreht ab). Ein Entry nahe dieser Zonen bietet statistisch günstigeres Risiko/Ertrag-Verhältnis.',
+    maxW: 30,
+    params: null
+  },
+  timeframe: {
+    label: 'Timeframe',
+    desc: 'Bewertet den Zeitrahmen des Signals. Höhere Zeitrahmen (4H, 1D) erhalten mehr Gewichtung als niedrige (1M, 5M).',
+    tooltip: 'Signale auf höheren Zeitrahmen haben weniger Rauschen und mehr Zuverlässigkeit. 15min = guter Einstiegs-TF, 5min = nur mit Kontext aus höheren Zeitrahmen sinnvoll.',
+    maxW: 20,
+    params: null
+  },
+  confidence: {
+    label: 'Confidence',
+    desc: 'Wertet die vom Sender gelieferte Signal-Konfidenz aus. Höhere Konfidenz erhöht den Score, niedrige reduziert ihn.',
+    tooltip: 'Die Konfidenz wird von TradingView oder der AI-Analyse mitgesendet. HIGH = voller Gewichtungsbeitrag, MEDIUM = 50%, LOW = 0 Punkte.',
+    maxW: 20,
+    params: null
+  },
+  session_filter: {
+    label: 'Session-Filter',
+    desc: 'Bewertet, ob das Signal während einer liquiden Handelssession (London/US-Open) eingeht.',
+    tooltip: 'London-Session 07:00–10:00 UTC und US-Open 13:30–16:00 UTC sind die liquidesten Phasen des Tages. Signale in diesen Fenstern erhalten Bonus-Punkte für bessere Ausführbarkeit.',
+    maxW: 10,
+    params: null
+  },
+};
+
+const DEFAULT_RULE_WEIGHTS = {
+  rsi: 18, ema: 15, trend: 10, wave_bias: 8,
+  support_resistance: 10, timeframe: 7, confidence: 7, session_filter: 5
 };
 
 const LOSS_REASONS = [
@@ -856,16 +915,38 @@ function RuleFrequencyTab({ sessionId }) {
 
 // ─── Strategy Lab Tab ──────────────────────────────────────────
 
+function TooltipInfo({ text }) {
+  const [show, setShow] = React.useState(false);
+  return (
+    <div style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
+      <button
+        onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}
+        onClick={e => { e.stopPropagation(); setShow(s => !s); }}
+        style={{ width: 18, height: 18, borderRadius: '50%', border: '1px solid var(--border)', background: 'var(--bg-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, flexShrink: 0, padding: 0 }}>
+        ?
+      </button>
+      {show && (
+        <div style={{ position: 'absolute', top: 24, right: 0, zIndex: 200, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px', fontSize: 12, color: 'var(--text-secondary)', maxWidth: 280, lineHeight: 1.55, boxShadow: '0 8px 24px rgba(0,0,0,0.35)', whiteSpace: 'normal' }}>
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StrategyLabTab({ sessionId, userRole }) {
-  const [strategies, setStrategies]   = useState([]);
-  const [selected,   setSelected]     = useState(null);
-  const [editCfg,    setEditCfg]      = useState(null);
-  const [loading,    setLoading]      = useState(true);
-  const [saving,     setSaving]       = useState(false);
-  const [newName,    setNewName]      = useState('');
-  const [newVersion, setNewVersion]   = useState('');
-  const [toast,      setToast]        = useState(null);
-  const [resetDlg,   setResetDlg]    = useState(false);
+  const [strategies,     setStrategies]     = useState([]);
+  const [selected,       setSelected]       = useState(null);
+  const [editCfg,        setEditCfg]        = useState(null);
+  const [loading,        setLoading]        = useState(true);
+  const [saving,         setSaving]         = useState(false);
+  const [newName,        setNewName]        = useState('');
+  const [newVersion,     setNewVersion]     = useState('');
+  const [toast,          setToast]          = useState(null);
+  const [resetDlg,       setResetDlg]      = useState(false);
+  const [createCopyDlg,  setCreateCopyDlg]  = useState(false);
+  const [copyName,       setCopyName]       = useState('');
+  const [copyVersion,    setCopyVersion]    = useState('');
   const isAdmin = userRole === 'admin';
 
   useEffect(() => { load(); }, []);
@@ -899,6 +980,12 @@ function StrategyLabTab({ sessionId, userRole }) {
   const updateRule = (key, field, value) =>
     setEditCfg(prev => ({ ...prev, rules: { ...prev.rules, [key]: { ...prev.rules?.[key], [field]: value } } }));
 
+  const updateRuleParam = (key, paramKey, value) =>
+    setEditCfg(prev => ({
+      ...prev,
+      rules: { ...prev.rules, [key]: { ...prev.rules?.[key], params: { ...prev.rules?.[key]?.params, [paramKey]: value } } }
+    }));
+
   const updateThreshold = (key, value) =>
     setEditCfg(prev => ({ ...prev, thresholds: { ...prev.thresholds, [key]: value } }));
 
@@ -909,10 +996,32 @@ function StrategyLabTab({ sessionId, userRole }) {
       const res = await fetch(`${API_URL}/strategies`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
-        body: JSON.stringify({ name: newName.trim(), version: newVersion.trim() || 'v1.0', config: editCfg })
+        body: JSON.stringify({ name: newName.trim(), version: newVersion.trim() || 'v2.1', config: editCfg })
       });
       if (res.ok) { showToast('Strategie gespeichert'); setNewName(''); setNewVersion(''); await load(); }
       else { const e = await res.json(); showToast(e.error || 'Fehler', 'error'); }
+    } catch (e) { showToast(e.message, 'error'); } finally { setSaving(false); }
+  };
+
+  const createCopy = async () => {
+    if (!copyName.trim()) return showToast('Bitte Namen eingeben', 'error');
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/strategies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+        body: JSON.stringify({ name: copyName.trim(), version: copyVersion.trim() || 'v2.1', config: editCfg })
+      });
+      if (res.ok) {
+        showToast('Neue Strategie-Version erstellt');
+        setCreateCopyDlg(false);
+        setCopyName('');
+        setCopyVersion('');
+        const data = await (await fetch(`${API_URL}/strategies`, { headers: { 'X-Session-ID': sessionId } })).json();
+        setStrategies(data);
+        const newest = data.find(s => s.name === copyName.trim()) || data[data.length - 1];
+        if (newest) selectStrategy(newest);
+      } else { const e = await res.json(); showToast(e.error || 'Fehler', 'error'); }
     } catch (e) { showToast(e.message, 'error'); } finally { setSaving(false); }
   };
 
@@ -966,6 +1075,35 @@ function StrategyLabTab({ sessionId, userRole }) {
         </div>
       )}
 
+      {createCopyDlg && (
+        <div className="modal-overlay" onClick={() => setCreateCopyDlg(false)}>
+          <div className="modal-box" style={{ maxWidth: 440 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-head"><h3>Neue Strategie-Version erstellen</h3></div>
+            <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, margin: 0 }}>
+                Erstellt eine editierbare Kopie der aktuellen Standard-Konfiguration. Du kannst sie anschließend frei anpassen und aktivieren.
+              </p>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 500, marginBottom: 6, display: 'block' }}>Name</label>
+                <input className="input" value={copyName} onChange={e => setCopyName(e.target.value)}
+                  placeholder="Meine Strategie v2" style={{ width: '100%' }} autoFocus/>
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 500, marginBottom: 6, display: 'block' }}>Version</label>
+                <input className="input" value={copyVersion} onChange={e => setCopyVersion(e.target.value)}
+                  placeholder="v2.1" style={{ width: 120 }}/>
+              </div>
+            </div>
+            <div className="modal-foot">
+              <button className="btn btn-ghost" onClick={() => setCreateCopyDlg(false)}>Abbrechen</button>
+              <button className="btn btn-primary" onClick={createCopy} disabled={saving || !copyName.trim()}>
+                {saving ? <div className="spinner-sm"/> : 'Erstellen & bearbeiten'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 16, alignItems: 'start' }}>
 
         {/* Strategy list */}
@@ -995,6 +1133,7 @@ function StrategyLabTab({ sessionId, userRole }) {
         {selected && editCfg ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
+            {/* Header card */}
             <div className="card">
               <div className="card-head">
                 <div>
@@ -1008,49 +1147,99 @@ function StrategyLabTab({ sessionId, userRole }) {
                 </div>
               </div>
               {selected.protected && (
-                <div style={{ margin: '0 20px 16px', padding: '10px 14px', background: 'var(--bg-warning)', borderRadius: 10, fontSize: 13, color: 'var(--wait)' }}>
-                  Standardstrategie — Regeln sind schreibgeschützt. Erstelle eine neue Version um Änderungen vorzunehmen.
+                <div style={{ margin: '0 20px 16px', padding: '14px 16px', background: 'rgba(59,130,246,0.06)', borderRadius: 10, border: '1px solid rgba(59,130,246,0.18)', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 3 }}>WAVESCOUT Standard — Schreibgeschützt</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.4 }}>Diese Strategie ist schreibgeschützt. Erstelle eine eigene Version um Gewichtungen und Parameter anzupassen.</div>
+                  </div>
+                  {isAdmin && (
+                    <button className="btn btn-primary btn-sm" onClick={() => { setCopyName(selected.name + ' — Meine Version'); setCopyVersion('v2.1'); setCreateCopyDlg(true); }}>
+                      Neue Strategie-Version erstellen
+                    </button>
+                  )}
                 </div>
               )}
             </div>
 
+            {/* Rules & Weights card — two-section layout per rule */}
             <div className="card">
               <div className="card-head"><Icon name="book" className="ico"/><h3>Regeln & Gewichtungen</h3></div>
-              <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+              <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 {Object.entries(RULE_META).map(([key, meta]) => {
-                  const rule     = editCfg.rules?.[key] || { enabled: true, weight: 10 };
-                  const disabled = !!selected.protected;
+                  const rule          = editCfg.rules?.[key] || { enabled: true, weight: DEFAULT_RULE_WEIGHTS[key] || 10 };
+                  const disabled      = !!selected.protected;
+                  const defWeight     = DEFAULT_RULE_WEIGHTS[key] || 10;
+                  const weightChanged = rule.weight !== defWeight;
                   return (
-                    <div key={key} style={{ padding: '14px 0', borderBottom: '1px solid var(--border)' }}>
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
-                        <div style={{ flex: 1, minWidth: 200 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: rule.enabled ? 'var(--text-primary)' : 'var(--text-quaternary)', marginBottom: 4 }}>{meta.label}</div>
-                          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{meta.desc}</div>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, paddingTop: 2 }}>
-                          {rule.enabled && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div key={key} style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', opacity: rule.enabled ? 1 : 0.5, transition: 'opacity 0.2s' }}>
+                      {/* Rule header: name + tooltip + toggle */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 16px', background: 'var(--bg-3)', borderBottom: rule.enabled ? '1px solid var(--border)' : 'none' }}>
+                        <span style={{ flex: 1, fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{meta.label}</span>
+                        <TooltipInfo text={meta.tooltip}/>
+                        <Toggle on={!!rule.enabled} onChange={v => updateRule(key, 'enabled', v)} disabled={disabled}/>
+                      </div>
+
+                      {rule.enabled && (
+                        <>
+                          {/* Section A: Conditions & Parameters */}
+                          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--bg-1)' }}>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--blue-400)', textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: 7 }}>A · Bedingungen & Parameter</div>
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.55, marginBottom: meta.params ? 12 : 0 }}>{meta.desc}</div>
+                            {meta.params && (
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
+                                {Object.entries(meta.params).map(([pk, pmeta]) => {
+                                  const pVal     = rule.params?.[pk] ?? pmeta.default;
+                                  const pChanged = pVal !== pmeta.default;
+                                  return (
+                                    <div key={pk} style={{ background: 'var(--bg-3)', borderRadius: 9, padding: '10px 12px', border: `1px solid ${pChanged ? 'rgba(245,158,11,0.25)' : 'var(--border)'}` }}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 3, gap: 6 }}>
+                                        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', lineHeight: 1.3 }}>{pmeta.label}</span>
+                                        {pChanged && <span style={{ fontSize: 10, color: 'var(--wait)', background: 'rgba(245,158,11,0.12)', padding: '1px 5px', borderRadius: 4, flexShrink: 0 }}>Standard: {pmeta.default}</span>}
+                                      </div>
+                                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 8, lineHeight: 1.4 }}>{pmeta.desc}</div>
+                                      <input type="number" min={pmeta.min} max={pmeta.max} value={pVal} disabled={disabled}
+                                        onChange={e => {
+                                          const v = Math.max(pmeta.min, Math.min(pmeta.max, parseInt(e.target.value) || pmeta.default));
+                                          updateRuleParam(key, pk, v);
+                                        }}
+                                        className="input"
+                                        style={{ width: '100%', textAlign: 'center', padding: '6px 8px', fontSize: 16, fontWeight: 700, color: 'var(--blue-400)', cursor: disabled ? 'not-allowed' : 'auto' }}/>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Section B: Weight & Score influence */}
+                          <div style={{ padding: '12px 16px', background: 'var(--bg-1)' }}>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: 9 }}>B · Gewichtung & Score-Einfluss</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                               <input type="range" min={0} max={meta.maxW} step={1} value={rule.weight} disabled={disabled}
                                 onChange={e => updateRule(key, 'weight', parseInt(e.target.value))}
-                                style={{ width: 180, accentColor: 'var(--blue-500)', cursor: disabled ? 'not-allowed' : 'pointer' }}/>
+                                style={{ flex: 1, accentColor: 'var(--blue-500)', cursor: disabled ? 'not-allowed' : 'pointer' }}/>
                               <input type="number" min={0} max={meta.maxW} value={rule.weight} disabled={disabled}
                                 onChange={e => {
                                   const v = Math.max(0, Math.min(meta.maxW, parseInt(e.target.value) || 0));
                                   updateRule(key, 'weight', v);
                                 }}
                                 className="input"
-                                style={{ width: 56, textAlign: 'center', padding: '4px 6px', fontSize: 13, fontWeight: 700, color: 'var(--blue-400)' }}/>
+                                style={{ width: 56, textAlign: 'center', padding: '4px 6px', fontSize: 14, fontWeight: 700, color: 'var(--blue-400)', cursor: disabled ? 'not-allowed' : 'auto' }}/>
                             </div>
-                          )}
-                          <Toggle on={!!rule.enabled} onChange={v => updateRule(key, 'enabled', v)} disabled={disabled}/>
-                        </div>
-                      </div>
+                            <div style={{ marginTop: 7, fontSize: 12, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <span>Aktuell kann diese Regel bis zu <strong style={{ color: 'var(--blue-400)' }}>{rule.weight} Punkte</strong> beitragen (max. {meta.maxW})</span>
+                              {weightChanged && <span style={{ fontSize: 11, color: 'var(--wait)', background: 'rgba(245,158,11,0.12)', padding: '1px 6px', borderRadius: 4 }}>Standard: {defWeight}</span>}
+                            </div>
+                          </div>
+                        </>
+                      )}
                     </div>
                   );
                 })}
               </div>
             </div>
 
+            {/* Score thresholds */}
             <div className="card">
               <div className="card-head"><Icon name="settings" className="ico"/><h3>Score-Schwellen</h3></div>
               <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
@@ -1058,8 +1247,9 @@ function StrategyLabTab({ sessionId, userRole }) {
                   { key: 'min_trade_score',    label: 'Min. Trade Score',    desc: 'Ab diesem Score gilt ein Signal als handelsbar und wird empfohlen. Signale darunter werden als WAIT markiert.',   min: 50, max: 90, def: 70 },
                   { key: 'min_telegram_score', label: 'Min. Telegram Score', desc: 'Ab diesem Score wird eine Telegram-Benachrichtigung gesendet. Kann niedriger als Trade Score gesetzt werden.',     min: 30, max: 80, def: 55 },
                 ].map(({ key, label, desc, min, max, def }) => {
-                  const val = editCfg.thresholds?.[key] ?? def;
+                  const val      = editCfg.thresholds?.[key] ?? def;
                   const disabled = !!selected.protected;
+                  const changed  = val !== def;
                   return (
                     <div key={key} style={{ padding: '14px 0', borderBottom: '1px solid var(--border)' }}>
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
@@ -1067,17 +1257,20 @@ function StrategyLabTab({ sessionId, userRole }) {
                           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{label}</div>
                           <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{desc}</div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, paddingTop: 2 }}>
-                          <input type="range" min={min} max={max} step={1} value={val} disabled={disabled}
-                            onChange={e => updateThreshold(key, parseInt(e.target.value))}
-                            style={{ width: 180, accentColor: 'var(--blue-500)', cursor: disabled ? 'not-allowed' : 'pointer' }}/>
-                          <input type="number" min={min} max={max} value={val} disabled={disabled}
-                            onChange={e => {
-                              const v = Math.max(min, Math.min(max, parseInt(e.target.value) || min));
-                              updateThreshold(key, v);
-                            }}
-                            className="input"
-                            style={{ width: 56, textAlign: 'center', padding: '4px 6px', fontSize: 13, fontWeight: 700, color: 'var(--blue-400)' }}/>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0, paddingTop: 2 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <input type="range" min={min} max={max} step={1} value={val} disabled={disabled}
+                              onChange={e => updateThreshold(key, parseInt(e.target.value))}
+                              style={{ width: 160, accentColor: 'var(--blue-500)', cursor: disabled ? 'not-allowed' : 'pointer' }}/>
+                            <input type="number" min={min} max={max} value={val} disabled={disabled}
+                              onChange={e => {
+                                const v = Math.max(min, Math.min(max, parseInt(e.target.value) || min));
+                                updateThreshold(key, v);
+                              }}
+                              className="input"
+                              style={{ width: 56, textAlign: 'center', padding: '4px 6px', fontSize: 13, fontWeight: 700, color: 'var(--blue-400)' }}/>
+                          </div>
+                          {changed && <span style={{ fontSize: 11, color: 'var(--wait)', background: 'rgba(245,158,11,0.12)', padding: '1px 6px', borderRadius: 4 }}>Standard: {def}</span>}
                         </div>
                       </div>
                     </div>
@@ -1086,12 +1279,13 @@ function StrategyLabTab({ sessionId, userRole }) {
               </div>
             </div>
 
-            {isAdmin && (
+            {/* Save as new version (non-protected strategies) */}
+            {isAdmin && !selected.protected && (
               <div className="card">
                 <div className="card-head"><Icon name="plus" className="ico"/><h3>Als neue Version speichern</h3></div>
                 <div className="card-body">
                   <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
-                    Erstellt eine neue Strategie-Version mit den aktuell eingestellten Regeln und Gewichtungen.
+                    Erstellt eine neue Strategie-Version mit den aktuell eingestellten Regeln, Gewichtungen und Parametern.
                   </p>
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                     <div>
@@ -1102,7 +1296,7 @@ function StrategyLabTab({ sessionId, userRole }) {
                     <div>
                       <label style={{ fontSize: 12, fontWeight: 500, marginBottom: 6, display: 'block' }}>Version</label>
                       <input className="input" value={newVersion} onChange={e => setNewVersion(e.target.value)}
-                        placeholder="v1.1" style={{ width: 80 }}/>
+                        placeholder="v2.1" style={{ width: 80 }}/>
                     </div>
                     <button className="btn btn-primary" onClick={saveNewVersion} disabled={saving || !newName.trim()}>
                       {saving ? <div className="spinner-sm"/> : 'Speichern'}
