@@ -317,8 +317,12 @@ function analyzeWithRules(signal, strategyConfig = null) {
   const score_breakdown = {};
 
   // ── RSI (v2.0: Setup A = Pullback, Setup B = Continuation) ────
-  // Setup A: we buy the oversold pullback (RSI low = good for LONG)
-  // Setup B: we trade momentum continuation (RSI in trend-range 45-65 = good, extreme = bad)
+  // RSI thresholds are configurable via strategy params
+  const rsiParams         = cfg.rules?.rsi?.params || {};
+  const rsiLower          = rsiParams.lowerBound          ?? 30; // oversold threshold (Setup A LONG)
+  const rsiUpper          = rsiParams.upperBound          ?? 70; // overbought threshold (Setup A SHORT)
+  const rsiLongMin        = rsiParams.longPreferredAbove  ?? 40; // LONG partial score above this
+  const rsiShortMax       = rsiParams.shortPreferredBelow ?? 60; // SHORT partial score below this
   const rsi = signal.rsi != null ? parseFloat(signal.rsi) : null;
   if (rW > 0) {
     if (rsi == null) {
@@ -326,7 +330,7 @@ function analyzeWithRules(signal, strategyConfig = null) {
       score_breakdown.rsi = 0;
     } else {
       let rsiDelta = 0;
-      // Extreme RSI is always an exclusion signal (>75 or <25 → reversal likely)
+      // Extreme RSI (>75 or <25) always signals reversal risk — not configurable
       if (rsi > 75) {
         if (isLong)  { rsiDelta = -rW; failed_rules.push(`RSI extrem überkauft (${rsi.toFixed(0)}) – Reversal-Risiko, kein LONG`); }
         if (isShort && !isSetupB) { rsiDelta = Math.round(rW * 0.5); matched_rules.push(`RSI extrem überkauft (${rsi.toFixed(0)}) – Setup A SHORT`); }
@@ -336,34 +340,36 @@ function analyzeWithRules(signal, strategyConfig = null) {
         if (isLong && !isSetupB)  { rsiDelta = Math.round(rW * 0.5); matched_rules.push(`RSI extrem überverkauft (${rsi.toFixed(0)}) – Setup A LONG`); }
         if (isLong && isSetupB)   { rsiDelta = -Math.round(rW * 0.5); failed_rules.push(`RSI extrem überverkauft (${rsi.toFixed(0)}) – kein Continuation`); }
       } else if (isSetupB) {
-        // Setup B: RSI in trend range (45-65 for LONG, 35-55 for SHORT) = desired
+        // Setup B: RSI in trend range = desired
+        const longB_lo = rsiLongMin + 5, longB_hi = rsiUpper - 5;
+        const shortB_lo = rsiLower + 5, shortB_hi = rsiShortMax - 5;
         if (isLong) {
-          if      (rsi >= 45 && rsi <= 65) { rsiDelta = rW;                    matched_rules.push(`RSI ${rsi.toFixed(0)} im Trend-Bereich (45-65) – Setup B LONG`); }
-          else if (rsi >= 40 && rsi < 45)  { rsiDelta = Math.round(rW * 0.4);  matched_rules.push(`RSI ${rsi.toFixed(0)} – leicht unter Trend-Bereich`); }
-          else if (rsi > 65 && rsi <= 75)  { rsiDelta = Math.round(rW * 0.4);  matched_rules.push(`RSI ${rsi.toFixed(0)} – Stärke passt zu Setup B LONG`); }
-          else                             { rsiDelta = -Math.round(rW * 0.3); failed_rules.push(`RSI ${rsi.toFixed(0)} – außerhalb Setup B Bereich`); }
+          if      (rsi >= longB_lo && rsi <= longB_hi) { rsiDelta = rW;                    matched_rules.push(`RSI ${rsi.toFixed(0)} im Trend-Bereich (${longB_lo}-${longB_hi}) – Setup B LONG`); }
+          else if (rsi >= rsiLongMin && rsi < longB_lo){ rsiDelta = Math.round(rW * 0.4);  matched_rules.push(`RSI ${rsi.toFixed(0)} – leicht unter Trend-Bereich`); }
+          else if (rsi > longB_hi && rsi <= 75)        { rsiDelta = Math.round(rW * 0.4);  matched_rules.push(`RSI ${rsi.toFixed(0)} – Stärke passt zu Setup B LONG`); }
+          else                                         { rsiDelta = -Math.round(rW * 0.3); failed_rules.push(`RSI ${rsi.toFixed(0)} – außerhalb Setup B Bereich`); }
         } else if (isShort) {
-          if      (rsi >= 35 && rsi <= 55) { rsiDelta = rW;                    matched_rules.push(`RSI ${rsi.toFixed(0)} im Trend-Bereich (35-55) – Setup B SHORT`); }
-          else if (rsi > 55 && rsi <= 60)  { rsiDelta = Math.round(rW * 0.4);  matched_rules.push(`RSI ${rsi.toFixed(0)} – leicht über Trend-Bereich`); }
-          else if (rsi >= 25 && rsi < 35)  { rsiDelta = Math.round(rW * 0.4);  matched_rules.push(`RSI ${rsi.toFixed(0)} – Schwäche passt zu Setup B SHORT`); }
-          else                             { rsiDelta = -Math.round(rW * 0.3); failed_rules.push(`RSI ${rsi.toFixed(0)} – außerhalb Setup B Bereich`); }
+          if      (rsi >= shortB_lo && rsi <= shortB_hi){ rsiDelta = rW;                    matched_rules.push(`RSI ${rsi.toFixed(0)} im Trend-Bereich (${shortB_lo}-${shortB_hi}) – Setup B SHORT`); }
+          else if (rsi > shortB_hi && rsi <= rsiShortMax){ rsiDelta = Math.round(rW * 0.4); matched_rules.push(`RSI ${rsi.toFixed(0)} – leicht über Trend-Bereich`); }
+          else if (rsi >= 25 && rsi < shortB_lo)       { rsiDelta = Math.round(rW * 0.4);  matched_rules.push(`RSI ${rsi.toFixed(0)} – Schwäche passt zu Setup B SHORT`); }
+          else                                         { rsiDelta = -Math.round(rW * 0.3); failed_rules.push(`RSI ${rsi.toFixed(0)} – außerhalb Setup B Bereich`); }
         }
       } else {
-        // Setup A (Pullback): standard oversold/overbought logic
+        // Setup A (Pullback): oversold/overbought logic using configurable thresholds
         if (isLong) {
-          if      (rsi < 30) { rsiDelta = rW;                        matched_rules.push(`RSI überverkauft (${rsi.toFixed(0)}) – Pullback günstig für LONG`); }
-          else if (rsi < 40) { rsiDelta = Math.round(rW * 0.56);    matched_rules.push(`RSI niedrig (${rsi.toFixed(0)}) – passt zu Setup A LONG`); }
-          else if (rsi < 50) { rsiDelta = Math.round(rW * 0.22);    matched_rules.push(`RSI neutral-niedrig (${rsi.toFixed(0)})`); }
-          else if (rsi > 70) { rsiDelta = -rW;                       failed_rules.push(`RSI überkauft (${rsi.toFixed(0)}) – kein Pullback-Entry`); }
-          else if (rsi > 60) { rsiDelta = -Math.round(rW * 0.33);   failed_rules.push(`RSI hoch (${rsi.toFixed(0)}) – Vorsicht bei LONG`); }
-          else               {                                        matched_rules.push(`RSI neutral (${rsi.toFixed(0)})`); }
+          if      (rsi < rsiLower)    { rsiDelta = rW;                        matched_rules.push(`RSI überverkauft (${rsi.toFixed(0)}) – Pullback günstig für LONG`); }
+          else if (rsi < rsiLongMin)  { rsiDelta = Math.round(rW * 0.56);    matched_rules.push(`RSI niedrig (${rsi.toFixed(0)}) – passt zu Setup A LONG`); }
+          else if (rsi < 50)          { rsiDelta = Math.round(rW * 0.22);    matched_rules.push(`RSI neutral-niedrig (${rsi.toFixed(0)})`); }
+          else if (rsi > rsiUpper)    { rsiDelta = -rW;                       failed_rules.push(`RSI überkauft (${rsi.toFixed(0)}) – kein Pullback-Entry`); }
+          else if (rsi > rsiShortMax) { rsiDelta = -Math.round(rW * 0.33);   failed_rules.push(`RSI hoch (${rsi.toFixed(0)}) – Vorsicht bei LONG`); }
+          else                        {                                        matched_rules.push(`RSI neutral (${rsi.toFixed(0)})`); }
         } else if (isShort) {
-          if      (rsi > 70) { rsiDelta = rW;                        matched_rules.push(`RSI überkauft (${rsi.toFixed(0)}) – Pullback günstig für SHORT`); }
-          else if (rsi > 60) { rsiDelta = Math.round(rW * 0.56);    matched_rules.push(`RSI hoch (${rsi.toFixed(0)}) – passt zu Setup A SHORT`); }
-          else if (rsi > 50) { rsiDelta = Math.round(rW * 0.22);    matched_rules.push(`RSI neutral-hoch (${rsi.toFixed(0)})`); }
-          else if (rsi < 30) { rsiDelta = -rW;                       failed_rules.push(`RSI überverkauft (${rsi.toFixed(0)}) – kein Pullback-Entry`); }
-          else if (rsi < 40) { rsiDelta = -Math.round(rW * 0.33);   failed_rules.push(`RSI niedrig (${rsi.toFixed(0)}) – Vorsicht bei SHORT`); }
-          else               {                                        matched_rules.push(`RSI neutral (${rsi.toFixed(0)})`); }
+          if      (rsi > rsiUpper)    { rsiDelta = rW;                        matched_rules.push(`RSI überkauft (${rsi.toFixed(0)}) – Pullback günstig für SHORT`); }
+          else if (rsi > rsiShortMax) { rsiDelta = Math.round(rW * 0.56);    matched_rules.push(`RSI hoch (${rsi.toFixed(0)}) – passt zu Setup A SHORT`); }
+          else if (rsi > 50)          { rsiDelta = Math.round(rW * 0.22);    matched_rules.push(`RSI neutral-hoch (${rsi.toFixed(0)})`); }
+          else if (rsi < rsiLower)    { rsiDelta = -rW;                       failed_rules.push(`RSI überverkauft (${rsi.toFixed(0)}) – kein Pullback-Entry`); }
+          else if (rsi < rsiLongMin)  { rsiDelta = -Math.round(rW * 0.33);   failed_rules.push(`RSI niedrig (${rsi.toFixed(0)}) – Vorsicht bei SHORT`); }
+          else                        {                                        matched_rules.push(`RSI neutral (${rsi.toFixed(0)})`); }
         }
       }
       score += rsiDelta;
