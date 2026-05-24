@@ -148,8 +148,30 @@ const DashboardPage = ({ user, navigate }) => {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Signal actions ────────────────────────────────────────────
-  const handleExecuteTrade = (signal) => {
-    showToast(`Trade-Ausführung für ${signal.symbol} ${signal.direction} erfordert Broker-API-Integration.`, 'warn');
+  const handleExecuteTrade = async (signal) => {
+    const MAX_AGE_MS = 2 * 60 * 60 * 1000;
+    const signalAge = Date.now() - new Date(signal.created_at).getTime();
+    if (signalAge > MAX_AGE_MS) {
+      const ageH = Math.floor(signalAge / 3600000);
+      const ageM = Math.floor((signalAge % 3600000) / 60000);
+      showToast(`Signal ist ${ageH}h ${ageM}m alt — zu alt für Demo-Trade (max. 2h).`, 'warn');
+      return;
+    }
+    try {
+      const res = await fetch(`${API_URL}/practice-trades/manual`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+        body: JSON.stringify({ signalId: signal.id })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Fehler beim Erstellen des Demo-Trades', 'error');
+      } else {
+        showToast(`Demo-Trade für ${signal.symbol} ${signal.direction} geöffnet!`, 'success');
+      }
+    } catch (_) {
+      showToast('Netzwerkfehler beim Erstellen des Demo-Trades', 'error');
+    }
   };
 
   const handleSaveToJournal = (signal) => {
@@ -499,9 +521,23 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
             )}
 
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <button className="btn btn-primary" onClick={() => onExecuteTrade(signal)}>
-                <Icon name="bolt" size={14}/> Trade ausführen
-              </button>
+              {(() => {
+                const MAX_AGE_MS = 2 * 60 * 60 * 1000;
+                const signalAge = Date.now() - new Date(signal.created_at).getTime();
+                const tooOld = signalAge > MAX_AGE_MS;
+                const nearLimit = signalAge > 60 * 60 * 1000;
+                return (
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => onExecuteTrade(signal)}
+                    disabled={tooOld}
+                    title={tooOld ? 'Signal zu alt — Demo-Trade nur bis 2h nach Signal möglich' : nearLimit ? 'Achtung: Signal bald zu alt' : ''}
+                    style={nearLimit && !tooOld ? { backgroundColor: 'var(--wait)', borderColor: 'var(--wait)' } : {}}
+                  >
+                    <Icon name="bolt" size={14}/> {tooOld ? 'Zu alt' : 'Demo-Trade'}
+                  </button>
+                );
+              })()}
               <button className="btn" onClick={() => onSaveToJournal(signal)}>
                 <Icon name="book" size={14}/> Journal
               </button>

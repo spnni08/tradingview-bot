@@ -2609,6 +2609,52 @@ export default {
         return jsonResponse({ success: true });
       }
 
+      if (request.method === "POST" && url.pathname === "/practice-trades/manual") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+
+        const { signalId } = await request.json();
+        if (!signalId) return jsonResponse({ error: "signalId erforderlich" }, 400);
+
+        const signal = await env.DB.prepare(`SELECT * FROM signals WHERE id = ?`).bind(signalId).first();
+        if (!signal) return jsonResponse({ error: "Signal nicht gefunden" }, 404);
+
+        const MAX_AGE_MS = 2 * 60 * 60 * 1000;
+        const signalAge = Date.now() - new Date(signal.created_at).getTime();
+        if (signalAge > MAX_AGE_MS) {
+          const ageH = Math.floor(signalAge / 3600000);
+          const ageM = Math.floor((signalAge % 3600000) / 60000);
+          return jsonResponse({ error: `Signal ist ${ageH}h ${ageM}m alt — zu alt für Demo-Trade (max. 2h)` }, 400);
+        }
+
+        if (!signal.ai_entry || !signal.ai_tp || !signal.ai_sl) {
+          return jsonResponse({ error: "Signal hat keine Entry/TP/SL Daten" }, 400);
+        }
+
+        const existingTrade = await env.DB.prepare(`SELECT id FROM practice_trades WHERE signal_id = ?`).bind(signalId).first();
+        if (existingTrade) {
+          return jsonResponse({ error: "Demo-Trade für dieses Signal existiert bereits", tradeId: existingTrade.id }, 409);
+        }
+
+        await env.DB.prepare(`
+          INSERT INTO practice_trades (
+            signal_id, symbol, timeframe, direction,
+            entry_price, take_profit, stop_loss, status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'OPEN', ?)
+        `).bind(
+          signalId,
+          signal.symbol || 'UNKNOWN',
+          String(signal.timeframe || '5'),
+          signal.direction,
+          signal.ai_entry,
+          signal.ai_tp,
+          signal.ai_sl,
+          new Date().toISOString()
+        ).run();
+
+        return jsonResponse({ success: true, message: `Demo-Trade für ${signal.symbol} ${signal.direction} erstellt` });
+      }
+
       if (request.method === "PATCH" && url.pathname.startsWith("/practice-trades/")) {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
