@@ -71,6 +71,27 @@ async function sendTelegramMessage(env, message) {
   }
 }
 
+// Sends to a dedicated alert bot/chat if configured (TELEGRAM_ALERT_BOT_TOKEN +
+// TELEGRAM_ALERT_CHAT_ID), otherwise falls back to the regular bot/chat.
+async function sendAlertMessage(env, message) {
+  const token  = env.TELEGRAM_ALERT_BOT_TOKEN || env.TELEGRAM_BOT_TOKEN;
+  const chatId = env.TELEGRAM_ALERT_CHAT_ID   || env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) return false;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'HTML' })
+    });
+    const result = await res.json();
+    console.log('🚨 Alert sent:', result.ok);
+    return result.ok;
+  } catch (error) {
+    console.error('❌ Alert error:', error);
+    return false;
+  }
+}
+
 async function withTimeout(promise, ms, fallbackValue = null) {
   let timeoutId;
   const timeoutPromise = new Promise(resolve => {
@@ -149,6 +170,29 @@ ${matchedStr}
 ${failedStr}
 
 📋 ${signal.ai_reason || 'Signal von TradingView'}${disclaimer}`.trim();
+}
+
+function formatPriorityAlert(signal) {
+  const sc  = signal.ai_score || 0;
+  const dir = signal.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
+  const fmt = (v) => v != null && !isNaN(v) ? `$${parseFloat(v).toFixed(4)}` : '–';
+  const rrVal = signal.risk_reward;
+  const rrStr = rrVal ? `1:${rrVal.toFixed(1)}` : 'N/A';
+  const stars = sc >= 90 ? '⭐⭐⭐' : '⭐⭐';
+
+  return `🚨🔥 <b>PRIORITY SIGNAL</b> 🔥🚨
+━━━━━━━━━━━━━━━━━━━━━
+${stars} Score: <b>${sc}/100</b> · ${getSignalQuality(sc)}
+<b>${signal.symbol}</b> · ${dir}
+━━━━━━━━━━━━━━━━━━━━━
+💰 Entry: <b>${fmt(signal.ai_entry ?? signal.price)}</b>
+🎯 TP:    <b>${fmt(signal.ai_tp)}</b>
+🛑 SL:    <b>${fmt(signal.ai_sl)}</b>
+⚖️ R:R:   <b>${rrStr}</b>
+━━━━━━━━━━━━━━━━━━━━━
+📋 ${signal.ai_reason || ''}
+
+⚠️ <i>Keine Finanzberatung. Eigenverantwortlich prüfen.</i>`.trim();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1346,6 +1390,23 @@ async function processSignal(env, signal) {
     });
     const sent = await withTimeout(sendTelegramMessage(env, telegramMessage), TELEGRAM_TIMEOUT_MS, false);
     if (sent) telegramSent = 1;
+
+    // Score >= 80: send an additional prominent priority alert via a separate
+    // bot/chat (TELEGRAM_ALERT_BOT_TOKEN / TELEGRAM_ALERT_CHAT_ID) or, if those
+    // aren't configured, as a second message via the regular bot.
+    if (!isTest && analysis.score >= 80) {
+      const alertMsg = formatPriorityAlert({
+        ...signal,
+        direction,
+        ai_score:    analysis.score,
+        ai_entry:    analysis.entry,
+        ai_tp:       analysis.tp,
+        ai_sl:       analysis.sl,
+        ai_reason:   analysis.reason,
+        risk_reward: riskReward,
+      });
+      await withTimeout(sendAlertMessage(env, alertMsg), TELEGRAM_TIMEOUT_MS, false);
+    }
   }
 
   await env.DB.prepare(`
