@@ -26,7 +26,7 @@ const MARKET_RADAR_FEEDS = [
   { name: 'CoinDesk', url: 'https://www.coindesk.com/arc/outboundfeeds/rss/' },
   { name: 'Cointelegraph', url: 'https://cointelegraph.com/rss' },
   { name: 'Decrypt', url: 'https://decrypt.co/feed' },
-  { name: 'Bitcoin Magazine', url: 'https://bitcoinmagazine.com/.rss/full/' },
+  { name: 'Bitcoin Magazine', url: 'https://bitcoinmagazine.com/feed/' },
   { name: 'CryptoSlate', url: 'https://cryptoslate.com/feed/' },
   { name: 'Google News - Bitcoin', url: 'https://news.google.com/rss/search?q=Bitcoin+when:7d&hl=en-US&gl=US&ceid=US:en' },
   { name: 'Google News - BTC', url: 'https://news.google.com/rss/search?q=BTC+crypto+when:7d&hl=en-US&gl=US&ceid=US:en' },
@@ -285,7 +285,17 @@ Signal-Daten:
 - Support: ${signal.support ?? 'n/a'}
 - Resistance: ${signal.resistance ?? 'n/a'}
 - Konfidenz: ${signal.confidence ?? 'n/a'}%
-
+${await (async () => {
+  try {
+    const rows = await env.DB.prepare(
+      `SELECT title, impact, category FROM market_events WHERE status = 'ACTIVE' AND impact IN ('HIGH','MEDIUM') AND updated_at >= ? ORDER BY impact ASC, updated_at DESC LIMIT 4`
+    ).bind(Date.now() - 4 * 60 * 60 * 1000).all();
+    if (!rows.results?.length) return '';
+    return '\nAktuelle Marktnews (letzte 4h):\n' +
+      rows.results.map(n => `- [${n.impact}] ${n.title}`).join('\n') +
+      '\nBerücksichtige diese News: HIGH-Impact erhöht das Risiko erheblich und sollte den Score senken.';
+  } catch { return ''; }
+})()}
 Bewerte das Signal nach v2.0 Kriterien. Antworte NUR als JSON:
 {
   "recommendation": "RECOMMENDED|WAIT|SKIP",
@@ -1352,6 +1362,26 @@ async function processSignal(env, signal) {
     AI_TIMEOUT_MS,
     fallbackAnalysis
   ) || fallbackAnalysis;
+
+  // Apply score penalty when HIGH-impact market events are active in the last 2h.
+  // This mirrors the strategy rule "Ausschluss: Major News innerhalb 15min" but
+  // also softens signals during sustained high-risk periods.
+  let newsWarning = null;
+  try {
+    const highNews = await env.DB.prepare(
+      `SELECT COUNT(*) as c, GROUP_CONCAT(title, ' | ') as titles FROM market_events WHERE status = 'ACTIVE' AND impact = 'HIGH' AND updated_at >= ?`
+    ).bind(Date.now() - 2 * 60 * 60 * 1000).first();
+    if (highNews?.c > 0) {
+      const before = analysis.score;
+      analysis.score = Math.max(0, analysis.score - 20);
+      newsWarning = `${highNews.c} HIGH-Impact News aktiv`;
+      console.log(`📰 News penalty: ${before} → ${analysis.score} (${newsWarning})`);
+      // Inject into failed_rules so it shows in the Telegram message
+      if (!Array.isArray(ruleAnalysis.failed_rules)) ruleAnalysis.failed_rules = [];
+      ruleAnalysis.failed_rules.unshift(`⚠️ ${newsWarning}`);
+    }
+  } catch (_) {}
+
   const signalId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
   // Compute derived fields from ruleAnalysis (always deterministic)
@@ -1548,7 +1578,10 @@ function computeRadarStatus(events = []) {
 
 async function fetchRssItems(feed) {
   try {
-    const res = await fetch(feed.url, { cf: { cacheTtl: 300, cacheEverything: true } });
+    const res = await fetch(feed.url, {
+      cf: { cacheTtl: 300, cacheEverything: true },
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WaveScout/1.0; +https://wavescout.dev)' }
+    });
     if (!res.ok) return [];
     const xml = await res.text();
     const items = [...xml.matchAll(/<item[\s\S]*?<\/item>/g)].slice(0, 10);
@@ -3493,5 +3526,9 @@ export default {
     if (event.cron === "0 7 * * *") {
       await sendDailySummary(env);
     }
+
+    // Refresh news cache in the background on every cron run so the News
+    // page always shows fresh data even when no user is visiting.
+    ctx.waitUntil(getMarketRadar(env));
   }
 };
