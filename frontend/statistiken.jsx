@@ -24,7 +24,7 @@ const StatistikenPage = ({ user }) => {
         fetch(`${API_URL}/analytics`,         { headers: { 'X-Session-ID': sessionId } }),
         fetch(`${API_URL}/stats/breakdown`,   { headers: { 'X-Session-ID': sessionId } })
       ]);
-      if (statsRes.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
+      if (statsRes.status === 401) { localStorage.removeItem('wavescout_session'); window.location.href = 'login.html'; return; }
       setStats(statsRes.ok      ? await statsRes.json()      : null);
       setHistory(histRes.ok     ? await histRes.json()       : []);
       setAnalytics(analyticsRes.ok ? await analyticsRes.json() : null);

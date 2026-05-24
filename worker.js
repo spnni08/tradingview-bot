@@ -10,8 +10,7 @@ function hashPassword(password) {
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID",
-  "Access-Control-Allow-Credentials": "true"
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID"
 };
 
 function jsonResponse(data, status = 200) {
@@ -324,6 +323,14 @@ function analyzeWithRules(signal, strategyConfig = null) {
   const rsiLongMin        = rsiParams.longPreferredAbove  ?? 40; // LONG partial score above this
   const rsiShortMax       = rsiParams.shortPreferredBelow ?? 60; // SHORT partial score below this
   const rsi = signal.rsi != null ? parseFloat(signal.rsi) : null;
+
+  // Start lower when there's no indicator data — prevents empty signals from
+  // hitting the Telegram threshold solely via the session-filter bonus.
+  const hasIndicatorData = rsi != null
+    || (parseFloat(signal.ema50 ?? 0) && parseFloat(signal.ema200 ?? 0))
+    || !!(signal.trend || '').trim()
+    || !!(signal.wave_bias || '').trim();
+  let score = hasIndicatorData ? 50 : 30;
   if (rW > 0) {
     if (rsi == null) {
       unknown_rules.push('RSI (keine Daten)');
@@ -608,7 +615,12 @@ function analyzeWithRules(signal, strategyConfig = null) {
 // DB INITIALIZATION
 // ═══════════════════════════════════════════════════════════════
 
+// Module-level flag: run the full CREATE/ALTER sequence only once per Worker
+// instance to avoid hammering D1 with ~70 statements on every request.
+let _tablesReady = false;
+
 async function ensureTables(env) {
+  if (_tablesReady) return;
   try {
     await env.DB.prepare(`
       CREATE TABLE IF NOT EXISTS sessions (
@@ -756,6 +768,9 @@ async function ensureTables(env) {
         summary TEXT,
         radar_status TEXT,
         raw_json TEXT,
+        long_text TEXT,
+        affected_symbols TEXT,
+        affected_scope TEXT,
         status TEXT DEFAULT 'ACTIVE'
       )
     `).run();
@@ -941,6 +956,7 @@ async function ensureTables(env) {
       catch (_) {}
     }
 
+    _tablesReady = true;
   } catch (error) {
     console.error('❌ ensureTables error:', error.message);
   }
@@ -1479,7 +1495,7 @@ async function getMarketRadar(env, session = null) {
 
   try {
   const freshCache = await env.DB.prepare(
-    `SELECT * FROM market_events WHERE status = 'ACTIVE' AND updated_at >= ? ORDER BY impact DESC, event_time DESC LIMIT ?`
+    `SELECT * FROM market_events WHERE status = 'ACTIVE' AND updated_at >= ? ORDER BY CASE WHEN impact='HIGH' THEN 1 WHEN impact='MEDIUM' THEN 2 ELSE 3 END ASC, event_time DESC LIMIT ?`
   ).bind(now - MARKET_RADAR_CACHE_TTL_MS, MARKET_RADAR_MAX_EVENTS).all();
 
   if (freshCache.results?.length) {
@@ -2162,7 +2178,7 @@ export default {
       if (request.method === "GET" && url.pathname === "/history") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
-        const limit = parseInt(url.searchParams.get("limit") || "50");
+        const limit = Math.min(500, Math.max(1, parseInt(url.searchParams.get("limit") || "50")));
         return jsonResponse(await getHistory(env, limit));
       }
 
@@ -2730,9 +2746,10 @@ export default {
 
         let deletedSignals = 0;
         if (deleteTestSignals) {
+          // Delete practice_trades FIRST while signal IDs still exist in the DB
+          await env.DB.prepare(`DELETE FROM practice_trades WHERE signal_id IN (SELECT id FROM signals WHERE is_test = 1)`).run();
           const info = await env.DB.prepare(`DELETE FROM signals WHERE is_test = 1`).run();
           deletedSignals = info.meta?.changes ?? 0;
-          await env.DB.prepare(`DELETE FROM practice_trades WHERE signal_id IN (SELECT id FROM signals WHERE is_test = 1)`).run();
         }
         return jsonResponse({ success: true, mode: 'live', liveStartedAt: Date.now(), deletedSignals });
       }
@@ -3300,7 +3317,7 @@ export default {
     } catch (error) {
       console.error('❌ Unhandled worker error:', error.message);
       console.error('Stack:', error.stack);
-      return jsonResponse({ error: "Internal Server Error", message: error.message, stack: error.stack }, 500);
+      return jsonResponse({ error: "Internal Server Error" }, 500);
     }
   },
 
@@ -3308,12 +3325,13 @@ export default {
     console.log('⏰ Cron triggered:', event.cron);
 
     // Every 3h: close open trades that are in profit
-    if (event.cron === "0 */3 * * *" || event.cron === "0 */4 * * *") {
+    if (event.cron === "0 */3 * * *") {
       await check3hProfitClose(env);
     }
 
-    // Every 4h: evaluate TP/SL hits
+    // Every 4h: evaluate TP/SL hits + profit-close for 4h window
     if (event.cron === "0 */4 * * *") {
+      await check3hProfitClose(env);
       await evaluateOpenTrades(env);
     }
 

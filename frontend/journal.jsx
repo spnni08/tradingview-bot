@@ -42,7 +42,10 @@ function CheckRow({ label, checked, onChange }) {
   );
 }
 
-function todayDate() { return new Date().toISOString().slice(0, 10); }
+function todayDate() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'TRXUSDT', 'XRPUSDT'];
 
