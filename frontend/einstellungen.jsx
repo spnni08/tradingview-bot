@@ -5,6 +5,7 @@
 const BROKERS = [
   { id: 'bybit',    name: 'Bybit',    logo: '⚡', features: ['Futures','Spot','Options'], popular: true },
   { id: 'binance',  name: 'Binance',  logo: '🟡', features: ['Futures','Spot','Margin'],  popular: true },
+  { id: 'blofin',   name: 'BloFin',   logo: '🔶', features: ['Futures','Spot','Copy'],    popular: true },
   { id: 'kraken',   name: 'Kraken',   logo: '🟣', features: ['Futures','Spot','Staking'], popular: true },
   { id: 'coinbase', name: 'Coinbase', logo: '🔵', features: ['Spot','Advanced'],           popular: false },
   { id: 'okx',      name: 'OKX',      logo: '⚫', features: ['Futures','Spot','Options'],  popular: false },
