@@ -47,28 +47,128 @@ function todayDate() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'TRXUSDT', 'XRPUSDT'];
+// ─── Coin Sidebar ─────────────────────────────────────────────
 
-// ─── Symbol Selector ─────────────────────────────────────────
-
-function SymbolPicker({ symbol, onChange }) {
+function CoinSidebar({ symbols, selected, statuses, onSelect, onRemove, newSymbol, onNewSymbolChange, onAddSymbol, addingSymbol, date, onDateChange }) {
+  const [hovered, setHovered] = useState(null);
   return (
-    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-      {SYMBOLS.map(s => (
-        <button
-          key={s}
-          onClick={() => onChange(s)}
-          style={{
-            padding: '5px 14px', borderRadius: 20, fontSize: 12, fontWeight: 600,
-            border: `1px solid ${symbol === s ? 'var(--blue-500)' : 'var(--border)'}`,
-            background: symbol === s ? 'rgba(59,130,246,.15)' : 'var(--bg-2)',
-            color: symbol === s ? 'var(--blue-500)' : 'var(--text-secondary)',
-            cursor: 'pointer', transition: 'all .15s', fontFamily: 'var(--font-mono)',
-          }}
-        >
-          {s}
-        </button>
-      ))}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div className="card">
+        <div className="card-body" style={{ padding: '10px 14px' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.06em', marginBottom: 6 }}>DATUM</div>
+          <input
+            type="date"
+            value={date}
+            onChange={e => onDateChange(e.target.value)}
+            className="input"
+            style={{ width: '100%', fontSize: 13 }}
+          />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-body" style={{ padding: '10px 14px' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '0.06em', marginBottom: 10 }}>COINS</div>
+
+          {symbols.length === 0 && (
+            <div style={{ fontSize: 12, color: 'var(--text-tertiary)', textAlign: 'center', padding: '12px 0' }}>
+              Noch keine Coins
+            </div>
+          )}
+
+          {symbols.map(s => (
+            <div
+              key={s}
+              onMouseEnter={() => setHovered(s)}
+              onMouseLeave={() => setHovered(null)}
+              onClick={() => onSelect(s)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px',
+                borderRadius: 7, cursor: 'pointer', marginBottom: 2,
+                background: selected === s ? 'rgba(59,130,246,.12)' : hovered === s ? 'var(--bg-2)' : 'transparent',
+                transition: 'background .1s',
+              }}
+            >
+              <span style={{
+                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                background: statuses[s] ? 'var(--win)' : 'rgba(240,68,68,.6)',
+              }}/>
+              <span style={{
+                flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600,
+                color: selected === s ? 'var(--blue-500)' : 'var(--text-primary)',
+              }}>
+                {s}
+              </span>
+              {hovered === s && (
+                <button
+                  onClick={e => { e.stopPropagation(); onRemove(s); }}
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    padding: '1px 5px', color: 'var(--text-tertiary)', fontSize: 14, lineHeight: 1,
+                    borderRadius: 4,
+                  }}
+                  title="Entfernen"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+
+          <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input
+                type="text"
+                value={newSymbol}
+                onChange={e => onNewSymbolChange(e.target.value.toUpperCase())}
+                onKeyDown={e => e.key === 'Enter' && onAddSymbol()}
+                placeholder="XRPUSDT"
+                className="input"
+                style={{ flex: 1, fontSize: 11, padding: '5px 8px' }}
+              />
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={onAddSymbol}
+                disabled={addingSymbol || !newSymbol.trim()}
+                style={{ padding: '5px 10px', fontSize: 16, lineHeight: 1 }}
+              >
+                {addingSymbol ? <div className="spinner-sm"/> : '+'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Collapsible Section ──────────────────────────────────────
+
+function CollapsibleSection({ title, icon, defaultOpen, locked, children }) {
+  const [open, setOpen] = useState(defaultOpen ?? true);
+  return (
+    <div style={{ marginBottom: 'var(--gap)' }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 2px',
+          cursor: 'pointer', userSelect: 'none',
+          borderBottom: '1px solid var(--border)',
+          marginBottom: open ? 12 : 0,
+        }}
+      >
+        {icon && <Icon name={icon} size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}/>}
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+          {title}
+        </span>
+        {locked && <span style={{ fontSize: 11, marginLeft: 2 }}>🔒</span>}
+        <span style={{
+          marginLeft: 'auto', fontSize: 14, color: 'var(--text-tertiary)',
+          display: 'inline-block', transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+          transition: 'transform .2s',
+        }}>▾</span>
+      </div>
+      {open && children}
     </div>
   );
 }
@@ -372,7 +472,7 @@ function PreTradeTab({ symbol, date, routineDone }) {
           <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>Pre-Trade Checkliste gesperrt</p>
           <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{lockReason}</p>
           <p style={{ color: 'var(--text-tertiary)', fontSize: 12, marginTop: 8 }}>
-            Gehe zum Tab <strong>Morgenroutine</strong>, fülle die Routine für <strong>{symbol}</strong> aus und schließe sie ab.
+            Schließe zuerst die <strong>Morgenroutine</strong> für <strong>{symbol}</strong> oben ab.
           </p>
         </div>
       </div>
@@ -758,25 +858,103 @@ function AfterTradeTab({ symbol, date }) {
 // ─── Main Page ────────────────────────────────────────────────
 
 const JournalPage = ({ user }) => {
-  const [activeTab, setActiveTab] = useState('morgen');
-  const [symbol, setSymbol]       = useState(() => localStorage.getItem('journal_symbol') || 'BTCUSDT');
-  const [date, setDate]           = useState(todayDate());
+  const [symbols, setSymbols]           = useState([]);
+  const [symbol, setSymbol]             = useState(() => localStorage.getItem('journal_symbol') || null);
+  const [date, setDate]                 = useState(todayDate());
   const [routineStatus, setRoutineStatus] = useState({ done: false, bias: null });
+  const [symbolStatuses, setSymbolStatuses] = useState({});
+  const [loadingSymbols, setLoadingSymbols] = useState(true);
+  const [newSymbol, setNewSymbol]       = useState('');
+  const [addingSymbol, setAddingSymbol] = useState(false);
 
-  // Persist symbol choice
+  useEffect(() => { loadSymbols(); }, []);
+
+  useEffect(() => {
+    if (symbols.length > 0) loadStatuses();
+  }, [date, symbols]);
+
+  const loadSymbols = async () => {
+    setLoadingSymbols(true);
+    try {
+      const res = await fetch(`${API_URL}/journal/symbols`, { headers: { 'X-Session-ID': sid() } });
+      if (res.status === 401) { localStorage.removeItem('wavescout_session'); window.location.href = 'login.html'; return; }
+      const data = await res.json();
+      const list = data.symbols || [];
+      setSymbols(list);
+      if (list.length > 0) {
+        const stored = localStorage.getItem('journal_symbol');
+        const pick = list.includes(stored) ? stored : list[0];
+        setSymbol(pick);
+        localStorage.setItem('journal_symbol', pick);
+      }
+    } catch {}
+    setLoadingSymbols(false);
+  };
+
+  const loadStatuses = async () => {
+    try {
+      const res = await fetch(`${API_URL}/morning-routine/status?date=${date}`, { headers: { 'X-Session-ID': sid() } });
+      if (res.ok) setSymbolStatuses(await res.json());
+    } catch {}
+  };
+
   const changeSymbol = (s) => {
     localStorage.setItem('journal_symbol', s);
     setSymbol(s);
     setRoutineStatus({ done: false, bias: null });
   };
 
-  const handleRoutineChange = (status) => setRoutineStatus(status);
+  const handleRoutineChange = (status) => {
+    setRoutineStatus(status);
+    if (status.done) setSymbolStatuses(prev => ({ ...prev, [symbol]: true }));
+  };
 
-  const tabs = [
-    { id: 'morgen',     label: 'Morgenroutine',        unlocked: true },
-    { id: 'pretrade',   label: 'Pre-Trade Checkliste',  unlocked: routineStatus.done },
-    { id: 'aftertrade', label: 'After-Trade Review',    unlocked: true },
-  ];
+  const removeSymbol = async (s) => {
+    try {
+      const res = await fetch(`${API_URL}/journal/symbols`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        body: JSON.stringify({ action: 'remove', symbol: s })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSymbols(data.symbols);
+        if (symbol === s) {
+          const next = data.symbols[0] || null;
+          setSymbol(next);
+          if (next) localStorage.setItem('journal_symbol', next);
+        }
+      }
+    } catch {}
+  };
+
+  const addSymbol = async () => {
+    const sym = newSymbol.toUpperCase().trim();
+    if (!sym) return;
+    setAddingSymbol(true);
+    try {
+      const res = await fetch(`${API_URL}/journal/symbols`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        body: JSON.stringify({ symbol: sym })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSymbols(data.symbols);
+        setNewSymbol('');
+        if (!symbol) changeSymbol(sym);
+      }
+    } catch {}
+    setAddingSymbol(false);
+  };
+
+  if (loadingSymbols) {
+    return (
+      <div className="content page-enter" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 300 }}>
+        <div className="spinner-lg"/>
+      </div>
+    );
+  }
 
   return (
     <div className="content page-enter">
@@ -785,49 +963,63 @@ const JournalPage = ({ user }) => {
         <p className="subtitle">Morgenroutine · Pre-Trade Checkliste · After-Trade Review</p>
       </div>
 
-      {/* Symbol + Date Selector */}
-      <div className="card" style={{ marginBottom: 'var(--gap)' }}>
-        <div className="card-body" style={{ padding: '14px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontWeight: 600, whiteSpace: 'nowrap' }}>SYMBOL</span>
-            <SymbolPicker symbol={symbol} onChange={changeSymbol}/>
-            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontWeight: 600 }}>DATUM</span>
-              <input
-                type="date"
-                value={date}
-                onChange={e => setDate(e.target.value)}
-                className="input"
-                style={{ maxWidth: 160 }}
-              />
+      <div style={{ display: 'flex', gap: 'var(--gap)', alignItems: 'flex-start' }}>
+
+        {/* ── Coin Sidebar ──────────────────────────────────── */}
+        <div style={{ width: 200, flexShrink: 0 }}>
+          <CoinSidebar
+            symbols={symbols}
+            selected={symbol}
+            statuses={symbolStatuses}
+            date={date}
+            onSelect={changeSymbol}
+            onRemove={removeSymbol}
+            newSymbol={newSymbol}
+            onNewSymbolChange={setNewSymbol}
+            onAddSymbol={addSymbol}
+            addingSymbol={addingSymbol}
+            onDateChange={setDate}
+          />
+        </div>
+
+        {/* ── Main Content ──────────────────────────────────── */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {!symbol ? (
+            <div className="card">
+              <div className="card-body" style={{ padding: 60, textAlign: 'center' }}>
+                <Icon name="book" size={40} style={{ opacity: 0.15, marginBottom: 14 }}/>
+                <p style={{ color: 'var(--text-tertiary)' }}>
+                  Kein Coin ausgewählt. Füge einen Coin in der Sidebar hinzu.
+                </p>
+              </div>
             </div>
-          </div>
-          <StatusBanner symbol={symbol} date={date} routineDone={routineStatus.done} bias={routineStatus.bias}/>
+          ) : (
+            <>
+              {/* Status Banner */}
+              <div className="card" style={{ marginBottom: 'var(--gap)' }}>
+                <div className="card-body" style={{ padding: '12px 20px' }}>
+                  <StatusBanner symbol={symbol} date={date} routineDone={routineStatus.done} bias={routineStatus.bias}/>
+                </div>
+              </div>
+
+              {/* Section A: Morgenroutine */}
+              <CollapsibleSection title="Morgenroutine" icon="calendar" defaultOpen={true}>
+                <MorgenroutineTab symbol={symbol} date={date} onRoutineChange={handleRoutineChange}/>
+              </CollapsibleSection>
+
+              {/* Section B: Pre-Trade Checkliste */}
+              <CollapsibleSection title="Pre-Trade Checkliste" icon="checklist" defaultOpen={false} locked={!routineStatus.done}>
+                <PreTradeTab symbol={symbol} date={date} routineDone={routineStatus.done}/>
+              </CollapsibleSection>
+
+              {/* Section C: After-Trade Review */}
+              <CollapsibleSection title="After-Trade Review" icon="book" defaultOpen={false}>
+                <AfterTradeTab symbol={symbol} date={date}/>
+              </CollapsibleSection>
+            </>
+          )}
         </div>
       </div>
-
-      {/* Tab Navigation */}
-      <div style={{ overflowX: 'auto', marginBottom: 20, paddingBottom: 1 }}>
-        <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', minWidth: 'max-content' }}>
-          {tabs.map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
-              background: 'none', border: 'none', padding: '10px 18px', cursor: 'pointer',
-              fontSize: 14, fontWeight: activeTab === tab.id ? 600 : 400,
-              color: activeTab === tab.id ? 'var(--blue-500)' : tab.unlocked ? 'var(--text-secondary)' : 'var(--text-tertiary)',
-              borderBottom: activeTab === tab.id ? '2px solid var(--blue-500)' : '2px solid transparent',
-              marginBottom: -1, transition: 'all .15s', whiteSpace: 'nowrap', fontFamily: 'var(--font-main)',
-              opacity: tab.unlocked ? 1 : 0.55,
-            }}>
-              {!tab.unlocked && tab.id === 'pretrade' && <span style={{ marginRight: 5, fontSize: 11 }}>🔒</span>}
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {activeTab === 'morgen'     && <MorgenroutineTab symbol={symbol} date={date} onRoutineChange={handleRoutineChange}/>}
-      {activeTab === 'pretrade'   && <PreTradeTab symbol={symbol} date={date} routineDone={routineStatus.done}/>}
-      {activeTab === 'aftertrade' && <AfterTradeTab symbol={symbol} date={date}/>}
     </div>
   );
 };
