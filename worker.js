@@ -92,6 +92,120 @@ async function sendAlertMessage(env, message) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// EXCHANGE API (Autotrade)
+// ═══════════════════════════════════════════════════════════════
+
+async function hmacHex(secret, message) {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
+  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function hmacBase64(secret, message) {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
+  return btoa(String.fromCharCode(...new Uint8Array(sig)));
+}
+
+function calcOrderQty(tradeAmountUsdt, entryPrice) {
+  const qty = tradeAmountUsdt / entryPrice;
+  // Round to reasonable precision based on price level
+  if (entryPrice >= 10000) return parseFloat(qty.toFixed(3));
+  if (entryPrice >= 100)   return parseFloat(qty.toFixed(2));
+  if (entryPrice >= 1)     return parseFloat(qty.toFixed(1));
+  return parseFloat(qty.toFixed(0));
+}
+
+async function placeBybitOrder(cfg, { symbol, direction, qty, tp, sl }) {
+  const base = cfg.testnet ? 'https://api-testnet.bybit.com' : 'https://api.bybit.com';
+  const timestamp = String(Date.now());
+  const recv = '5000';
+  const bodyObj = {
+    category: 'linear',
+    symbol,
+    side: direction === 'LONG' ? 'Buy' : 'Sell',
+    orderType: 'Market',
+    qty: String(qty),
+    timeInForce: 'IOC',
+    positionIdx: 0,
+    ...(tp ? { takeProfit: String(tp), tpTriggerBy: 'LastPrice' } : {}),
+    ...(sl ? { stopLoss:   String(sl), slTriggerBy: 'LastPrice' } : {}),
+  };
+  const body = JSON.stringify(bodyObj);
+  const sign = await hmacHex(cfg.apiSecret, timestamp + cfg.apiKey + recv + body);
+  const res = await fetch(`${base}/v5/order/create`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-BAPI-API-KEY': cfg.apiKey,
+      'X-BAPI-TIMESTAMP': timestamp,
+      'X-BAPI-SIGN': sign,
+      'X-BAPI-RECV-WINDOW': recv,
+    },
+    body,
+  });
+  const data = await res.json();
+  if (data.retCode !== 0) throw new Error(`Bybit ${data.retCode}: ${data.retMsg}`);
+  return { orderId: data.result?.orderId, raw: data.result };
+}
+
+async function placeBlofInOrder(cfg, { symbol, direction, qty, tp, sl }) {
+  // BloFin uses demo-trading URL for paper/testnet mode
+  const base = cfg.testnet
+    ? 'https://demo-trading-openapi.blofin.com'
+    : 'https://openapi.blofin.com';
+  const path = '/api/v1/trade/order';
+  const timestamp = String(Date.now());
+  // BloFin symbol format: BTC-USDT-SWAP
+  const instId = symbol.replace(/([A-Z]+)(USDT)$/, '$1-$2-SWAP');
+  const bodyObj = {
+    instId,
+    marginMode: 'cross',
+    side: direction === 'LONG' ? 'buy' : 'sell',
+    orderType: 'market',
+    size: String(qty),
+    ...(tp ? { tpTriggerPx: String(tp), tpOrdPx: '-1' } : {}),
+    ...(sl ? { slTriggerPx: String(sl), slOrdPx: '-1' } : {}),
+  };
+  const body = JSON.stringify(bodyObj);
+  const sign = await hmacBase64(cfg.apiSecret, timestamp + 'POST' + path + body);
+  const res = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'ACCESS-KEY': cfg.apiKey,
+      'ACCESS-SIGN': sign,
+      'ACCESS-TIMESTAMP': timestamp,
+      'ACCESS-PASSPHRASE': cfg.passphrase || '',
+    },
+    body,
+  });
+  const data = await res.json();
+  if (data.code !== '0') throw new Error(`BloFin ${data.code}: ${data.msg}`);
+  return { orderId: data.data?.[0]?.ordId, raw: data.data?.[0] };
+}
+
+async function placeExchangeOrder(env, { symbol, direction, entry, tp, sl }) {
+  const raw = await getSetting(env, 'autotrade_config', null);
+  if (!raw) return { ok: false, error: 'Autotrade nicht konfiguriert' };
+  const cfg = JSON.parse(raw);
+  if (!cfg.enabled) return { ok: false, error: 'Autotrade deaktiviert' };
+  const amount = parseFloat(cfg.tradeAmount) || 10;
+  const qty = calcOrderQty(amount, entry);
+  if (qty <= 0) return { ok: false, error: 'Menge zu klein' };
+  const params = { symbol, direction, qty, tp, sl };
+  if (cfg.broker === 'bybit')  return { ok: true, ...(await placeBybitOrder(cfg, params))  };
+  if (cfg.broker === 'blofin') return { ok: true, ...(await placeBlofInOrder(cfg, params)) };
+  return { ok: false, error: `Broker nicht unterstützt: ${cfg.broker}` };
+}
+
 async function withTimeout(promise, ms, fallbackValue = null) {
   let timeoutId;
   const timeoutPromise = new Promise(resolve => {
@@ -807,6 +921,33 @@ async function ensureTables(env) {
     `).run();
 
     await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS live_trades (
+        id TEXT PRIMARY KEY,
+        signal_id TEXT,
+        exchange TEXT,
+        order_id TEXT,
+        symbol TEXT,
+        direction TEXT,
+        entry_price REAL,
+        tp_price REAL,
+        sl_price REAL,
+        quantity REAL,
+        trade_amount_usdt REAL,
+        leverage INTEGER DEFAULT 1,
+        status TEXT DEFAULT 'OPEN',
+        exit_price REAL,
+        pnl_usdt REAL,
+        pnl_pct REAL,
+        is_testnet INTEGER DEFAULT 0,
+        error_message TEXT,
+        opened_at INTEGER,
+        closed_at INTEGER,
+        created_at INTEGER,
+        updated_at INTEGER
+      )
+    `).run();
+
+    await env.DB.prepare(`
       CREATE TABLE IF NOT EXISTS market_events (
         id TEXT PRIMARY KEY,
         created_at INTEGER,
@@ -1506,6 +1647,50 @@ async function processSignal(env, signal) {
   // Only open a practice trade for signals that meet the quality threshold
   if (analysis.score >= 75) {
     await createPracticeTrade(env, signalId, { ...signal, direction }, analysis);
+  }
+
+  // Autotrade: place real exchange order if configured and score meets threshold
+  try {
+    const atRaw = await getSetting(env, 'autotrade_config', null);
+    if (atRaw) {
+      const atCfg = JSON.parse(atRaw);
+      const minScore = atCfg.minScore || 75;
+      if (atCfg.enabled && !isTest && analysis.score >= minScore && analysis.entry) {
+        const amount = parseFloat(atCfg.tradeAmount) || 10;
+        const qty    = calcOrderQty(amount, analysis.entry);
+        let orderId = null, errMsg = null, status = 'OPEN';
+        try {
+          const result = await placeExchangeOrder(env, {
+            symbol: signal.symbol, direction,
+            entry: analysis.entry, tp: analysis.tp, sl: analysis.sl,
+          });
+          if (result.ok) orderId = result.orderId;
+          else { errMsg = result.error; status = 'ERROR'; }
+        } catch (e) {
+          errMsg = e.message; status = 'ERROR';
+        }
+        const ltId = `lt_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+        await env.DB.prepare(`
+          INSERT INTO live_trades (id, signal_id, exchange, order_id, symbol, direction, entry_price, tp_price, sl_price, quantity, trade_amount_usdt, status, is_testnet, error_message, opened_at, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          ltId, signalId, atCfg.broker, orderId,
+          signal.symbol, direction, analysis.entry, analysis.tp, analysis.sl,
+          qty, amount, status, atCfg.testnet ? 1 : 0, errMsg,
+          Date.now(), Date.now(), Date.now()
+        ).run();
+        if (errMsg) {
+          console.error('❌ Autotrade failed:', errMsg);
+          await withTimeout(sendTelegramMessage(env,
+            `⚠️ <b>Autotrade Fehler</b>\n${signal.symbol} ${direction}\nFehler: ${errMsg}`
+          ), TELEGRAM_TIMEOUT_MS, false);
+        } else {
+          console.log('✅ Autotrade order placed:', orderId, signal.symbol, direction);
+        }
+      }
+    }
+  } catch (atErr) {
+    console.error('❌ Autotrade setup error:', atErr.message);
   }
 
   console.log('✅ Signal processed:', signalId, '| Score:', analysis.score, '| Rec:', analysis.recommendation, '| Telegram:', telegramSent ? telegramReason : 'no');
@@ -3107,6 +3292,64 @@ export default {
           await env.DB.prepare(`UPDATE sessions SET role = ? WHERE user_id = ?`).bind(role, userId).run();
         } catch (_) {}
         return jsonResponse({ success: true });
+      }
+
+      // ── AUTOTRADE CONFIG ─────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/broker-config") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const raw = await getSetting(env, 'autotrade_config', null);
+        if (!raw) return jsonResponse({ configured: false });
+        const cfg = JSON.parse(raw);
+        // Never return the secret or passphrase in full
+        return jsonResponse({
+          configured: true,
+          broker: cfg.broker,
+          apiKeyMasked: cfg.apiKey ? cfg.apiKey.slice(0, 4) + '••••' + cfg.apiKey.slice(-4) : '',
+          testnet: cfg.testnet,
+          enabled: cfg.enabled,
+          tradeAmount: cfg.tradeAmount,
+          minScore: cfg.minScore,
+          hasPassphrase: !!cfg.passphrase,
+        });
+      }
+
+      if (request.method === "POST" && url.pathname === "/broker-config") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const body = await request.json();
+        const existing = (() => {
+          try { const r = null; return r; } catch { return null; }
+        })();
+        // If secret is blank keep the previously stored one
+        const prevRaw = await getSetting(env, 'autotrade_config', null);
+        const prev = prevRaw ? JSON.parse(prevRaw) : {};
+        const cfg = {
+          broker:      body.broker      || prev.broker      || 'bybit',
+          apiKey:      body.apiKey      || prev.apiKey      || '',
+          apiSecret:   body.apiSecret   || prev.apiSecret   || '',
+          passphrase:  body.passphrase  || prev.passphrase  || '',
+          testnet:     body.testnet     !== undefined ? !!body.testnet : (prev.testnet ?? true),
+          enabled:     body.enabled     !== undefined ? !!body.enabled : (prev.enabled ?? false),
+          tradeAmount: parseFloat(body.tradeAmount) || prev.tradeAmount || 10,
+          minScore:    parseInt(body.minScore)      || prev.minScore    || 75,
+        };
+        await setSetting(env, 'autotrade_config', JSON.stringify(cfg));
+        return jsonResponse({ success: true, enabled: cfg.enabled, broker: cfg.broker });
+      }
+
+      // ── LIVE TRADES ───────────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/live-trades") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        await ensureTables(env);
+        const limit = Math.min(200, parseInt(url.searchParams.get("limit") || "50"));
+        const rows = await env.DB.prepare(
+          `SELECT * FROM live_trades ORDER BY created_at DESC LIMIT ?`
+        ).bind(limit).all();
+        return jsonResponse(rows.results || []);
       }
 
       // ── JOURNAL SYMBOLS ──────────────────────────────────────

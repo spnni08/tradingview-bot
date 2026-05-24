@@ -513,7 +513,59 @@ function NotificationsSection({ settings, setSettings, onSave, saved }) {
 
 function BrokerSection({ settings, setSettings, onSave, saved, showBrokerModal, setShowBrokerModal }) {
   const [copied, setCopied] = useState(false);
+  const [atConfig, setAtConfig] = useState({
+    broker: settings.broker || 'bybit',
+    apiKey: '', apiSecret: '', passphrase: '',
+    testnet: true, enabled: false, tradeAmount: 10, minScore: 75,
+  });
+  const [atSaving, setAtSaving] = useState(false);
+  const [atSaved,  setAtSaved]  = useState(false);
+  const [atLoaded, setAtLoaded] = useState(false);
+  const [atError,  setAtError]  = useState(null);
   const selectedBroker = BROKERS.find(b => b.id === settings.broker) || BROKERS[0];
+  const sid = () => localStorage.getItem('wavescout_session');
+
+  // Load autotrade config from backend on mount
+  useEffect(() => {
+    fetch(`${API_URL}/broker-config`, { headers: { 'X-Session-ID': sid() } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.configured) {
+          setAtConfig(prev => ({
+            ...prev,
+            broker: d.broker || prev.broker,
+            testnet: d.testnet ?? prev.testnet,
+            enabled: d.enabled ?? prev.enabled,
+            tradeAmount: d.tradeAmount || prev.tradeAmount,
+            minScore: d.minScore || prev.minScore,
+          }));
+        }
+        setAtLoaded(true);
+      })
+      .catch(() => setAtLoaded(true));
+  }, []);
+
+  const saveAtConfig = async () => {
+    setAtSaving(true); setAtError(null);
+    try {
+      const body = { ...atConfig, broker: settings.broker };
+      const res = await fetch(`${API_URL}/broker-config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        // Clear secret fields from state after save (don't keep in memory)
+        setAtConfig(prev => ({ ...prev, apiSecret: '', passphrase: '' }));
+        setAtSaved(true);
+        setTimeout(() => setAtSaved(false), 2500);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setAtError(err.error || 'Fehler beim Speichern');
+      }
+    } catch { setAtError('Netzwerkfehler'); }
+    setAtSaving(false);
+  };
 
   const handleCopy = () => {
     navigator.clipboard.writeText(WEBHOOK_URL)
@@ -581,28 +633,132 @@ function BrokerSection({ settings, setSettings, onSave, saved, showBrokerModal, 
         </div>
       </div>
 
-      {/* API config */}
+      {/* Autotrade config */}
       <div className="card">
-        <div className="card-head"><Icon name="key" className="ico"/><h3>API Konfiguration · {selectedBroker.name}</h3></div>
+        <div className="card-head">
+          <Icon name="chart" className="ico"/>
+          <h3>Autotrade Konfiguration</h3>
+          <div className="actions">
+            {atConfig.enabled
+              ? <span className="badge badge-win">AKTIV</span>
+              : <span className="badge badge-tag">INAKTIV</span>}
+          </div>
+        </div>
         <div className="card-body">
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', marginBottom: 6, fontSize: 13, fontWeight: 500 }}>API Key</label>
-            <input type="text" value={settings.apiKey} onChange={e => setSettings({ ...settings, apiKey: e.target.value })} placeholder={`${selectedBroker.name} API Key`} className="input" style={{ width: '100%' }}/>
-          </div>
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', marginBottom: 6, fontSize: 13, fontWeight: 500 }}>API Secret</label>
-            <input type="password" value={settings.apiSecret} onChange={e => setSettings({ ...settings, apiSecret: e.target.value })} placeholder={`${selectedBroker.name} API Secret`} className="input" style={{ width: '100%' }}/>
-          </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 16 }}>
-            <input type="checkbox" checked={settings.testnet} onChange={e => setSettings({ ...settings, testnet: e.target.checked })}/>
-            Testnet verwenden
-          </label>
-          <div style={{ padding: '10px 14px', background: 'var(--bg-warning)', borderRadius: 8, border: '1px solid rgba(245,158,11,0.3)', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 16 }}>
-            API-Keys werden nur lokal im Browser gespeichert. Nur Trading-Rechte vergeben, kein Withdrawal.
-          </div>
-          <button className="btn btn-primary btn-sm" onClick={onSave}>
-            {saved ? <><Icon name="check" size={13}/> Gespeichert</> : <><Icon name="save" size={13}/> Speichern</>}
-          </button>
+
+          {!atLoaded ? (
+            <div style={{ padding: 20, textAlign: 'center' }}><div className="spinner-sm"/></div>
+          ) : (
+            <>
+              {/* Autotrade on/off */}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={atConfig.enabled}
+                  onChange={e => setAtConfig(c => ({ ...c, enabled: e.target.checked }))}
+                />
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>Autotrade aktivieren</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                    Bei qualifizierten Signalen automatisch echte Orders platzieren
+                  </div>
+                </div>
+              </label>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 16 }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.05em' }}>BETRAG PRO TRADE (USDT)</label>
+                  <input
+                    type="number" min="1" step="1"
+                    value={atConfig.tradeAmount}
+                    onChange={e => setAtConfig(c => ({ ...c, tradeAmount: parseFloat(e.target.value) || 10 }))}
+                    className="input" style={{ width: '100%' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.05em' }}>MIN. SCORE</label>
+                  <input
+                    type="number" min="55" max="100" step="5"
+                    value={atConfig.minScore}
+                    onChange={e => setAtConfig(c => ({ ...c, minScore: parseInt(e.target.value) || 75 }))}
+                    className="input" style={{ width: '100%' }}
+                  />
+                </div>
+              </div>
+
+              {/* API credentials */}
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.05em' }}>API KEY</label>
+                <input
+                  type="text"
+                  value={atConfig.apiKey}
+                  onChange={e => setAtConfig(c => ({ ...c, apiKey: e.target.value }))}
+                  placeholder={`${selectedBroker.name} API Key`}
+                  className="input" style={{ width: '100%' }}
+                  autoComplete="off"
+                />
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.05em' }}>API SECRET</label>
+                <input
+                  type="password"
+                  value={atConfig.apiSecret}
+                  onChange={e => setAtConfig(c => ({ ...c, apiSecret: e.target.value }))}
+                  placeholder="Leer lassen um bestehenden Key zu behalten"
+                  className="input" style={{ width: '100%' }}
+                  autoComplete="new-password"
+                />
+              </div>
+              {settings.broker === 'blofin' && (
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.05em' }}>PASSPHRASE (BloFin)</label>
+                  <input
+                    type="password"
+                    value={atConfig.passphrase}
+                    onChange={e => setAtConfig(c => ({ ...c, passphrase: e.target.value }))}
+                    placeholder="BloFin API Passphrase"
+                    className="input" style={{ width: '100%' }}
+                    autoComplete="new-password"
+                  />
+                </div>
+              )}
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={atConfig.testnet}
+                  onChange={e => setAtConfig(c => ({ ...c, testnet: e.target.checked }))}
+                />
+                <span>
+                  Testnet / Demo-Modus{' '}
+                  <span style={{ fontSize: 12, color: atConfig.testnet ? 'var(--win)' : 'var(--loss)', fontWeight: 600 }}>
+                    {atConfig.testnet ? '(kein echtes Geld)' : '(LIVE — echtes Geld!)'}
+                  </span>
+                </span>
+              </label>
+
+              {!atConfig.testnet && atConfig.enabled && (
+                <div style={{ padding: '10px 14px', background: 'rgba(240,68,68,.08)', borderRadius: 8, border: '1px solid rgba(240,68,68,.3)', fontSize: 12, color: 'var(--loss)', marginBottom: 14, fontWeight: 600 }}>
+                  ⚠️ LIVE-MODUS aktiv — Signale ab Score {atConfig.minScore} öffnen echte Positionen mit {atConfig.tradeAmount} USDT
+                </div>
+              )}
+
+              <div style={{ padding: '10px 14px', background: 'var(--bg-warning)', borderRadius: 8, border: '1px solid rgba(245,158,11,0.3)', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.6 }}>
+                API-Keys werden verschlüsselt auf dem Server gespeichert. Nur Trading-Rechte vergeben — <strong>kein Withdrawal-Recht</strong>.
+              </div>
+
+              {atError && (
+                <div style={{ padding: '8px 14px', background: 'rgba(240,68,68,.08)', borderRadius: 8, fontSize: 12, color: 'var(--loss)', marginBottom: 12 }}>
+                  {atError}
+                </div>
+              )}
+
+              <button className="btn btn-primary" onClick={saveAtConfig} disabled={atSaving}>
+                {atSaving ? <div className="spinner-sm"/> : <Icon name="save" size={14}/>}
+                {atSaved ? 'Gespeichert ✓' : 'Auf Server speichern'}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
