@@ -309,7 +309,6 @@ function analyzeWithRules(signal, strategyConfig = null) {
   const tfW   = cfg.rules?.timeframe?.enabled         !== false ? (cfg.rules?.timeframe?.weight          ?? 7)  : 0;
   const cW    = cfg.rules?.confidence?.enabled        !== false ? (cfg.rules?.confidence?.weight         ?? 7)  : 0;
 
-  let score = 50;
   const matched_rules  = [];
   const failed_rules   = [];
   const unknown_rules  = [];
