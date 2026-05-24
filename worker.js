@@ -1286,6 +1286,16 @@ async function processSignal(env, signal) {
 
   await ensureTables(env);
 
+  // Auto-register signal symbol so it appears in the journal sidebar
+  try {
+    const raw = await getSetting(env, 'journal_symbols', '[]');
+    const syms = JSON.parse(raw);
+    if (!syms.includes(signal.symbol)) {
+      syms.push(signal.symbol);
+      await setSetting(env, 'journal_symbols', JSON.stringify(syms));
+    }
+  } catch (_) {}
+
   // Resolve active strategy (auto-init default if none)
   let strategy = await getActiveStrategy(env);
   if (!strategy) strategy = await initDefaultStrategy(env);
@@ -3005,7 +3015,47 @@ export default {
         return jsonResponse({ success: true });
       }
 
+      // ── JOURNAL SYMBOLS ──────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/journal/symbols") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const raw = await getSetting(env, 'journal_symbols', '[]');
+        try { return jsonResponse({ symbols: JSON.parse(raw) }); }
+        catch { return jsonResponse({ symbols: [] }); }
+      }
+
+      if (request.method === "POST" && url.pathname === "/journal/symbols") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const body = await request.json();
+        const raw = await getSetting(env, 'journal_symbols', '[]');
+        let syms = (() => { try { return JSON.parse(raw); } catch { return []; } })();
+        if (body.action === 'remove' && body.symbol) {
+          syms = syms.filter(s => s !== body.symbol);
+        } else if (body.symbol) {
+          const sym = String(body.symbol).toUpperCase().trim();
+          if (sym && !syms.includes(sym)) syms.push(sym);
+        }
+        await setSetting(env, 'journal_symbols', JSON.stringify(syms));
+        return jsonResponse({ symbols: syms });
+      }
+
       // ── MORNING ROUTINE ──────────────────────────────────────
+
+      if (request.method === "GET" && url.pathname === "/morning-routine/status") {
+        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+        const rows = await env.DB.prepare(
+          `SELECT symbol, completed_at FROM morning_routines WHERE user_id = ? AND date = ?`
+        ).bind(session.userId, date).all();
+        const done = {};
+        for (const row of (rows.results || [])) {
+          if (row.completed_at) done[row.symbol] = true;
+        }
+        return jsonResponse(done);
+      }
 
       if (request.method === "GET" && url.pathname === "/morning-routine") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
