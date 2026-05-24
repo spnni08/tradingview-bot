@@ -510,7 +510,7 @@ function NotificationsSection({ settings, setSettings, onSave, saved }) {
 
 // ─── Broker / API Section ─────────────────────────────────────
 
-function BrokerSection({ settings, setSettings, showBrokerModal, setShowBrokerModal }) {
+function BrokerSection({ settings, setSettings, onSave, saved, showBrokerModal, setShowBrokerModal }) {
   const [copied, setCopied] = useState(false);
   const selectedBroker = BROKERS.find(b => b.id === settings.broker) || BROKERS[0];
 
@@ -596,9 +596,12 @@ function BrokerSection({ settings, setSettings, showBrokerModal, setShowBrokerMo
             <input type="checkbox" checked={settings.testnet} onChange={e => setSettings({ ...settings, testnet: e.target.checked })}/>
             Testnet verwenden
           </label>
-          <div style={{ padding: '10px 14px', background: 'var(--bg-warning)', borderRadius: 8, border: '1px solid rgba(245,158,11,0.3)', fontSize: 12, color: 'var(--text-secondary)' }}>
+          <div style={{ padding: '10px 14px', background: 'var(--bg-warning)', borderRadius: 8, border: '1px solid rgba(245,158,11,0.3)', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 16 }}>
             API-Keys werden nur lokal im Browser gespeichert. Nur Trading-Rechte vergeben, kein Withdrawal.
           </div>
+          <button className="btn btn-primary btn-sm" onClick={onSave}>
+            {saved ? <><Icon name="check" size={13}/> Gespeichert</> : <><Icon name="save" size={13}/> Speichern</>}
+          </button>
         </div>
       </div>
     </div>
@@ -694,7 +697,7 @@ const EinstellungenPage = ({ user }) => {
       case 'design':        return <DesignSection/>;
       case 'trading':       return <TradingSection settings={settings} setSettings={setSettings} onSave={handleSave} saved={saved}/>;
       case 'notifications': return <NotificationsSection settings={settings} setSettings={setSettings} onSave={handleSave} saved={saved}/>;
-      case 'broker':        return <BrokerSection settings={settings} setSettings={setSettings} showBrokerModal={showBrokerModal} setShowBrokerModal={setShowBrokerModal}/>;
+      case 'broker':        return <BrokerSection settings={settings} setSettings={setSettings} onSave={handleSave} saved={saved} showBrokerModal={showBrokerModal} setShowBrokerModal={setShowBrokerModal}/>;
       case 'admin':         return isAdmin ? <AdminSection user={user}/> : null;
       case 'system':        return isAdmin ? <SystemSection/> : null;
       default:              return <AccountSection user={user}/>;

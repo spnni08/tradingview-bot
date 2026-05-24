@@ -163,7 +163,7 @@ const App = () => {
     <div className="app-with-sidebar">
       <Sidebar
         page={page}
-        setPage={setPage}
+        setPage={navigate}
         user={user}
         onLogout={handleLogout}
         collapsed={sidebarCollapsed}

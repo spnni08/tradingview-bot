@@ -92,7 +92,7 @@ function calculatePnL(trade) {
 }
 
 function fmtDate(val) {
-  const d = new Date(typeof val === 'number' ? val : val);
+  const d = new Date(val);
   if (isNaN(d)) return '–';
   return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' })
     + ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
