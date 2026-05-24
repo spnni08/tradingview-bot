@@ -1273,6 +1273,17 @@ async function processSignal(env, signal) {
 
   console.log('📊 Processing signal:', signal.symbol, direction, '| action:', action, '| rsi:', signal.rsi);
 
+  // For low-value assets (price < $10), TradingView sometimes rounds to 2 dp
+  // (e.g. TRX: 0.36 instead of 0.3621). Fetch a precise live price so that
+  // the TP/SL levels are calculated from an accurate entry.
+  if (signal.price && signal.price < 10 && parseFloat(signal.price.toFixed(2)) === signal.price) {
+    const livePrice = await getLivePrice(env, signal.symbol);
+    if (livePrice && Math.abs(livePrice - signal.price) / signal.price < 0.05) {
+      console.log(`🔬 Price precision fix: ${signal.symbol} ${signal.price} → ${livePrice}`);
+      signal.price = livePrice;
+    }
+  }
+
   await ensureTables(env);
 
   // Resolve active strategy (auto-init default if none)
@@ -1391,7 +1402,10 @@ async function processSignal(env, signal) {
     'OPEN'
   ).run();
 
-  await createPracticeTrade(env, signalId, { ...signal, direction }, analysis);
+  // Only open a practice trade for signals that meet the quality threshold
+  if (analysis.score >= 75) {
+    await createPracticeTrade(env, signalId, { ...signal, direction }, analysis);
+  }
 
   console.log('✅ Signal processed:', signalId, '| Score:', analysis.score, '| Rec:', analysis.recommendation, '| Telegram:', telegramSent ? telegramReason : 'no');
   return { status: 'ok', signalId, analysis };
