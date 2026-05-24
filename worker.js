@@ -1013,6 +1013,7 @@ async function setSetting(env, key, value) {
 // ─── Live price (Binance public API, snapshot fallback) ───────
 
 async function getLivePrice(env, symbol) {
+  // 1. Try Binance
   try {
     const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`);
     if (res.ok) {
@@ -1020,6 +1021,18 @@ async function getLivePrice(env, symbol) {
       if (data?.price) return parseFloat(data.price);
     }
   } catch (_) {}
+
+  // 2. Fallback: Bybit (covers NAS100USDT, XAUTUSDT, RIVERUSDT etc. not listed on Binance)
+  try {
+    const res = await fetch(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}`);
+    if (res.ok) {
+      const data = await res.json();
+      const price = data?.result?.list?.[0]?.lastPrice;
+      if (price) return parseFloat(price);
+    }
+  } catch (_) {}
+
+  // 3. Last resort: latest snapshot price
   const snap = await getSnapshot(env, symbol, '5m');
   return snap?.price || null;
 }
