@@ -280,8 +280,9 @@ loginForm.addEventListener('submit', async (e) => {
     const data = await response.json();
 
     if (data.success) {
-      // Session ID is stored in an HttpOnly cookie by the server.
-      // Only non-sensitive user info is kept in localStorage for the UI.
+      // Store session ID for browsers that block third-party cookies (Safari ITP, etc.).
+      // The X-Session-ID header path is a fallback alongside the HttpOnly cookie.
+      sessionStorage.setItem('wavescout_session', data.session.id);
       localStorage.setItem('wavescout_user', JSON.stringify(data.user));
 
       // Check if password change required
