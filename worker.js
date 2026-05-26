@@ -460,8 +460,8 @@ const DEFAULT_STRATEGY_CONFIG = {
     session_filter:     { enabled: true, weight: 5  }, // London 07-10 UTC / US-Open 13:30-16 UTC
   },
   thresholds: {
-    min_trade_score:    70,
-    min_telegram_score: 55,
+    min_trade_score:    75,
+    min_telegram_score: 75,
     max_risk:           'MEDIUM',
     min_rr:             1.5,      // TP1 mind. 1:1.5R laut Strategie
     risk_per_trade_pct: 1.0,      // 1% Risiko pro Trade
@@ -863,8 +863,8 @@ function analyzeWithRules(signal, strategyConfig = null) {
   score = Math.max(0, Math.min(100, Math.round(score)));
 
   // ── Recommendation ───────────────────────────────────────────
-  const minTrade    = cfg.thresholds?.min_trade_score    ?? 70;
-  const minTelegram = cfg.thresholds?.min_telegram_score ?? 55;
+  const minTrade    = cfg.thresholds?.min_trade_score    ?? 75;
+  const minTelegram = cfg.thresholds?.min_telegram_score ?? 75;
 
   let recommendation, risk;
   if (score >= minTrade) {
@@ -1681,14 +1681,13 @@ async function processSignal(env, signal) {
 
   // Determine Telegram notification
   const isTest       = signal.test === true || signal.is_test === 1;
-  const shouldNotify = isTest || analysis.score >= 55;
+  const shouldNotify = isTest || analysis.score >= 75;
   let telegramSent   = 0;
   let telegramReason = 'below_threshold';
 
   if (shouldNotify) {
-    telegramReason = isTest ? 'test_signal' : (analysis.score >= 70 ? 'score_70' : 'score_55');
-    const debugPrefix = (analysis.score < 70 || isTest)
-      ? `🧪 <b>[${isTest ? 'TEST' : 'DEBUG'}]</b>\n` : '';
+    telegramReason = isTest ? 'test_signal' : 'score_75';
+    const debugPrefix = isTest ? `🧪 <b>[TEST]</b>\n` : '';
     const telegramMessage = debugPrefix + formatSignalForTelegram({
       ...signal,
       direction,
@@ -3525,10 +3524,10 @@ export default {
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const suggestions = [];
-          const lowScoreLosses = await env.DB.prepare(`SELECT COUNT(*) as c FROM signals WHERE outcome='LOSS' AND ai_score < 70`).first();
-          const lowScoreWins   = await env.DB.prepare(`SELECT COUNT(*) as c FROM signals WHERE outcome='WIN'  AND ai_score < 70`).first();
+          const lowScoreLosses = await env.DB.prepare(`SELECT COUNT(*) as c FROM signals WHERE outcome='LOSS' AND ai_score < 75`).first();
+          const lowScoreWins   = await env.DB.prepare(`SELECT COUNT(*) as c FROM signals WHERE outcome='WIN'  AND ai_score < 75`).first();
           if ((lowScoreLosses?.c || 0) > (lowScoreWins?.c || 0) && (lowScoreLosses?.c || 0) > 2) {
-            suggestions.push({ type: 'score_threshold', priority: 'high', title: 'Min. Score erhöhen', message: `${lowScoreLosses.c} Losses hatten Score < 70. Erwäge min_trade_score auf 75+ zu erhöhen.`, action: 'Schwellenwert anpassen' });
+            suggestions.push({ type: 'score_threshold', priority: 'high', title: 'Min. Score erhöhen', message: `${lowScoreLosses.c} Losses hatten Score < 75. Erwäge min_trade_score auf 80+ zu erhöhen.`, action: 'Schwellenwert anpassen' });
           }
           const symRows = await env.DB.prepare(`
             SELECT symbol, COUNT(*) as total,
