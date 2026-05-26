@@ -867,7 +867,14 @@ const JournalPage = ({ user }) => {
   const [newSymbol, setNewSymbol]       = useState('');
   const [addingSymbol, setAddingSymbol] = useState(false);
 
-  useEffect(() => { loadSymbols(); }, []);
+  useEffect(() => {
+    loadSymbols();
+    // Background refresh: pick up coins auto-added by incoming signals
+    const interval = setInterval(refreshSymbolsSilent, 30000);
+    const onVisible = () => { if (!document.hidden) refreshSymbolsSilent(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(interval); document.removeEventListener('visibilitychange', onVisible); };
+  }, []);
 
   useEffect(() => {
     if (symbols.length > 0) loadStatuses();
@@ -891,6 +898,19 @@ const JournalPage = ({ user }) => {
     setLoadingSymbols(false);
   };
 
+  const refreshSymbolsSilent = async () => {
+    try {
+      const res = await fetch(`${API_URL}/journal/symbols`, { headers: { 'X-Session-ID': sid() } });
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = data.symbols || [];
+      setSymbols(prev => {
+        const added = list.filter(s => !prev.includes(s));
+        return added.length > 0 ? [...prev, ...added] : prev;
+      });
+    } catch {}
+  };
+
   const loadStatuses = async () => {
     try {
       const res = await fetch(`${API_URL}/morning-routine/status?date=${date}`, { headers: { 'X-Session-ID': sid() } });
@@ -910,40 +930,37 @@ const JournalPage = ({ user }) => {
   };
 
   const removeSymbol = async (s) => {
+    const newList = symbols.filter(x => x !== s);
+    setSymbols(newList); // optimistic update
+    if (symbol === s) {
+      const next = newList[0] || null;
+      setSymbol(next);
+      if (next) localStorage.setItem('journal_symbol', next);
+      else localStorage.removeItem('journal_symbol');
+    }
     try {
-      const res = await fetch(`${API_URL}/journal/symbols`, {
+      await fetch(`${API_URL}/journal/symbols`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
-        body: JSON.stringify({ action: 'remove', symbol: s })
+        body: JSON.stringify({ symbols: newList })
       });
-      if (res.ok) {
-        const data = await res.json();
-        setSymbols(data.symbols);
-        if (symbol === s) {
-          const next = data.symbols[0] || null;
-          setSymbol(next);
-          if (next) localStorage.setItem('journal_symbol', next);
-        }
-      }
     } catch {}
   };
 
   const addSymbol = async () => {
     const sym = newSymbol.toUpperCase().trim();
-    if (!sym) return;
+    if (!sym || symbols.includes(sym)) { setNewSymbol(''); return; }
+    const newList = [...symbols, sym];
+    setSymbols(newList); // optimistic update
+    setNewSymbol('');
+    if (!symbol) changeSymbol(sym);
     setAddingSymbol(true);
     try {
-      const res = await fetch(`${API_URL}/journal/symbols`, {
+      await fetch(`${API_URL}/journal/symbols`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
-        body: JSON.stringify({ symbol: sym })
+        body: JSON.stringify({ symbols: newList })
       });
-      if (res.ok) {
-        const data = await res.json();
-        setSymbols(data.symbols);
-        setNewSymbol('');
-        if (!symbol) changeSymbol(sym);
-      }
     } catch {}
     setAddingSymbol(false);
   };

@@ -3412,13 +3412,19 @@ export default {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
-        const raw = await getSetting(env, 'journal_symbols', '[]');
-        let syms = (() => { try { return JSON.parse(raw); } catch { return []; } })();
-        if (body.action === 'remove' && body.symbol) {
-          syms = syms.filter(s => s !== body.symbol);
-        } else if (body.symbol) {
-          const sym = String(body.symbol).toUpperCase().trim();
-          if (sym && !syms.includes(sym)) syms.push(sym);
+        let syms;
+        if (Array.isArray(body.symbols)) {
+          // Client sends authoritative full list — no DB read needed, avoids stale-read races
+          syms = [...new Set(body.symbols.map(s => String(s).toUpperCase().trim()).filter(Boolean))];
+        } else {
+          const raw = await getSetting(env, 'journal_symbols', '[]');
+          syms = (() => { try { return JSON.parse(raw); } catch { return []; } })();
+          if (body.action === 'remove' && body.symbol) {
+            syms = syms.filter(s => s !== body.symbol);
+          } else if (body.symbol) {
+            const sym = String(body.symbol).toUpperCase().trim();
+            if (sym && !syms.includes(sym)) syms.push(sym);
+          }
         }
         await setSetting(env, 'journal_symbols', JSON.stringify(syms));
         return jsonResponse({ symbols: syms });
