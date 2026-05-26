@@ -3,8 +3,31 @@
 // Signal Processing · Snapshots · Telegram · Backtesting
 // ═══════════════════════════════════════════════════════════════
 
-function hashPassword(password) {
-  return btoa(password);
+// Dummy hash used to normalize timing when a login user is not found (M4).
+const _DUMMY_HASH = 'pbkdf2:AAAAAAAAAAAAAAAAAAAAAA==:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+
+async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const enc  = new TextEncoder();
+  const km   = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 100_000 }, km, 256);
+  const b64  = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
+  return `pbkdf2:${b64(salt.buffer)}:${b64(bits)}`;
+}
+
+// Verifies a password against both PBKDF2 (new) and Base64 (legacy) hashes.
+// Returns [match: boolean, needsUpgrade: boolean].
+async function verifyPassword(password, stored) {
+  if (!stored || !stored.startsWith('pbkdf2:')) {
+    return [stored === btoa(password), true];
+  }
+  const [, saltB64, hashB64] = stored.split(':');
+  const salt = Uint8Array.from(atob(saltB64), c => c.charCodeAt(0));
+  const enc  = new TextEncoder();
+  const km   = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 100_000 }, km, 256);
+  const b64  = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
+  return [b64(bits) === hashB64, false];
 }
 
 const CORS_HEADERS = {
@@ -1927,17 +1950,25 @@ async function getMarketRadar(env, session = null) {
 
 async function login(env, username, password) {
   const user = await env.DB.prepare(
-    `SELECT * FROM users WHERE username = ? OR email = ?`
+    `SELECT id, username, email, role, password_hash, must_change_password, skip_password_change, blocked FROM users WHERE username = ? OR email = ?`
   ).bind(username, username).first();
 
-  if (!user) return { success: false, error: 'Benutzer nicht gefunden' };
+  // Always run verifyPassword to normalise timing — prevents username enumeration.
+  const storedHash = user ? user.password_hash : _DUMMY_HASH;
+  const [match, needsUpgrade] = await verifyPassword(password, storedHash);
+
+  if (!user || !match) return { success: false, error: 'Ungültige Zugangsdaten' };
   if (user.blocked) return { success: false, error: 'Konto gesperrt' };
 
-  if (user.password_hash !== hashPassword(password)) {
-    return { success: false, error: 'Falsches Passwort' };
-  }
-
   await ensureTables(env);
+
+  // Transparently upgrade legacy Base64 hash to PBKDF2.
+  if (needsUpgrade) {
+    try {
+      await env.DB.prepare(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`)
+        .bind(await hashPassword(password), Date.now(), user.id).run();
+    } catch (_) {}
+  }
 
   const sessionId = crypto.randomUUID();
   const now = Date.now();
@@ -1976,7 +2007,7 @@ async function login(env, username, password) {
 async function changePassword(env, userId, newPassword) {
   await env.DB.prepare(
     `UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?`
-  ).bind(hashPassword(newPassword), Date.now(), userId).run();
+  ).bind(await hashPassword(newPassword), Date.now(), userId).run();
   try {
     await env.DB.prepare(`UPDATE sessions SET must_change_password = 0 WHERE user_id = ?`).bind(userId).run();
   } catch (_) {}
@@ -2770,7 +2801,7 @@ export default {
         await env.DB.prepare(`
           INSERT INTO users (id, username, email, password_hash, role, must_change_password, skip_password_change, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
-        `).bind(id, username, email, hashPassword(password), role || 'user', skipPasswordChange ? 1 : 0, now, now).run();
+        `).bind(id, username, email, await hashPassword(password), role || 'user', skipPasswordChange ? 1 : 0, now, now).run();
         return jsonResponse({ success: true, id });
       }
 
