@@ -466,7 +466,7 @@ function requireNonEmptyPrompt(prompt, context = 'AI call') {
   return prompt.trim();
 }
 
-async function analyzeSignalWithAI(env, signal, strategyConfig = null) {
+async function analyzeSignalWithAI(env, signal, strategyConfig = null, abortSignal = null) {
   if (!env.ANTHROPIC_API_KEY) {
     console.log('⚠️ No AI API key, using rule-based analysis');
     return analyzeWithRules(signal);
@@ -537,6 +537,7 @@ Bewerte das Signal nach v2.0 Kriterien. Antworte NUR als JSON:
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
+      signal: abortSignal,
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': env.ANTHROPIC_API_KEY,
@@ -1609,13 +1610,22 @@ async function processSignal(env, signal) {
   if (!strategy) strategy = await initDefaultStrategy(env);
   const strategyConfig = strategy?.config || null;
 
-  const ruleAnalysis  = analyzeWithRules(signal, strategyConfig);
+  const ruleAnalysis     = analyzeWithRules(signal, strategyConfig);
   const fallbackAnalysis = ruleAnalysis;
-  const analysis = await withTimeout(
-    analyzeSignalWithAI(env, signal, strategyConfig),
-    AI_TIMEOUT_MS,
-    fallbackAnalysis
-  ) || fallbackAnalysis;
+
+  // Use AbortController so the Anthropic fetch is actually cancelled when the
+  // timeout fires, not just orphaned in the background (M2).
+  const aiAbort = new AbortController();
+  const aiTimer = setTimeout(() => aiAbort.abort(), AI_TIMEOUT_MS);
+  let analysis;
+  try {
+    analysis = await analyzeSignalWithAI(env, signal, strategyConfig, aiAbort.signal) || fallbackAnalysis;
+  } catch (aiErr) {
+    if (aiErr.name !== 'AbortError') console.error('AI analysis error:', aiErr.message);
+    analysis = fallbackAnalysis;
+  } finally {
+    clearTimeout(aiTimer);
+  }
 
   // Apply score penalty when HIGH-impact market events are active in the last 2h.
   // This mirrors the strategy rule "Ausschluss: Major News innerhalb 15min" but
@@ -2602,15 +2612,28 @@ export default {
     // Per-request CORS headers (M1): uses ALLOWED_ORIGIN env var when set.
     const corsHeaders = buildCorsHeaders(request, env);
 
+    // N1: Security headers added to every response.
+    const securityHeaders = {
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Permissions-Policy': 'geolocation=(), camera=(), microphone=()',
+    };
+
     // Shadow the module-level jsonResponse with a request-aware version.
     const jsonResponse = (data, status = 200, extraHeaders = {}) =>
       new Response(JSON.stringify(data), {
         status,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders, ...extraHeaders },
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders,
+          ...securityHeaders,
+          ...extraHeaders,
+        },
       });
 
     if (request.method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders });
+      return new Response(null, { headers: { ...corsHeaders, ...securityHeaders } });
     }
 
     try {
@@ -3994,7 +4017,7 @@ export default {
         });
       }
 
-      return new Response("WAVESCOUT v3.4 Production ✅", { headers: CORS_HEADERS });
+      return new Response("WAVESCOUT v3.4 Production ✅", { headers: corsHeaders });
 
     } catch (error) {
       console.error('❌ Unhandled worker error:', error.message);
@@ -4008,13 +4031,23 @@ export default {
 
     // Every 3h: close open trades that are in profit
     if (event.cron === "0 */3 * * *") {
-      await check3hProfitClose(env);
+      try {
+        await check3hProfitClose(env);
+      } catch (err) {
+        console.error('❌ Cron 3h profit-close error:', err.message);
+        ctx.waitUntil(sendTelegramMessage(env, `⚠️ Cron-Fehler (3h): ${err.message}`).catch(() => {}));
+      }
     }
 
     // Every 4h: evaluate TP/SL hits + profit-close for 4h window
     if (event.cron === "0 */4 * * *") {
-      await check3hProfitClose(env);
-      await evaluateOpenTrades(env);
+      try {
+        await check3hProfitClose(env);
+        await evaluateOpenTrades(env);
+      } catch (err) {
+        console.error('❌ Cron 4h evaluation error:', err.message);
+        ctx.waitUntil(sendTelegramMessage(env, `⚠️ Cron-Fehler (4h): ${err.message}`).catch(() => {}));
+      }
     }
 
     // Re-evaluate open practice trades with latest snapshot prices
@@ -4036,7 +4069,11 @@ export default {
     }
 
     if (event.cron === "0 7 * * *") {
-      await sendDailySummary(env);
+      try {
+        await sendDailySummary(env);
+      } catch (err) {
+        console.error('❌ Daily summary cron error:', err.message);
+      }
     }
 
     // Refresh news cache in the background on every cron run so the News
