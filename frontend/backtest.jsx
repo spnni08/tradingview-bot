@@ -978,40 +978,105 @@ function StrategyLabTab({ sessionId, userRole }) {
     setEditCfg(JSON.parse(JSON.stringify(s.config || {})));
   };
 
-  const exportStrategy = (format) => {
+  const exportStrategy = async (format) => {
     if (!selected) return;
+    showToast('Exportiere…', 'info');
     const safeName = (selected.name || 'strategie').replace(/\s+/g, '-').toLowerCase();
     const fileName = `wavescout-${safeName}-${selected.version || 'v1'}`;
 
+    // Fetch all supporting data in parallel
+    const [statsRes, historyRes, practiceRes, compareRes] = await Promise.allSettled([
+      fetch(`${API_URL}/stats`,                    { credentials: 'include' }),
+      fetch(`${API_URL}/history?limit=500`,        { credentials: 'include' }),
+      fetch(`${API_URL}/practice-trades/stats`,    { credentials: 'include' }),
+      fetch(`${API_URL}/strategies/compare`,       { credentials: 'include' }),
+    ]);
+    const safe = async (r) => { try { return r.status === 'fulfilled' && r.value.ok ? await r.value.json() : null; } catch { return null; } };
+    const [stats, history, practice, compare] = await Promise.all([safe(statsRes), safe(historyRes), safe(practiceRes), safe(compareRes)]);
+
     if (format === 'json') {
       const payload = {
-        name: selected.name,
-        version: selected.version,
-        exported_at: new Date().toISOString(),
-        active: !!selected.active,
-        config: selected.config,
+        exported_at:  new Date().toISOString(),
+        strategy: {
+          name:    selected.name,
+          version: selected.version,
+          active:  !!selected.active,
+          config:  selected.config,
+        },
+        performance: {
+          overall_stats:        stats,
+          practice_trade_stats: practice,
+          strategy_comparison:  compare,
+        },
+        signal_logs:   history,
       };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = fileName + '.json'; a.click();
-      URL.revokeObjectURL(url);
+      a.href = URL.createObjectURL(blob); a.download = fileName + '.json'; a.click();
     } else {
-      const rules = selected.config?.rules || {};
-      const rows = [['Regel', 'Aktiv', 'Score', 'Params']];
-      Object.entries(rules).forEach(([key, rule]) => {
-        rows.push([key, rule.enabled ? 'ja' : 'nein', rule.score ?? '', JSON.stringify(rule.params || {})]);
-      });
-      const thresholds = selected.config?.thresholds || {};
-      rows.push([]);
-      rows.push(['Schwellenwert', 'Wert', '', '']);
-      Object.entries(thresholds).forEach(([k, v]) => rows.push([k, v, '', '']));
-      const csv = '﻿' + rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+      const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const row  = (...cols) => cols.map(cell).join(',');
+      const sep  = () => '';
+      const head = (title) => `"=== ${title} ==="`;
+      const lines = [];
+
+      // 1 — Strategie-Config
+      lines.push(head('STRATEGIE'), row('Name', 'Version', 'Aktiv', 'Export-Datum'));
+      lines.push(row(selected.name, selected.version, selected.active ? 'ja' : 'nein', new Date().toISOString()));
+      lines.push(sep());
+
+      // 2 — Regeln
+      lines.push(head('REGELN'), row('Regel', 'Aktiv', 'Score', 'Params'));
+      Object.entries(selected.config?.rules || {}).forEach(([k, r]) =>
+        lines.push(row(k, r.enabled ? 'ja' : 'nein', r.score ?? '', JSON.stringify(r.params || {}))));
+      lines.push(sep());
+
+      // 3 — Schwellenwerte
+      lines.push(head('SCHWELLENWERTE'), row('Schlüssel', 'Wert'));
+      Object.entries(selected.config?.thresholds || {}).forEach(([k, v]) => lines.push(row(k, v)));
+      lines.push(sep());
+
+      // 4 — Gesamtperformance
+      if (stats) {
+        lines.push(head('GESAMTPERFORMANCE'));
+        lines.push(row('Metrik', 'Wert'));
+        Object.entries(stats).forEach(([k, v]) => lines.push(row(k, typeof v === 'object' ? JSON.stringify(v) : v)));
+        lines.push(sep());
+      }
+
+      // 5 — Practice-Trade-Stats
+      if (practice) {
+        lines.push(head('PRACTICE-TRADES'));
+        lines.push(row('Metrik', 'Wert'));
+        Object.entries(practice).forEach(([k, v]) => lines.push(row(k, typeof v === 'object' ? JSON.stringify(v) : v)));
+        lines.push(sep());
+      }
+
+      // 6 — Strategie-Vergleich
+      if (compare?.length) {
+        lines.push(head('STRATEGIE-VERGLEICH'));
+        lines.push(row('Strategie', 'Version', 'Total', 'Wins', 'Losses', 'Win-Rate %', 'Ø Score'));
+        compare.forEach(s => lines.push(row(s.strategy_name, s.strategy_version, s.total, s.wins, s.losses, s.winRate, s.avg_score)));
+        lines.push(sep());
+      }
+
+      // 7 — Signal-Log / Trade-Historie
+      if (history?.length) {
+        lines.push(head('SIGNAL-LOG (Trade-Historie)'));
+        lines.push(row('Datum', 'Symbol', 'TF', 'Richtung', 'Score', 'Empfehlung', 'Einstieg', 'TP', 'SL', 'R/R', 'Outcome', 'P&L %', 'Ausgang'));
+        history.forEach(s => lines.push(row(
+          s.created_at ? new Date(s.created_at).toLocaleString('de-DE') : '',
+          s.symbol, s.timeframe, s.direction,
+          s.ai_score, s.ai_recommendation,
+          s.ai_entry || s.price, s.ai_tp, s.ai_sl, s.risk_reward,
+          s.outcome, s.pnl_pct, s.exit_price
+        )));
+      }
+
+      const csv = '﻿' + lines.join('\r\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = fileName + '.csv'; a.click();
-      URL.revokeObjectURL(url);
+      a.href = URL.createObjectURL(blob); a.download = fileName + '.csv'; a.click();
     }
     showToast(`Exportiert als ${format.toUpperCase()}`);
   };
