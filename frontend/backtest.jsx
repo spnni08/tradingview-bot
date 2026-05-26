@@ -978,6 +978,44 @@ function StrategyLabTab({ sessionId, userRole }) {
     setEditCfg(JSON.parse(JSON.stringify(s.config || {})));
   };
 
+  const exportStrategy = (format) => {
+    if (!selected) return;
+    const safeName = (selected.name || 'strategie').replace(/\s+/g, '-').toLowerCase();
+    const fileName = `wavescout-${safeName}-${selected.version || 'v1'}`;
+
+    if (format === 'json') {
+      const payload = {
+        name: selected.name,
+        version: selected.version,
+        exported_at: new Date().toISOString(),
+        active: !!selected.active,
+        config: selected.config,
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fileName + '.json'; a.click();
+      URL.revokeObjectURL(url);
+    } else {
+      const rules = selected.config?.rules || {};
+      const rows = [['Regel', 'Aktiv', 'Score', 'Params']];
+      Object.entries(rules).forEach(([key, rule]) => {
+        rows.push([key, rule.enabled ? 'ja' : 'nein', rule.score ?? '', JSON.stringify(rule.params || {})]);
+      });
+      const thresholds = selected.config?.thresholds || {};
+      rows.push([]);
+      rows.push(['Schwellenwert', 'Wert', '', '']);
+      Object.entries(thresholds).forEach(([k, v]) => rows.push([k, v, '', '']));
+      const csv = '﻿' + rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fileName + '.csv'; a.click();
+      URL.revokeObjectURL(url);
+    }
+    showToast(`Exportiert als ${format.toUpperCase()}`);
+  };
+
   const updateRule = (key, field, value) =>
     setEditCfg(prev => ({ ...prev, rules: { ...prev.rules, [key]: { ...prev.rules?.[key], [field]: value } } }));
 
@@ -1147,6 +1185,8 @@ function StrategyLabTab({ sessionId, userRole }) {
                   <span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontWeight: 400 }}>{selected.version}</span>
                 </div>
                 <div className="actions">
+                  <button className="btn btn-ghost btn-sm" onClick={() => exportStrategy('json')} title="Strategie als JSON herunterladen">↓ JSON</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => exportStrategy('csv')} title="Strategie als CSV herunterladen">↓ CSV</button>
                   {isAdmin && !selected.active && <button className="btn btn-ghost btn-sm" onClick={() => activate(selected.id)}>Als aktiv setzen</button>}
                   {isAdmin && <button className="btn btn-ghost btn-sm" style={{ color: 'var(--wait)' }} onClick={() => setResetDlg(true)}>Auf Standard zurücksetzen</button>}
                   {isAdmin && !selected.is_default && !selected.protected && <button className="btn btn-ghost btn-sm" style={{ color: 'var(--loss)' }} onClick={() => deleteStrategy(selected.id)}>Löschen</button>}
