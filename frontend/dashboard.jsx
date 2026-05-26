@@ -317,21 +317,21 @@ const DashboardPage = ({ user, navigate }) => {
             <div>
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.07em', fontWeight: 600, marginBottom: 3 }}>Portfolio-Wert</div>
               <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
-                ${equity.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                ${equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
             </div>
             <div style={{ width: 1, height: 36, background: 'var(--border)' }}/>
             <div>
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.07em', fontWeight: 600, marginBottom: 3 }}>Gesamt PnL</div>
               <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--font-mono)', color: totalPnL >= 0 ? 'var(--win)' : 'var(--loss)' }}>
-                {totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}
+                {totalPnL >= 0 ? '+' : '-'}${Math.abs(totalPnL).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
             </div>
             <div style={{ width: 1, height: 36, background: 'var(--border)' }}/>
             <div>
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.07em', fontWeight: 600, marginBottom: 3 }}>Startkapital</div>
               <div style={{ fontSize: 15, fontWeight: 600, fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>
-                ${startCap.toLocaleString('de-DE')}
+                ${startCap.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
             </div>
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -350,6 +350,12 @@ const DashboardPage = ({ user, navigate }) => {
                   ? <div className="spinner-sm"/>
                   : <Icon name="refresh" size={14}/>}
               </button>
+            </div>
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 10, color: 'var(--text-quaternary)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '.06em' }}>Equity-Verlauf</span>
+            <div style={{ flex: 1, height: 28, borderRadius: 4, background: 'rgba(59,130,246,0.06)', border: '1px dashed rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ fontSize: 10, color: 'var(--text-quaternary)', fontFamily: 'var(--font-mono)' }}>— Sparkline folgt —</span>
             </div>
           </div>
         </div>
@@ -384,7 +390,7 @@ const DashboardPage = ({ user, navigate }) => {
         />
         <StatCard
           label="Heute PnL"
-          value={(todayPnL >= 0 ? '+' : '') + `$${todayPnL.toFixed(2)}`}
+          value={(todayPnL >= 0 ? '+' : '-') + `$${Math.abs(todayPnL).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
           sub="Profit & Loss heute"
           subTone={todayPnL >= 0 ? 'win' : 'loss'}
         />
@@ -477,7 +483,7 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
         <Icon name="bolt" className="ico"/>
         <h3>Bestes Signal</h3>
         <div className="actions">
-          <span className="badge badge-tag">{getTimeAgo(signal.created_at)}</span>
+          <span className="badge badge-tag" title={`Erkannt: ${new Date(signal.created_at).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })}`}>{getTimeAgo(signal.created_at)}</span>
         </div>
       </div>
       <div className="card-body">
@@ -513,8 +519,10 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
             </div>
 
             {signal.ai_reason && (
-              <div style={{ marginTop: 14, padding: '10px 12px', background: 'var(--bg-0)', borderRadius: 8, fontSize: 13, lineHeight: 1.6 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 4 }}>AI Analyse</div>
+              <div style={{ marginTop: 14, padding: '10px 12px', background: 'var(--bg-0)', borderRadius: 8, fontSize: 13, lineHeight: 1.6, borderLeft: '3px solid var(--blue-500)' }}>
+                <div style={{ fontSize: 11, color: 'var(--blue-400)', marginBottom: 4, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <Icon name="cpu" size={11}/>KI-Analyse
+                </div>
                 {signal.ai_reason}
               </div>
             )}
@@ -559,7 +567,7 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
               );
             })()}
             <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'center', maxWidth: 110 }}>
-              {(signal.ai_score || 0) >= 75 ? 'Sehr starkes Setup' : (signal.ai_score || 0) >= 65 ? 'Gutes Setup' : 'Moderates Setup'}
+              {(signal.ai_score || 0) >= 75 ? 'Sehr starkes Setup' : (signal.ai_score || 0) >= 65 ? 'Gutes Setup' : 'Mittleres Setup'}
             </div>
             {signal.ai_risk && (
               <span className={`badge ${signal.ai_risk === 'LOW' ? 'badge-win' : signal.ai_risk === 'HIGH' ? 'badge-loss' : 'badge-wait'}`}>
@@ -567,7 +575,7 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
               </span>
             )}
             {signal.telegram_sent === 1 && (
-              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>📱 Telegram ✓</span>
+              <span className="badge badge-win" style={{ fontSize: 10 }}>📱 Telegram</span>
             )}
           </div>
         </div>
@@ -595,14 +603,16 @@ const MarketBiasCard = ({ marketBias }) => {
         <h3>Markt Bias</h3>
         <div className="actions"><span className="badge badge-tag">{marketBias.length} ASSETS</span></div>
       </div>
-      <div className="card-body" style={{ padding: '8px 18px 16px' }}>
+      <div className="card-body" style={{ padding: '12px 18px 18px' }}>
         {marketBias.map((item, i) => (
-          <div className="bias-row" key={i}>
+          <div className="bias-row" key={i} style={{ paddingTop: 10, paddingBottom: 10 }}>
             <AssetChip symbol={item.symbol}/>
-            <div style={{ flex: 1 }}/>
+            <div style={{ flex: 1, margin: '0 12px', height: 24, borderRadius: 4, background: 'rgba(59,130,246,0.05)', border: '1px dashed rgba(59,130,246,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ fontSize: 9, color: 'var(--text-quaternary)', fontFamily: 'var(--font-mono)' }}>spark</span>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5 }}>
               <span className="mono" style={{ fontSize: 14, fontWeight: 600 }}>
-                ${item.price != null ? item.price.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'N/A'}
+                ${item.price != null ? item.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'N/A'}
               </span>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <span className={`badge ${item.trend === 'bullish' ? 'badge-bullish' : item.trend === 'bearish' ? 'badge-bearish' : 'badge-neutral'}`}>
