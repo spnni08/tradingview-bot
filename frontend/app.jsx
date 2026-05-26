@@ -113,6 +113,7 @@ const App = () => {
       });
     } finally {
       localStorage.removeItem('wavescout_user');
+      sessionStorage.removeItem('wavescout_session');
       window.location.href = 'login.html';
     }
   };

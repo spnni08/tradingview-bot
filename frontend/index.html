@@ -7,11 +7,30 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="shared.css?v=394"/>
+<link rel="stylesheet" href="shared.css?v=395"/>
 </head>
 <body>
 
 <script>if(localStorage.getItem('theme')==='light')document.documentElement.setAttribute('data-theme','light');</script>
+<!-- Inject X-Session-ID header into every API request so auth works when
+     third-party cookies are blocked (Safari ITP, Chrome Partitioned Cookies). -->
+<script>
+(function(){
+  var _WORKER='tradingview-bot.spnn08.workers.dev';
+  var _orig=window.fetch;
+  window.fetch=function(resource,init){
+    var url=typeof resource==='string'?resource:(resource&&resource.url)||'';
+    if(url.indexOf(_WORKER)!==-1){
+      var sid=sessionStorage.getItem('wavescout_session');
+      if(sid){
+        init=init?Object.assign({},init):{};
+        init.headers=Object.assign({'X-Session-ID':sid},init.headers||{});
+      }
+    }
+    return _orig.call(this,resource,init);
+  };
+})();
+</script>
 <div id="root"></div>
 
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -19,19 +38,19 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
 <!-- Shell must load first (declares React hooks + shared components) -->
-<script type="text/babel" src="shell.jsx?v=394"></script>
+<script type="text/babel" src="shell.jsx?v=395"></script>
 
 <!-- Page components (no ReactDOM.createRoot — app.jsx handles that) -->
-<script type="text/babel" src="dashboard.jsx?v=394"></script>
-<script type="text/babel" src="journal.jsx?v=394"></script>
-<script type="text/babel" src="backtest.jsx?v=394"></script>
-<script type="text/babel" src="statistiken.jsx?v=394"></script>
-<script type="text/babel" src="einstellungen.jsx?v=394"></script>
-<script type="text/babel" src="news.jsx?v=394"></script>
-<script type="text/babel" src="admin.jsx?v=394"></script>
+<script type="text/babel" src="dashboard.jsx?v=395"></script>
+<script type="text/babel" src="journal.jsx?v=395"></script>
+<script type="text/babel" src="backtest.jsx?v=395"></script>
+<script type="text/babel" src="statistiken.jsx?v=395"></script>
+<script type="text/babel" src="einstellungen.jsx?v=395"></script>
+<script type="text/babel" src="news.jsx?v=395"></script>
+<script type="text/babel" src="admin.jsx?v=395"></script>
 
 <!-- Router — must load last -->
-<script type="text/babel" src="app.jsx?v=394"></script>
+<script type="text/babel" src="app.jsx?v=395"></script>
 
 </body>
 </html>
