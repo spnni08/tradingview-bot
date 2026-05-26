@@ -540,7 +540,7 @@ function SessionsCard() {
     } catch (_) {}
   };
 
-  const mySid = sid();
+  const mySid = null;
 
   return (
     <div className="card">
