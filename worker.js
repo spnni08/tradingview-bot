@@ -116,6 +116,47 @@ async function sendAlertMessage(env, message) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// FIELD ENCRYPTION (AES-256-GCM via env.ENCRYPTION_KEY secret)
+// Set ENCRYPTION_KEY to a random 32-char string in Cloudflare Secrets.
+// Without it, sensitive fields are stored as-is with a warning.
+// ═══════════════════════════════════════════════════════════════
+
+async function _getAesKey(env) {
+  if (!env.ENCRYPTION_KEY) return null;
+  const km = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.ENCRYPTION_KEY), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: new TextEncoder().encode('wavescout-aes-v1'), iterations: 10_000 },
+    km, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptField(env, plaintext) {
+  if (!plaintext) return plaintext;
+  const key = await _getAesKey(env);
+  if (!key) { console.warn('⚠️ ENCRYPTION_KEY not set — storing sensitive field unencrypted'); return plaintext; }
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plaintext));
+  const b64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
+  return `aes:${b64(iv.buffer)}:${b64(ct)}`;
+}
+
+async function decryptField(env, stored) {
+  if (!stored || !stored.startsWith('aes:')) return stored;
+  const key = await _getAesKey(env);
+  if (!key) { console.warn('⚠️ ENCRYPTION_KEY not set — cannot decrypt stored field'); return ''; }
+  try {
+    const [, ivB64, ctB64] = stored.split(':');
+    const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
+    const ct = Uint8Array.from(atob(ctB64), c => c.charCodeAt(0));
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+    return new TextDecoder().decode(pt);
+  } catch (e) {
+    console.error('❌ decryptField failed:', e.message);
+    return '';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // EXCHANGE API (Autotrade)
 // ═══════════════════════════════════════════════════════════════
 
@@ -215,10 +256,20 @@ async function placeBlofInOrder(cfg, { symbol, direction, qty, tp, sl }) {
   return { orderId: data.data?.[0]?.ordId, raw: data.data?.[0] };
 }
 
-async function placeExchangeOrder(env, { symbol, direction, entry, tp, sl }) {
+// Returns the autotrade config with sensitive fields decrypted.
+async function loadAutotradeConfig(env) {
   const raw = await getSetting(env, 'autotrade_config', null);
-  if (!raw) return { ok: false, error: 'Autotrade nicht konfiguriert' };
+  if (!raw) return null;
   const cfg = JSON.parse(raw);
+  cfg.apiKey     = await decryptField(env, cfg.apiKey);
+  cfg.apiSecret  = await decryptField(env, cfg.apiSecret);
+  cfg.passphrase = await decryptField(env, cfg.passphrase);
+  return cfg;
+}
+
+async function placeExchangeOrder(env, { symbol, direction, entry, tp, sl }) {
+  const cfg = await loadAutotradeConfig(env);
+  if (!cfg) return { ok: false, error: 'Autotrade nicht konfiguriert' };
   if (!cfg.enabled) return { ok: false, error: 'Autotrade deaktiviert' };
   const amount = parseFloat(cfg.tradeAmount) || 10;
   const qty = calcOrderQty(amount, entry);
@@ -1674,9 +1725,8 @@ async function processSignal(env, signal) {
 
   // Autotrade: place real exchange order if configured and score meets threshold
   try {
-    const atRaw = await getSetting(env, 'autotrade_config', null);
-    if (atRaw) {
-      const atCfg = JSON.parse(atRaw);
+    const atCfg = await loadAutotradeConfig(env);
+    if (atCfg) {
       const minScore = atCfg.minScore || 75;
       if (atCfg.enabled && !isTest && analysis.score >= minScore && analysis.entry) {
         const amount = parseFloat(atCfg.tradeAmount) || 10;
@@ -3406,14 +3456,16 @@ export default {
       if (request.method === "GET" && url.pathname === "/broker-config") {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
-        const raw = await getSetting(env, 'autotrade_config', null);
-        if (!raw) return jsonResponse({ configured: false });
-        const cfg = JSON.parse(raw);
-        // Never return the secret or passphrase in full
+        const cfg = await loadAutotradeConfig(env);
+        if (!cfg) return jsonResponse({ configured: false });
+        // Never return the full key — return a masked version only.
+        const masked = cfg.apiKey
+          ? cfg.apiKey.slice(0, 4) + '••••' + cfg.apiKey.slice(-4)
+          : '';
         return jsonResponse({
           configured: true,
           broker: cfg.broker,
-          apiKeyMasked: cfg.apiKey ? cfg.apiKey.slice(0, 4) + '••••' + cfg.apiKey.slice(-4) : '',
+          apiKeyMasked: masked,
           testnet: cfg.testnet,
           enabled: cfg.enabled,
           tradeAmount: cfg.tradeAmount,
@@ -3426,17 +3478,14 @@ export default {
         const session = await validateSession(env, request.headers.get("X-Session-ID"));
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
-        const existing = (() => {
-          try { const r = null; return r; } catch { return null; }
-        })();
-        // If secret is blank keep the previously stored one
-        const prevRaw = await getSetting(env, 'autotrade_config', null);
-        const prev = prevRaw ? JSON.parse(prevRaw) : {};
+        // Load and decrypt previous config so we can fall back to existing keys when omitted.
+        const prev = (await loadAutotradeConfig(env)) || {};
         const cfg = {
           broker:      body.broker      || prev.broker      || 'bybit',
-          apiKey:      body.apiKey      || prev.apiKey      || '',
-          apiSecret:   body.apiSecret   || prev.apiSecret   || '',
-          passphrase:  body.passphrase  || prev.passphrase  || '',
+          // Encrypt sensitive fields; fall back to existing encrypted value when blank.
+          apiKey:      await encryptField(env, body.apiKey      || prev.apiKey      || ''),
+          apiSecret:   await encryptField(env, body.apiSecret   || prev.apiSecret   || ''),
+          passphrase:  await encryptField(env, body.passphrase  || prev.passphrase  || ''),
           testnet:     body.testnet     !== undefined ? !!body.testnet : (prev.testnet ?? true),
           enabled:     body.enabled     !== undefined ? !!body.enabled : (prev.enabled ?? false),
           tradeAmount: parseFloat(body.tradeAmount) || prev.tradeAmount || 10,
