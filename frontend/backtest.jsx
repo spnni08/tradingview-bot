@@ -1759,14 +1759,14 @@ const BacktestPage = ({ user }) => {
         </div>
       </div>
 
-      {activeTab === 'practice'      && <PracticeTradesTab  sessionId={sessionId}/>}
-      {activeTab === 'history'       && <SignalHistoryTab   sessionId={sessionId}/>}
-      {activeTab === 'strategy'      && <StrategyLabTab     sessionId={sessionId} userRole={userRole}/>}
-      {activeTab === 'compare'       && <StrategyCompareTab sessionId={sessionId}/>}
-      {activeTab === 'regelanalyse'  && <RuleFrequencyTab   sessionId={sessionId}/>}
-      {activeTab === 'loss'          && <LossAnalysisTab    sessionId={sessionId}/>}
-      {activeTab === 'biasstats'     && <BiasStatsTab       sessionId={sessionId}/>}
-      {activeTab === 'suggestions'   && <SuggestionsTab     sessionId={sessionId}/>}
+      {activeTab === 'practice'      && <PracticeTradesTab/>}
+      {activeTab === 'history'       && <SignalHistoryTab/>}
+      {activeTab === 'strategy'      && <StrategyLabTab     userRole={userRole}/>}
+      {activeTab === 'compare'       && <StrategyCompareTab/>}
+      {activeTab === 'regelanalyse'  && <RuleFrequencyTab/>}
+      {activeTab === 'loss'          && <LossAnalysisTab/>}
+      {activeTab === 'biasstats'     && <BiasStatsTab/>}
+      {activeTab === 'suggestions'   && <SuggestionsTab/>}
     </div>
   );
 };
