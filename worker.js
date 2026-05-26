@@ -43,15 +43,35 @@ const CORS_HEADERS_DEFAULT = {
 function buildCorsHeaders(request, env) {
   const allowed = env?.ALLOWED_ORIGIN;
   const origin  = request?.headers?.get('Origin') || '';
-  if (allowed && origin === allowed) {
+
+  // When ALLOWED_ORIGIN is configured, only that origin gets credentials.
+  if (allowed) {
+    if (origin === allowed) {
+      return {
+        "Access-Control-Allow-Origin": allowed,
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID, X-Webhook-Secret",
+        "Access-Control-Allow-Credentials": "true",
+        "Vary": "Origin",
+      };
+    }
+    return CORS_HEADERS_DEFAULT;
+  }
+
+  // No ALLOWED_ORIGIN set: reflect the request origin so that
+  // credentials: 'include' works from any origin. Browser spec forbids
+  // combining credentials with the wildcard '*'. Set ALLOWED_ORIGIN to
+  // restrict this to your Pages domain.
+  if (origin) {
     return {
-      "Access-Control-Allow-Origin": allowed,
+      "Access-Control-Allow-Origin": origin,
       "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID, X-Webhook-Secret",
       "Access-Control-Allow-Credentials": "true",
       "Vary": "Origin",
     };
   }
+
   return CORS_HEADERS_DEFAULT;
 }
 
