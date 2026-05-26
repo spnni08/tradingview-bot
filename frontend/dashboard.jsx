@@ -81,21 +81,21 @@ const DashboardPage = ({ user, navigate }) => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [sessionId]);
+  }, []);
 
   const loadTodayBias = useCallback(async () => {
     try {
       const res = await fetch(`${API_URL}/today-bias`, { credentials: 'include' });
       if (res.ok) setTodayBias(await res.json());
     } catch { /* non-critical */ }
-  }, [sessionId]);
+  }, []);
 
   const loadMarketRadar = useCallback(async () => {
     try {
       const res = await fetch(`${API_URL}/market-radar`, { credentials: 'include' });
       if (res.ok) setRadar(await res.json());
     } catch { /* non-critical */ }
-  }, [sessionId]);
+  }, []);
 
   // ── Polling management ────────────────────────────────────────
   const stopPolling = useCallback(() => {
