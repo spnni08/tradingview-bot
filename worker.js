@@ -3754,34 +3754,43 @@ export default {
       // ── WEBHOOK (TradingView) ────────────────────────────────
 
       if (request.method === "POST" && url.pathname === "/webhook") {
-        const secret = url.searchParams.get("secret");
-        if (env.WEBHOOK_SECRET && secret !== env.WEBHOOK_SECRET) {
-          console.warn('⛔ Webhook: wrong or missing secret');
-          return jsonResponse({ error: "Unauthorized" }, 401);
-        }
+        // Secret can come from three sources (checked after body parsing):
+        //   1. X-Webhook-Secret header  (recommended — never logged)
+        //   2. JSON body field "secret"  (acceptable)
+        //   3. URL query param "secret"  (deprecated — appears in server logs)
+        const urlSecret = url.searchParams.get("secret");
+        if (urlSecret) console.warn('⚠️ Webhook: secret in URL is deprecated — use X-Webhook-Secret header instead');
 
         let rawBody = '';
         let payload = null;
 
         try {
           rawBody = await request.text();
-          console.log('📥 Webhook raw body:', rawBody.substring(0, 1000));
         } catch (readErr) {
           console.error('❌ Failed to read request body:', readErr.message);
-          return jsonResponse({ error: 'Failed to read body', message: readErr.message }, 400);
+          return jsonResponse({ error: 'Failed to read body' }, 400);
         }
 
         try {
           payload = JSON.parse(rawBody);
           console.log('📦 Parsed payload:', JSON.stringify(payload).substring(0, 500));
         } catch (parseErr) {
-          console.error('❌ JSON parse error:', parseErr.message, '| raw:', rawBody.substring(0, 200));
-          return jsonResponse({
-            error: 'Invalid JSON',
-            message: parseErr.message,
-            rawBodyPreview: rawBody.substring(0, 200)
-          }, 400);
+          console.error('❌ JSON parse error:', parseErr.message);
+          return jsonResponse({ error: 'Invalid JSON' }, 400);
         }
+
+        // Validate secret now that body is available.
+        if (env.WEBHOOK_SECRET) {
+          const effectiveSecret = request.headers.get('X-Webhook-Secret')
+                               || payload.secret
+                               || urlSecret;
+          if (effectiveSecret !== env.WEBHOOK_SECRET) {
+            console.warn('⛔ Webhook: wrong or missing secret');
+            return jsonResponse({ error: "Unauthorized" }, 401);
+          }
+        }
+        // Remove secret from payload so it is not persisted to the database.
+        if (payload.secret !== undefined) delete payload.secret;
 
         const eventType = (payload.event_type || 'SIGNAL').toUpperCase();
         console.log('🎯 event_type:', eventType, '| symbol:', payload.symbol, '| action:', payload.action);
