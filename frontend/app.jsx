@@ -49,7 +49,7 @@ const App = () => {
     '/backtesting': 'backtest',
     '/journal': 'journal',
     '/analytics': 'statistiken',
-    '/admin': 'admin',
+    '/admin': 'einstellungen',
     '/settings': 'einstellungen',
     '/profile': 'einstellungen'
   };
@@ -58,7 +58,6 @@ const App = () => {
     backtest: '/backtesting',
     journal: '/journal',
     statistiken: '/analytics',
-    admin: '/admin',
     einstellungen: '/settings'
   };
   const resolvePage = (path) => ROUTES[path] || 'dashboard';
@@ -119,15 +118,16 @@ const App = () => {
   };
 
   const navigate = (p) => {
-    const path = pageToPath[p] || '/dashboard';
+    const target = p === 'admin' ? 'einstellungen' : p;
+    const path = pageToPath[target] || '/dashboard';
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
-    setPage(p);
+    setPage(target);
     // Mark page as mounted so it stays alive for future visits.
-    setMounted(prev => prev.has(p) ? prev : new Set([...prev, p]));
+    setMounted(prev => prev.has(target) ? prev : new Set([...prev, target]));
   };
 
   useEffect(() => {
-    const h = (e) => setPage(e.detail);
+    const h = (e) => setPage(e.detail === 'admin' ? 'einstellungen' : e.detail);
     window.addEventListener('wavescout-navigate', h);
     return () => window.removeEventListener('wavescout-navigate', h);
   }, []);
@@ -144,11 +144,9 @@ const App = () => {
     );
   }
 
-  // Resolve admin → dashboard for non-admins.
-  const activePage = (page === 'admin' && user?.role !== 'admin') ? 'dashboard' : page;
+  const activePage = page;
   const props = { user, navigate };
 
-  // Page registry — admin only added when user has the role.
   const PAGE_COMPONENTS = {
     dashboard:     <DashboardPage     {...props}/>,
     journal:       <JournalPage       {...props}/>,
@@ -156,7 +154,6 @@ const App = () => {
     statistiken:   <StatistikenPage   {...props}/>,
     news:          <NewsPage          {...props}/>,
     einstellungen: <EinstellungenPage {...props}/>,
-    ...(user?.role === 'admin' ? { admin: <AdminPage {...props}/> } : {}),
   };
 
   return (

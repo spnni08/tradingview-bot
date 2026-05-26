@@ -280,24 +280,8 @@ function AdminWebhookTester() {
 
 // ─── Admin: Users Panel ───────────────────────────────────────
 
-function AdminUsersPanel() {
-  return (
-    <div className="card">
-      <div className="card-head"><Icon name="users" className="ico"/><h3>Nutzer &amp; Rollen</h3></div>
-      <div className="card-body">
-        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14, lineHeight: 1.6 }}>
-          Vollständige Nutzerverwaltung, Rollenzuweisung und Kontosperrung im Admin-Panel.
-        </p>
-        <a
-          href="#"
-          onClick={e => { e.preventDefault(); window.dispatchEvent(new CustomEvent('wavescout-navigate', { detail: 'admin' })); }}
-          className="btn btn-ghost btn-sm"
-        >
-          <Icon name="shield" size={13}/> Zum Admin-Panel
-        </a>
-      </div>
-    </div>
-  );
+function AdminUsersPanel({ user }) {
+  return <AdminPage user={user}/>;
 }
 
 // ─── Admin: Generic placeholder card ─────────────────────────
@@ -349,7 +333,7 @@ function AdminSection({ user }) {
         ))}
       </div>
       {sub === 'tradecheck' && <AdminTradeCheckPanel/>}
-      {sub === 'users'      && <AdminUsersPanel/>}
+      {sub === 'users'      && <AdminUsersPanel user={user}/>}
       {sub === 'webhook'    && <AdminWebhookTester/>}
       {sub === 'health'     && <AdminPlaceholder icon="signal"  title="System Health"  description="Datenbankstatus, Worker-Metriken und Systeminfo — in Entwicklung."/>}
       {sub === 'logs'       && <AdminPlaceholder icon="book"    title="Logs / Debug"   description="Worker-Logs und Debug-Ausgaben — im Cloudflare Dashboard unter Workers → Logs einsehbar."/>}
