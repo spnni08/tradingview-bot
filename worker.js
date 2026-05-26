@@ -1763,10 +1763,21 @@ function computeRadarStatus(events = []) {
 
 async function fetchRssItems(feed) {
   try {
-    const res = await fetch(feed.url, {
-      cf: { cacheTtl: 300, cacheEverything: true },
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WaveScout/1.0; +https://wavescout.dev)' }
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    let res;
+    try {
+      res = await fetch(feed.url, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; WaveScout/1.0; +https://wavescout.dev)',
+          'Accept': 'application/rss+xml, application/xml, text/xml, */*',
+          'Cache-Control': 'no-cache'
+        }
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!res.ok) return [];
     const xml = await res.text();
     const items = [...xml.matchAll(/<item[\s\S]*?<\/item>/g)].slice(0, 10);
@@ -1859,9 +1870,21 @@ async function getMarketRadar(env, session = null) {
     debug.db_saved += 1;
   }
 
-  const outputEvents = relevant.length ? relevant : (await env.DB.prepare(
-    `SELECT * FROM market_events WHERE status = 'ACTIVE' ORDER BY updated_at DESC LIMIT ?`
-  ).bind(MARKET_RADAR_MAX_EVENTS).all()).results.map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
+  let outputEvents;
+  if (relevant.length > 0) {
+    outputEvents = relevant;
+    // Mark ALL existing events as refreshed so 20-min cache works on subsequent requests
+    await env.DB.prepare(`UPDATE market_events SET updated_at = ? WHERE status = 'ACTIVE'`).bind(now).run();
+  } else {
+    const fb = await env.DB.prepare(
+      `SELECT * FROM market_events WHERE status = 'ACTIVE' ORDER BY updated_at DESC LIMIT ?`
+    ).bind(MARKET_RADAR_MAX_EVENTS).all();
+    outputEvents = (fb.results || []).map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
+    // Update updated_at so we don't hammer RSS feeds on the next request within 20 min
+    if (outputEvents.length > 0) {
+      await env.DB.prepare(`UPDATE market_events SET updated_at = ? WHERE status = 'ACTIVE'`).bind(now).run();
+    }
+  }
 
   return withDebug({
     success: true,
@@ -1877,15 +1900,22 @@ async function getMarketRadar(env, session = null) {
   } catch (error) {
     console.error('❌ market-radar error:', error?.message || error);
     debug.error_message = String(error?.message || error || 'market-radar failed');
+    let fallbackEvents = [];
+    try {
+      const fb = await env.DB.prepare(
+        `SELECT * FROM market_events WHERE status = 'ACTIVE' ORDER BY updated_at DESC LIMIT ?`
+      ).bind(MARKET_RADAR_MAX_EVENTS).all();
+      fallbackEvents = (fb.results || []).map(r => ({ ...r, affected_markets: JSON.parse(r.affected_markets || '[]') }));
+    } catch (_) {}
     return withDebug({
       success: true,
-      source: 'partial',
+      source: 'cache',
       errors: [debug.error_message],
-      status: 'NORMAL',
+      status: computeRadarStatus(fallbackEvents),
       updated_at: now,
       updatedAt: new Date(now).toISOString(),
-      summary: 'Radar-Daten aktuell nicht verfügbar. Letzte Daten konnten nicht geladen werden.',
-      events: [],
+      summary: fallbackEvents.length ? 'Krypto-Markt Events (zwischengespeichert).' : 'Radar-Daten aktuell nicht verfügbar.',
+      events: fallbackEvents,
       disclaimer: RADAR_DISCLAIMER
     });
   }
