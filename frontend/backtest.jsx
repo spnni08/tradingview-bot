@@ -178,8 +178,9 @@ function LossReasonModal({ signalId, sessionId, onClose, onSaved }) {
     setSaving(true);
     try {
       await fetch(`${API_URL}/signals/${signalId}/loss-reason`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ reason, note: note.trim() || null })
       });
       onSaved?.();
@@ -438,8 +439,8 @@ function PracticeTradesTab({ sessionId }) {
     setLoading(true);
     try {
       const [tRes, sRes] = await Promise.all([
-        fetch(`${API_URL}/practice-trades?limit=200`, { headers: { 'X-Session-ID': sessionId } }),
-        fetch(`${API_URL}/practice-trades/stats`,     { headers: { 'X-Session-ID': sessionId } })
+        fetch(`${API_URL}/practice-trades?limit=200`, { credentials: 'include' }),
+        fetch(`${API_URL}/practice-trades/stats`,     { credentials: 'include' })
       ]);
       if (tRes.ok) setTrades(await tRes.json());
       if (sRes.ok) setStats(await sRes.json());
@@ -563,8 +564,8 @@ function SignalHistoryTab({ sessionId }) {
     setLoading(true);
     try {
       const [hRes, sRes] = await Promise.all([
-        fetch(`${API_URL}/history?limit=500`, { headers: { 'X-Session-ID': sessionId } }),
-        fetch(`${API_URL}/stats`,             { headers: { 'X-Session-ID': sessionId } }),
+        fetch(`${API_URL}/history?limit=500`, { credentials: 'include' }),
+        fetch(`${API_URL}/stats`,             { credentials: 'include' }),
       ]);
       if (hRes.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       setHistory(hRes.ok ? await hRes.json() : []);
@@ -801,7 +802,7 @@ function RuleFrequencyTab({ sessionId }) {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/history?limit=500`, { headers: { 'X-Session-ID': sessionId } });
+      const res = await fetch(`${API_URL}/history?limit=500`, { credentials: 'include' });
       if (res.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       const signals = res.ok ? await res.json() : [];
 
@@ -959,7 +960,7 @@ function StrategyLabTab({ sessionId, userRole }) {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/strategies`, { headers: { 'X-Session-ID': sessionId } });
+      const res = await fetch(`${API_URL}/strategies`, { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setStrategies(data);
@@ -994,8 +995,9 @@ function StrategyLabTab({ sessionId, userRole }) {
     setSaving(true);
     try {
       const res = await fetch(`${API_URL}/strategies`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ name: newName.trim(), version: newVersion.trim() || 'v2.1', config: editCfg })
       });
       if (res.ok) { showToast('Strategie gespeichert'); setNewName(''); setNewVersion(''); await load(); }
@@ -1008,8 +1010,9 @@ function StrategyLabTab({ sessionId, userRole }) {
     setSaving(true);
     try {
       const res = await fetch(`${API_URL}/strategies`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ name: copyName.trim(), version: copyVersion.trim() || 'v2.1', config: editCfg })
       });
       if (res.ok) {
@@ -1017,7 +1020,7 @@ function StrategyLabTab({ sessionId, userRole }) {
         setCreateCopyDlg(false);
         setCopyName('');
         setCopyVersion('');
-        const data = await (await fetch(`${API_URL}/strategies`, { headers: { 'X-Session-ID': sessionId } })).json();
+        const data = await (await fetch(`${API_URL}/strategies`, { credentials: 'include' })).json();
         setStrategies(data);
         const newest = data.find(s => s.name === copyName.trim()) || data[data.length - 1];
         if (newest) selectStrategy(newest);
@@ -1027,14 +1030,16 @@ function StrategyLabTab({ sessionId, userRole }) {
 
   const activate = async stratId => {
     try {
-      const res = await fetch(`${API_URL}/strategies/${stratId}/activate`, { method: 'POST', headers: { 'X-Session-ID': sessionId } });
+      const res = await fetch(`${API_URL}/strategies/${stratId}/activate`, {
+        credentials: 'include', method: 'POST', credentials: 'include' });
       if (res.ok) { showToast('Strategie aktiviert'); await load(); }
     } catch (e) { showToast(e.message, 'error'); }
   };
 
   const deleteStrategy = async stratId => {
     try {
-      const res = await fetch(`${API_URL}/strategies/${stratId}`, { method: 'DELETE', headers: { 'X-Session-ID': sessionId } });
+      const res = await fetch(`${API_URL}/strategies/${stratId}`, {
+        credentials: 'include', method: 'DELETE', credentials: 'include' });
       if (res.ok) { showToast('Strategie gelöscht'); await load(); }
       else { const e = await res.json(); showToast(e.error || 'Fehler', 'error'); }
     } catch (e) { showToast(e.message, 'error'); }
@@ -1042,7 +1047,8 @@ function StrategyLabTab({ sessionId, userRole }) {
 
   const resetToDefault = async () => {
     try {
-      const res = await fetch(`${API_URL}/strategies/reset-to-default`, { method: 'POST', headers: { 'X-Session-ID': sessionId } });
+      const res = await fetch(`${API_URL}/strategies/reset-to-default`, {
+        credentials: 'include', method: 'POST', credentials: 'include' });
       if (res.ok) { showToast('Auf Standardstrategie zurückgesetzt'); setResetDlg(false); await load(); }
     } catch (e) { showToast(e.message, 'error'); }
   };
@@ -1354,8 +1360,8 @@ function StrategyCompareTab({ sessionId }) {
     setLoading(true);
     try {
       const [cRes, sRes] = await Promise.all([
-        fetch(`${API_URL}/strategies/compare`, { headers: { 'X-Session-ID': sessionId } }),
-        fetch(`${API_URL}/strategies`,          { headers: { 'X-Session-ID': sessionId } }),
+        fetch(`${API_URL}/strategies/compare`, { credentials: 'include' }),
+        fetch(`${API_URL}/strategies`,          { credentials: 'include' }),
       ]);
       if (cRes.ok) setCompareData(await cRes.json());
       if (sRes.ok) setAllStrats(await sRes.json());
@@ -1367,8 +1373,9 @@ function StrategyCompareTab({ sessionId }) {
     setAbRunning(true);
     try {
       const res = await fetch(`${API_URL}/strategies/ab-backtest`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ strategyIds: allStrats.map(s => s.id) })
       });
       if (res.ok) setAbResult(await res.json());
@@ -1443,14 +1450,14 @@ function LossAnalysisTab({ sessionId }) {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/history?limit=200`, { headers: { 'X-Session-ID': sessionId } });
+      const res = await fetch(`${API_URL}/history?limit=200`, { credentials: 'include' });
       if (res.ok) setLosses((await res.json()).filter(t => t.outcome === 'LOSS'));
     } catch (e) { console.error(e); } finally { setLoading(false); }
   };
 
   const loadReasons = async signalId => {
     try {
-      const res = await fetch(`${API_URL}/signals/${signalId}/loss-reasons`, { headers: { 'X-Session-ID': sessionId } });
+      const res = await fetch(`${API_URL}/signals/${signalId}/loss-reasons`, { credentials: 'include' });
       if (res.ok) {
         const reasonData = await res.json();
         setReasons(prev => ({ ...prev, [signalId]: reasonData }));
@@ -1549,7 +1556,7 @@ function SuggestionsTab({ sessionId }) {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/strategies/suggestions`, { headers: { 'X-Session-ID': sessionId } });
+      const res = await fetch(`${API_URL}/strategies/suggestions`, { credentials: 'include' });
       if (res.ok) setSuggestions(await res.json());
     } catch (e) { console.error(e); } finally { setLoading(false); }
   };
@@ -1601,7 +1608,7 @@ function BiasStatsTab({ sessionId }) {
       const params = new URLSearchParams();
       if (filter.strategy)  params.set('strategy', filter.strategy);
       if (filter.direction) params.set('direction', filter.direction);
-      const res = await fetch(`${API_URL}/bias-stats?${params}`, { headers: { 'X-Session-ID': sessionId } });
+      const res = await fetch(`${API_URL}/bias-stats?${params}`, { credentials: 'include' });
       if (res.ok) setStats(await res.json());
     } catch (e) { console.error(e); } finally { setLoading(false); }
   };
@@ -1714,7 +1721,6 @@ function BiasStatsTab({ sessionId }) {
 
 const BacktestPage = ({ user }) => {
   const [activeTab, setActiveTab] = useState('practice');
-  const sessionId = localStorage.getItem('wavescout_session');
   const userRole  = user?.role || 'user';
 
   const isTraderOrAdmin = userRole === 'admin' || userRole === 'trader';

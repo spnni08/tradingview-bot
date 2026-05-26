@@ -5,7 +5,6 @@
 
 // ─── Helpers ──────────────────────────────────────────────────
 
-function sid() { return localStorage.getItem('wavescout_session'); }
 
 function useToast() {
   const [toast, setToast] = React.useState(null);
@@ -230,7 +229,7 @@ function MorgenroutineTab({ symbol, date, onRoutineChange }) {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/morning-routine?date=${date}&symbol=${symbol}`, { headers: { 'X-Session-ID': sid() } });
+      const res = await fetch(`${API_URL}/morning-routine?date=${date}&symbol=${symbol}`, { credentials: 'include' });
       if (res.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       const data = await res.json();
       if (data && data.id) {
@@ -264,8 +263,9 @@ function MorgenroutineTab({ symbol, date, onRoutineChange }) {
     setSaving(true);
     try {
       const res = await fetch(`${API_URL}/morning-routine`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ date, symbol, ...form })
       });
       if (res.ok) {
@@ -404,7 +404,7 @@ function PreTradeTab({ symbol, date, routineDone }) {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/pre-trade-checklist?date=${date}&symbol=${symbol}`, { headers: { 'X-Session-ID': sid() } });
+      const res = await fetch(`${API_URL}/pre-trade-checklist?date=${date}&symbol=${symbol}`, { credentials: 'include' });
       if (res.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       const data = await res.json();
       if (data && data.locked) {
@@ -426,8 +426,9 @@ function PreTradeTab({ symbol, date, routineDone }) {
     setSaving(true);
     try {
       const res = await fetch(`${API_URL}/pre-trade-checklist`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ date, symbol, ...form })
       });
       if (res.ok) {
@@ -637,7 +638,7 @@ function AfterTradeTab({ symbol, date }) {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/trade-review?date=${date}&symbol=${symbol}`, { headers: { 'X-Session-ID': sid() } });
+      const res = await fetch(`${API_URL}/trade-review?date=${date}&symbol=${symbol}`, { credentials: 'include' });
       if (res.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       const data = await res.json();
       setReviews(Array.isArray(data) ? data : []);
@@ -655,8 +656,9 @@ function AfterTradeTab({ symbol, date }) {
     setSaving(true);
     try {
       const res = await fetch(`${API_URL}/trade-review`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({
           date,
           symbol,
@@ -883,8 +885,8 @@ const JournalPage = ({ user }) => {
   const loadSymbols = async () => {
     setLoadingSymbols(true);
     try {
-      const res = await fetch(`${API_URL}/journal/symbols`, { headers: { 'X-Session-ID': sid() } });
-      if (res.status === 401) { localStorage.removeItem('wavescout_session'); window.location.href = 'login.html'; return; }
+      const res = await fetch(`${API_URL}/journal/symbols`, { credentials: 'include' });
+      if (res.status === 401) { localStorage.removeItem('wavescout_user'); window.location.href = 'login.html'; return; }
       const data = await res.json();
       const list = data.symbols || [];
       setSymbols(list);
@@ -900,7 +902,7 @@ const JournalPage = ({ user }) => {
 
   const refreshSymbolsSilent = async () => {
     try {
-      const res = await fetch(`${API_URL}/journal/symbols`, { headers: { 'X-Session-ID': sid() } });
+      const res = await fetch(`${API_URL}/journal/symbols`, { credentials: 'include' });
       if (!res.ok) return;
       const data = await res.json();
       const list = data.symbols || [];
@@ -913,7 +915,7 @@ const JournalPage = ({ user }) => {
 
   const loadStatuses = async () => {
     try {
-      const res = await fetch(`${API_URL}/morning-routine/status?date=${date}`, { headers: { 'X-Session-ID': sid() } });
+      const res = await fetch(`${API_URL}/morning-routine/status?date=${date}`, { credentials: 'include' });
       if (res.ok) setSymbolStatuses(await res.json());
     } catch {}
   };
@@ -940,8 +942,9 @@ const JournalPage = ({ user }) => {
     }
     try {
       await fetch(`${API_URL}/journal/symbols`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ symbols: newList })
       });
     } catch {}
@@ -957,8 +960,9 @@ const JournalPage = ({ user }) => {
     setAddingSymbol(true);
     try {
       await fetch(`${API_URL}/journal/symbols`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ symbols: newList })
       });
     } catch {}

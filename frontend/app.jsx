@@ -69,34 +69,32 @@ const App = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
-    const sessionId = localStorage.getItem('wavescout_session');
-    const userData = localStorage.getItem('wavescout_user');
-
-    if (!sessionId || !userData) {
-      window.location.href = 'login.html';
-      return;
-    }
-
-    try {
-      const u = JSON.parse(userData);
-      if (u.mustChangePassword) {
-        window.location.href = 'change-password.html';
-        return;
-      }
-      setUser(u);
-      const initialPage = resolvePage(window.location.pathname);
-      if (!ROUTES[window.location.pathname]) window.history.replaceState({}, '', '/dashboard');
-      if (initialPage === 'admin' && u.role !== 'admin') {
-        window.history.replaceState({}, '', '/dashboard');
-        setPage('dashboard');
-      } else {
-        setPage(initialPage);
-      }
-      setReady(true);
-    } catch {
-      localStorage.clear();
-      window.location.href = 'login.html';
-    }
+    // Validate session via the HttpOnly cookie (credentials: 'include').
+    // Falls back to cached user info in localStorage for immediate UI render.
+    fetch(`${API_URL}/auth/me`, { credentials: 'include' })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        const u = data.user;
+        localStorage.setItem('wavescout_user', JSON.stringify(u));
+        if (u.mustChangePassword) {
+          window.location.href = 'change-password.html';
+          return;
+        }
+        setUser(u);
+        const initialPage = resolvePage(window.location.pathname);
+        if (!ROUTES[window.location.pathname]) window.history.replaceState({}, '', '/dashboard');
+        if (initialPage === 'admin' && u.role !== 'admin') {
+          window.history.replaceState({}, '', '/dashboard');
+          setPage('dashboard');
+        } else {
+          setPage(initialPage);
+        }
+        setReady(true);
+      })
+      .catch(() => {
+        localStorage.removeItem('wavescout_user');
+        window.location.href = 'login.html';
+      });
   }, []);
 
   useEffect(() => {
@@ -106,14 +104,13 @@ const App = () => {
   }, []);
 
   const handleLogout = async () => {
-    const sessionId = localStorage.getItem('wavescout_session');
     try {
       await fetch(`${API_URL}/auth/logout`, {
         method: 'POST',
-        headers: { 'X-Session-ID': sessionId }
+        credentials: 'include',
       });
     } finally {
-      localStorage.clear();
+      localStorage.removeItem('wavescout_user');
       window.location.href = 'login.html';
     }
   };

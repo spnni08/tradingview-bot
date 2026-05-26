@@ -272,6 +272,7 @@ loginForm.addEventListener('submit', async (e) => {
   try {
     const response = await fetch(`${API_URL}/auth/login`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
@@ -279,8 +280,8 @@ loginForm.addEventListener('submit', async (e) => {
     const data = await response.json();
 
     if (data.success) {
-      // Save session
-      localStorage.setItem('wavescout_session', data.session.id);
+      // Session ID is stored in an HttpOnly cookie by the server.
+      // Only non-sensitive user info is kept in localStorage for the UI.
       localStorage.setItem('wavescout_user', JSON.stringify(data.user));
 
       // Check if password change required

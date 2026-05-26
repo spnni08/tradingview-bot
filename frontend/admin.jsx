@@ -9,7 +9,6 @@ const API_URL = 'https://tradingview-bot.spnn08.workers.dev';
 
 // ─── Small helpers ───────────────────────────────────────────
 
-function sid() { return localStorage.getItem('wavescout_session'); }
 
 function StatusDot({ ok, label }) {
   return (
@@ -130,7 +129,7 @@ function TelegramCard({ status }) {
   const handleTest = async () => {
     setTesting(true); setTestResult(null);
     try {
-      const res = await fetch(`${API_URL}/test-telegram`, { headers: { 'X-Session-ID': sid() } });
+      const res = await fetch(`${API_URL}/test-telegram`, { credentials: 'include' });
       setTestResult(await res.json());
     } catch (e) { setTestResult({ success: false, message: e.message }); }
     finally { setTesting(false); }
@@ -141,8 +140,9 @@ function TelegramCard({ status }) {
     setSending(true); setSendResult(null);
     try {
       const res = await fetch(`${API_URL}/admin/telegram/send`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ message: customMsg })
       });
       setSendResult(await res.json());
@@ -154,8 +154,9 @@ function TelegramCard({ status }) {
     setSendingSignal(true); setSignalResult(null);
     try {
       const res = await fetch(`${API_URL}/admin/telegram/send`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({
           message: `🟢 <b>BTCUSDT</b> LONG\n\n⭐⭐⭐ Score: <b>82/100</b>\n📊 Timeframe: 5\n💰 Entry: $80,000.00\n🎯 TP: $81,600.00\n🛑 SL: $79,200.00\n\n📡 Dies ist ein Test-Signal aus dem Admin-Panel`
         })
@@ -226,9 +227,7 @@ function AIStatusCard({ status }) {
     setTesting(true); setResult(null);
     try {
       const res = await fetch(`${API_URL}/admin/test-ai`, {
-        method: 'POST',
-        headers: { 'X-Session-ID': sid() }
-      });
+        credentials: 'include', method: 'POST', credentials: 'include' });
       setResult(await res.json());
     } catch (e) { setResult({ ok: false, error: e.message }); }
     finally { setTesting(false); }
@@ -314,8 +313,9 @@ function WebhookTesterCard() {
     setLoading(type); setResult(null);
     try {
       const res = await fetch(`${API_URL}/admin/test-webhook`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ type })
       });
       setResult(await res.json());
@@ -432,8 +432,7 @@ function DBMaintenanceCard({ onStatusRefresh }) {
     setLoading(true); setResult(null);
     try {
       const res = await fetch(`${API_URL}/admin/db-cleanup`, {
-        method: 'POST', headers: { 'X-Session-ID': sid() }
-      });
+        credentials: 'include', method: 'POST', credentials: 'include' });
       const data = await res.json();
       setResult(data);
       onStatusRefresh();
@@ -445,8 +444,7 @@ function DBMaintenanceCard({ onStatusRefresh }) {
     setSetupLoading(true); setSetupResult(null);
     try {
       const res = await fetch(`${API_URL}/admin/setup-db`, {
-        method: 'POST', headers: { 'X-Session-ID': sid() }
-      });
+        credentials: 'include', method: 'POST', credentials: 'include' });
       const data = await res.json();
       setSetupResult({ ok: data.success, results: data.results });
       onStatusRefresh();
@@ -528,7 +526,7 @@ function SessionsCard() {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/admin/sessions`, { headers: { 'X-Session-ID': sid() } });
+      const res = await fetch(`${API_URL}/admin/sessions`, { credentials: 'include' });
       if (res.ok) setSessions(await res.json());
     } catch (_) {}
     finally { setLoading(false); }
@@ -537,8 +535,7 @@ function SessionsCard() {
   const handleKick = async (sessionId) => {
     try {
       await fetch(`${API_URL}/auth/logout`, {
-        method: 'POST', headers: { 'X-Session-ID': sessionId }
-      });
+        credentials: 'include', method: 'POST', credentials: 'include' });
       setSessions(prev => prev.filter(s => s.id !== sessionId));
     } catch (_) {}
   };
@@ -627,7 +624,7 @@ function DataCleanupCard({ onRefresh }) {
 
   const loadSettings = async () => {
     try {
-      const res = await fetch(`${API_URL}/admin/settings`, { headers: { 'X-Session-ID': sid() } });
+      const res = await fetch(`${API_URL}/admin/settings`, { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setMode(data.mode || 'test');
@@ -640,8 +637,9 @@ function DataCleanupCard({ onRefresh }) {
     setLoading(true); setResult(null);
     try {
       const res = await fetch(`${API_URL}/admin/delete-signals`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ type })
       });
       const data = await res.json();
@@ -667,8 +665,9 @@ function DataCleanupCard({ onRefresh }) {
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/admin/live-start`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ deleteTestSignals: deleteTestOnLive })
       });
       const data = await res.json();
@@ -889,8 +888,8 @@ const AdminPage = ({ user }) => {
   const loadAll = async () => {
     try {
       const [usersRes, statusRes] = await Promise.all([
-        fetch(`${API_URL}/users`,         { headers: { 'X-Session-ID': sid() } }),
-        fetch(`${API_URL}/admin/status`,  { headers: { 'X-Session-ID': sid() } })
+        fetch(`${API_URL}/users`,         { credentials: 'include' }),
+        fetch(`${API_URL}/admin/status`,  { credentials: 'include' })
       ]);
       if (usersRes.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       const usersData = usersRes.ok ? await usersRes.json() : [];
@@ -908,8 +907,9 @@ const AdminPage = ({ user }) => {
   const handleCreateUser = async (userData) => {
     try {
       const res = await fetch(`${API_URL}/admin/create-user`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify(userData)
       });
       if (res.ok) { setShowCreateUser(false); loadAll(); showToast('User erstellt'); }
@@ -920,8 +920,9 @@ const AdminPage = ({ user }) => {
   const handleChangeRole = async (userId, newRole) => {
     try {
       const res = await fetch(`${API_URL}/admin/users/${userId}/role`, {
+        credentials: 'include',
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ role: newRole })
       });
       if (res.ok) { loadAll(); showToast(`Rolle auf ${newRole} geändert`); }
@@ -936,8 +937,9 @@ const AdminPage = ({ user }) => {
         setConfirm(null);
         try {
           await fetch(`${API_URL}/admin/block-user`, {
+        credentials: 'include',
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+            headers: { 'Content-Type': 'application/json'},
             body: JSON.stringify({ userId, blocked: block })
           });
           loadAll();
@@ -954,8 +956,9 @@ const AdminPage = ({ user }) => {
         setConfirm(null);
         try {
           await fetch(`${API_URL}/admin/logout-user`, {
+        credentials: 'include',
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+            headers: { 'Content-Type': 'application/json'},
             body: JSON.stringify({ userId })
           });
           loadAll();
@@ -968,8 +971,9 @@ const AdminPage = ({ user }) => {
   const handleChangePassword = async (userId, newPassword) => {
     try {
       const res = await fetch(`${API_URL}/admin/change-password`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ userId, newPassword })
       });
       if (res.ok) { setShowChangePassword(false); setSelectedUser(null); showToast('Passwort geändert'); }

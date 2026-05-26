@@ -12,19 +12,18 @@ const StatistikenPage = ({ user }) => {
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2200); };
 
   useEffect(() => {
-    const sessionId = localStorage.getItem('wavescout_session');
-    loadStats(sessionId);
+    loadStats();
   }, []);
 
-  const loadStats = async (sessionId) => {
+  const loadStats = async () => {
     try {
       const [statsRes, histRes, analyticsRes, breakdownRes] = await Promise.all([
-        fetch(`${API_URL}/stats`,             { headers: { 'X-Session-ID': sessionId } }),
-        fetch(`${API_URL}/history?limit=200`, { headers: { 'X-Session-ID': sessionId } }),
-        fetch(`${API_URL}/analytics`,         { headers: { 'X-Session-ID': sessionId } }),
-        fetch(`${API_URL}/stats/breakdown`,   { headers: { 'X-Session-ID': sessionId } })
+        fetch(`${API_URL}/stats`,             { credentials: 'include' }),
+        fetch(`${API_URL}/history?limit=200`, { credentials: 'include' }),
+        fetch(`${API_URL}/analytics`,         { credentials: 'include' }),
+        fetch(`${API_URL}/stats/breakdown`,   { credentials: 'include' })
       ]);
-      if (statsRes.status === 401) { localStorage.removeItem('wavescout_session'); window.location.href = 'login.html'; return; }
+      if (statsRes.status === 401) { localStorage.removeItem('wavescout_user'); window.location.href = 'login.html'; return; }
       setStats(statsRes.ok      ? await statsRes.json()      : null);
       setHistory(histRes.ok     ? await histRes.json()       : []);
       setAnalytics(analyticsRes.ok ? await analyticsRes.json() : null);
@@ -45,7 +44,7 @@ const StatistikenPage = ({ user }) => {
   if (!stats) return (
     <div className="content" style={{ textAlign: 'center', paddingTop: 80 }}>
       <p style={{ color: 'var(--text-tertiary)' }}>Keine Statistikdaten verfügbar</p>
-      <button className="btn" style={{ marginTop: 16 }} onClick={() => { setLoading(true); loadStats(localStorage.getItem('wavescout_session')); }}>
+      <button className="btn" style={{ marginTop: 16 }} onClick={() => { setLoading(true); loadStats(); }}>
         <Icon name="refresh" size={14}/> Neu laden
       </button>
     </div>

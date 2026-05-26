@@ -30,17 +30,54 @@ async function verifyPassword(password, stored) {
   return [b64(bits) === hashB64, false];
 }
 
-const CORS_HEADERS = {
+// CORS is computed per-request inside the fetch handler to support
+// env.ALLOWED_ORIGIN and Access-Control-Allow-Credentials.
+// A static fallback is kept for the rare case jsonResponse is called
+// before the per-request CORS headers are in scope.
+const CORS_HEADERS_DEFAULT = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID"
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID, X-Webhook-Secret",
 };
 
+function buildCorsHeaders(request, env) {
+  const allowed = env?.ALLOWED_ORIGIN;
+  const origin  = request?.headers?.get('Origin') || '';
+  if (allowed && origin === allowed) {
+    return {
+      "Access-Control-Allow-Origin": allowed,
+      "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID, X-Webhook-Secret",
+      "Access-Control-Allow-Credentials": "true",
+      "Vary": "Origin",
+    };
+  }
+  return CORS_HEADERS_DEFAULT;
+}
+
+// Fallback — overridden by a local shadow inside fetch().
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json", ...CORS_HEADERS }
+    headers: { "Content-Type": "application/json", ...CORS_HEADERS_DEFAULT }
   });
+}
+
+// Extract session cookie value from a Cookie header string.
+function getSessionCookie(cookieHeader) {
+  if (!cookieHeader) return null;
+  const match = cookieHeader.match(/(?:^|;\s*)wavescout_session=([^;]+)/);
+  return match ? match[1] : null;
+}
+
+// Build a Set-Cookie string for the session token.
+function sessionCookieHeader(sessionId, maxAgeSeconds = 86400) {
+  return `wavescout_session=${sessionId}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${maxAgeSeconds}`;
+}
+
+// Build a Set-Cookie string that clears the session cookie.
+function clearSessionCookieHeader() {
+  return 'wavescout_session=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0';
 }
 
 const MARKET_RADAR_CACHE_TTL_MS = 20 * 60 * 1000;
@@ -2064,11 +2101,20 @@ async function changePassword(env, userId, newPassword) {
   return { success: true };
 }
 
-async function validateSession(env, sessionId) {
+// Accepts a session ID from: (1) HttpOnly cookie, (2) X-Session-ID header.
+// Call as validateSession(env, request) to enable cookie support.
+async function validateSession(env, requestOrId) {
+  let sessionId;
+  if (requestOrId && typeof requestOrId === 'object' && requestOrId.headers) {
+    sessionId = getSessionCookie(requestOrId.headers.get('Cookie'))
+             || requestOrId.headers.get('X-Session-ID');
+  } else {
+    sessionId = requestOrId;
+  }
   if (!sessionId) return null;
   try {
     const session = await env.DB.prepare(
-      `SELECT * FROM sessions WHERE id = ? AND expires_at > ?`
+      `SELECT id, user_id, username, role, must_change_password, expires_at, created_at FROM sessions WHERE id = ? AND expires_at > ?`
     ).bind(sessionId, Date.now()).first();
 
     if (!session) return null;
@@ -2529,8 +2575,18 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    // Per-request CORS headers (M1): uses ALLOWED_ORIGIN env var when set.
+    const corsHeaders = buildCorsHeaders(request, env);
+
+    // Shadow the module-level jsonResponse with a request-aware version.
+    const jsonResponse = (data, status = 200, extraHeaders = {}) =>
+      new Response(JSON.stringify(data), {
+        status,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders, ...extraHeaders },
+      });
+
     if (request.method === "OPTIONS") {
-      return new Response(null, { headers: CORS_HEADERS });
+      return new Response(null, { headers: corsHeaders });
     }
 
     try {
@@ -2540,15 +2596,33 @@ export default {
       if (request.method === "POST" && url.pathname === "/auth/login") {
         const { username, password } = await request.json();
         const result = await login(env, username, password);
-        return jsonResponse(result, result.success ? 200 : 401);
+        if (!result.success) return jsonResponse(result, 401);
+        // Set HttpOnly cookie so the session ID is never accessible to JS.
+        return jsonResponse(result, 200, {
+          'Set-Cookie': sessionCookieHeader(result.session.id),
+        });
       }
 
       if (request.method === "POST" && url.pathname === "/auth/logout") {
-        return jsonResponse(await logout(env, request.headers.get("X-Session-ID")));
+        const sessionId = getSessionCookie(request.headers.get('Cookie'))
+                       || request.headers.get("X-Session-ID");
+        await logout(env, sessionId);
+        return jsonResponse({ success: true }, 200, {
+          'Set-Cookie': clearSessionCookieHeader(),
+        });
+      }
+
+      if (request.method === "GET" && url.pathname === "/auth/me") {
+        const session = await validateSession(env, request);
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        return jsonResponse({ success: true, session, user: {
+          id: session.userId, username: session.username,
+          role: session.role, mustChangePassword: session.mustChangePassword,
+        }});
       }
 
       if (request.method === "POST" && url.pathname === "/auth/change-password") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const { newPassword } = await request.json();
         return jsonResponse(await changePassword(env, session.userId, newPassword));
@@ -2557,7 +2631,7 @@ export default {
       // ── DASHBOARD LIVE DATA ─────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/dashboard/live") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
         const [stats, latestSignals, bestSignal, marketBias, todayPnL] = await Promise.all([
@@ -2588,7 +2662,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/market-radar") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         return jsonResponse(await getMarketRadar(env, session));
       }
@@ -2596,20 +2670,20 @@ export default {
       // ── DATA ─────────────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/stats") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         return jsonResponse(await getStats(env));
       }
 
       if (request.method === "GET" && url.pathname === "/history") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const limit = Math.min(500, Math.max(1, parseInt(url.searchParams.get("limit") || "50")));
         return jsonResponse(await getHistory(env, limit));
       }
 
       if (request.method === "GET" && url.pathname === "/analytics") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const stats = await getStats(env);
         const history = await getHistory(env, 200);
@@ -2621,7 +2695,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/stats/breakdown") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
         try {
@@ -2670,7 +2744,7 @@ export default {
       // ── SIGNALS PATCH ────────────────────────────────────────
 
       if (request.method === "PATCH" && url.pathname.startsWith("/signals/") && !url.pathname.includes("/loss-reason")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
         const signalId = url.pathname.replace("/signals/", "");
@@ -2712,7 +2786,7 @@ export default {
       }
 
       if (request.method === "DELETE" && url.pathname.startsWith("/signals/") && !url.pathname.includes("/loss-reason")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const signalId = url.pathname.replace("/signals/", "");
         await env.DB.prepare(`DELETE FROM signals WHERE id = ?`).bind(signalId).run();
@@ -2721,7 +2795,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/practice-trades/manual") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
         const { signalId } = await request.json();
@@ -2767,7 +2841,7 @@ export default {
       }
 
       if (request.method === "PATCH" && url.pathname.startsWith("/practice-trades/")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const tradeId = url.pathname.replace("/practice-trades/", "");
         const { status, exitPrice } = await request.json();
@@ -2785,7 +2859,7 @@ export default {
       // ── PRACTICE TRADES ─────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/practice-trades") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         return jsonResponse(await getPracticeTrades(env, {
           symbol:    url.searchParams.get("symbol")    || 'all',
@@ -2797,7 +2871,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/practice-trades/stats") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         return jsonResponse(await getPracticeTradeStats(env));
       }
@@ -2805,21 +2879,21 @@ export default {
       // ── CHECKLIST ───────────────────────────────────────────
 
       if (request.method === "POST" && url.pathname === "/checklist") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
         return jsonResponse(await saveChecklist(env, body, session.username));
       }
 
       if (request.method === "GET" && url.pathname === "/checklist") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
         return jsonResponse(await getChecklist(env, date, session.username));
       }
 
       if (request.method === "DELETE" && url.pathname.startsWith("/checklist/")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const entryId = url.pathname.slice("/checklist/".length);
         await env.DB.prepare(`DELETE FROM checklists WHERE id = ? AND user = ?`)
@@ -2830,13 +2904,13 @@ export default {
       // ── ADMIN ───────────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/users") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         return jsonResponse(await getUsers(env));
       }
 
       if (request.method === "POST" && url.pathname === "/admin/create-user") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         const { username, email, password, role, skipPasswordChange } = await request.json();
@@ -2856,7 +2930,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/block-user") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         const { userId, blocked } = await request.json();
@@ -2869,7 +2943,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/logout-user") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const { userId } = await request.json();
         try { await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run(); } catch (_) {}
@@ -2877,14 +2951,14 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/change-password") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const { userId, newPassword } = await request.json();
         return jsonResponse(await changePassword(env, userId, newPassword));
       }
 
       if (request.method === "GET" && url.pathname === "/test-telegram") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const testMessage = `🧪 <b>WAVESCOUT Test</b>\n\nTelegram ist korrekt konfiguriert!\n⏰ ${new Date().toLocaleString('de-DE')}`;
         const success = await sendTelegramMessage(env, testMessage);
@@ -2893,7 +2967,7 @@ export default {
 
       // Send custom Telegram message
       if (request.method === "POST" && url.pathname === "/admin/telegram/send") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const { message } = await request.json();
         if (!message?.trim()) return jsonResponse({ error: 'message erforderlich' }, 400);
@@ -2903,7 +2977,7 @@ export default {
 
       // System status overview
       if (request.method === "GET" && url.pathname === "/admin/status") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         let dbOk = false;
@@ -2931,7 +3005,7 @@ export default {
 
       // Test Anthropic AI connection
       if (request.method === "POST" && url.pathname === "/admin/test-ai") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         if (!env.ANTHROPIC_API_KEY) {
@@ -2973,7 +3047,7 @@ export default {
 
       // Webhook tester — inject test SNAPSHOT or SIGNAL
       if (request.method === "POST" && url.pathname === "/admin/test-webhook") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         const { type } = await request.json();
@@ -3002,7 +3076,7 @@ export default {
 
       // ── 3H PROFIT-CLOSE (manual trigger) ────────────────────────
       if (request.method === "POST" && url.pathname === "/admin/check-3h-profit") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const results  = await check3hProfitClose(env);
@@ -3016,7 +3090,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/check-open-trades") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const results = await checkOpenSignals(env);
@@ -3031,7 +3105,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname.startsWith("/admin/check-trade/")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const signalId = url.pathname.replace("/admin/check-trade/", "");
         if (!signalId) return jsonResponse({ error: "Missing signal ID" }, 400);
@@ -3047,7 +3121,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/eod-check") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const results = await checkOpenSignals(env);
@@ -3061,7 +3135,7 @@ export default {
 
       // DB cleanup — remove old snapshots & expired sessions
       if (request.method === "POST" && url.pathname === "/admin/db-cleanup") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         const results = [];
@@ -3094,7 +3168,7 @@ export default {
 
       // Active sessions list
       if (request.method === "GET" && url.pathname === "/admin/sessions") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         try {
@@ -3107,7 +3181,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/setup-db") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         await ensureTables(env);
@@ -3183,7 +3257,7 @@ export default {
       // ── ADMIN DATA MANAGEMENT ───────────────────────────────
 
       if (request.method === "POST" && url.pathname === "/admin/delete-signals") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         const { type } = await request.json();
@@ -3208,7 +3282,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/live-start") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         const { deleteTestSignals } = await request.json();
@@ -3227,7 +3301,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/admin/settings") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         await ensureTables(env);
         try {
@@ -3239,7 +3313,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/settings") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         await ensureTables(env);
         const body = await request.json();
@@ -3252,7 +3326,7 @@ export default {
       // ── STRATEGIES ──────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/strategies") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         await ensureTables(env);
         const existing = await env.DB.prepare(`SELECT COUNT(*) as c FROM strategies`).first();
@@ -3264,7 +3338,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/strategies") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const { name, version, config } = await request.json();
         if (!name || !config) return jsonResponse({ error: "name and config required" }, 400);
@@ -3278,7 +3352,7 @@ export default {
       }
 
       if (request.method === "PUT" && url.pathname.startsWith("/strategies/") && !url.pathname.endsWith("/activate") && url.pathname !== "/strategies/reset-to-default" && url.pathname !== "/strategies/compare" && url.pathname !== "/strategies/ab-backtest" && url.pathname !== "/strategies/suggestions") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const stratId = url.pathname.slice("/strategies/".length);
         const existing = await env.DB.prepare(`SELECT * FROM strategies WHERE id = ?`).bind(stratId).first();
@@ -3296,7 +3370,7 @@ export default {
       }
 
       if (request.method === "DELETE" && url.pathname.startsWith("/strategies/")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const stratId = url.pathname.slice("/strategies/".length);
         const existing = await env.DB.prepare(`SELECT * FROM strategies WHERE id = ?`).bind(stratId).first();
@@ -3307,7 +3381,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname.endsWith("/activate") && url.pathname.startsWith("/strategies/")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const stratId = url.pathname.replace("/activate", "").slice("/strategies/".length);
         await env.DB.prepare(`UPDATE strategies SET active = 0`).run();
@@ -3316,7 +3390,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/strategies/reset-to-default") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         await env.DB.prepare(`UPDATE strategies SET active = 0`).run();
         await env.DB.prepare(`UPDATE strategies SET active = 1, updated_at = ? WHERE is_default = 1`).bind(Date.now()).run();
@@ -3324,7 +3398,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/strategies/compare") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const rows = await env.DB.prepare(`
@@ -3348,7 +3422,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/strategies/ab-backtest") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const { strategyIds } = await request.json();
         if (!strategyIds?.length) return jsonResponse({ error: "strategyIds required" }, 400);
@@ -3380,7 +3454,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/strategies/suggestions") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const suggestions = [];
@@ -3413,7 +3487,7 @@ export default {
       // ── SIGNAL LOSS REASONS ──────────────────────────────────
 
       if (request.method === "POST" && url.pathname.startsWith("/signals/") && url.pathname.endsWith("/loss-reason")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const signalId = url.pathname.slice("/signals/".length, -"/loss-reason".length);
         const { reason, note, strategyId } = await request.json();
@@ -3425,7 +3499,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname.startsWith("/signals/") && url.pathname.endsWith("/loss-reasons")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const signalId = url.pathname.slice("/signals/".length, -"/loss-reasons".length);
         try {
@@ -3437,7 +3511,7 @@ export default {
       // ── ADMIN: ROLE CHANGE ──────────────────────────────────
 
       if (request.method === "PATCH" && url.pathname.startsWith("/admin/users/") && url.pathname.endsWith("/role")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!isAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const userId = url.pathname.split("/")[3];
         const { role } = await request.json();
@@ -3454,7 +3528,7 @@ export default {
       // ── AUTOTRADE CONFIG ─────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/broker-config") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const cfg = await loadAutotradeConfig(env);
         if (!cfg) return jsonResponse({ configured: false });
@@ -3475,7 +3549,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/broker-config") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
         // Load and decrypt previous config so we can fall back to existing keys when omitted.
@@ -3498,7 +3572,7 @@ export default {
       // ── LIVE TRADES ───────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/live-trades") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         await ensureTables(env);
         const limit = Math.min(200, parseInt(url.searchParams.get("limit") || "50"));
@@ -3511,7 +3585,7 @@ export default {
       // ── JOURNAL SYMBOLS ──────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/journal/symbols") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const raw = await getSetting(env, 'journal_symbols', '[]');
         try { return jsonResponse({ symbols: JSON.parse(raw) }); }
@@ -3519,7 +3593,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/journal/symbols") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
         let syms;
@@ -3543,7 +3617,7 @@ export default {
       // ── MORNING ROUTINE ──────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/morning-routine/status") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
         const rows = await env.DB.prepare(
@@ -3557,7 +3631,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/morning-routine") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
         const symbol = url.searchParams.get("symbol") || 'BTCUSDT';
@@ -3568,7 +3642,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/morning-routine") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
         const date = body.date || new Date().toISOString().slice(0, 10);
@@ -3599,7 +3673,7 @@ export default {
       // ── MORNING BRIEFING ─────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/morning-briefing") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const since = Date.now() - 14 * 60 * 60 * 1000; // last 14 hours
@@ -3634,7 +3708,7 @@ export default {
       // ── TODAY BIAS ───────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/today-bias") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = new Date().toISOString().slice(0, 10);
         const symbol = url.searchParams.get("symbol") || null;
@@ -3650,7 +3724,7 @@ export default {
       // ── PRE-TRADE CHECKLIST ──────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/pre-trade-checklist") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
         const symbol = url.searchParams.get("symbol") || 'BTCUSDT';
@@ -3668,7 +3742,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/pre-trade-checklist") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
         const symbol = body.symbol || 'BTCUSDT';
@@ -3710,7 +3784,7 @@ export default {
       // ── TRADE REVIEW ─────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/trade-review") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
         const symbol = url.searchParams.get("symbol") || null;
@@ -3733,7 +3807,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/trade-review") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
         const symbol = body.symbol || body.instrument || 'BTCUSDT';
@@ -3776,7 +3850,7 @@ export default {
       // ── BIAS STATS ───────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/bias-stats") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const all = await env.DB.prepare(
