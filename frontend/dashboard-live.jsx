@@ -12,7 +12,6 @@ const Dashboard = () => {
 
   useEffect(() => {
     // Check auth
-    const sessionId = localStorage.getItem('wavescout_session');
     const userData = localStorage.getItem('wavescout_user');
     
     if (!sessionId || !userData) {
@@ -38,9 +37,7 @@ const Dashboard = () => {
 
   const loadLiveData = async (sessionId) => {
     try {
-      const response = await fetch(`${API_URL}/dashboard/live`, {
-        headers: { 'X-Session-ID': sessionId }
-      });
+      const response = await fetch(`${API_URL}/dashboard/live`, { credentials: 'include' });
 
       if (response.status === 401) {
         localStorage.clear();
@@ -58,11 +55,8 @@ const Dashboard = () => {
   };
 
   const handleLogout = () => {
-    const sessionId = localStorage.getItem('wavescout_session');
     fetch(`${API_URL}/auth/logout`, {
-      method: 'POST',
-      headers: { 'X-Session-ID': sessionId }
-    }).finally(() => {
+        credentials: 'include', method: 'POST', credentials: 'include' }).finally(() => {
       localStorage.clear();
       window.location.href = 'login.html';
     });

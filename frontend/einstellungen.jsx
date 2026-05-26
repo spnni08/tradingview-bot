@@ -25,14 +25,12 @@ function AdminTradeCheckPanel() {
   const [eodLoad,    setEodLoad]    = useState(false);
   const [rowLoading, setRowLoading] = useState({});
   const [rowResults, setRowResults] = useState({});
-  const sid = () => localStorage.getItem('wavescout_session');
 
   const runBulkCheck = async () => {
     setLoading(true); setResult(null); setRowResults({});
     try {
       const res = await fetch(`${API_URL}/admin/check-open-trades`, {
-        method: 'POST', headers: { 'X-Session-ID': sid() }
-      });
+        credentials: 'include', method: 'POST', credentials: 'include' });
       setResult(await res.json());
     } catch (e) { setResult({ success: false, error: e.message }); }
     setLoading(false);
@@ -42,8 +40,7 @@ function AdminTradeCheckPanel() {
     setRowLoading(p => ({ ...p, [id]: true }));
     try {
       const res = await fetch(`${API_URL}/admin/check-trade/${id}`, {
-        method: 'POST', headers: { 'X-Session-ID': sid() }
-      });
+        credentials: 'include', method: 'POST', credentials: 'include' });
       const data = await res.json();
       setRowResults(p => ({ ...p, [id]: data }));
     } catch (e) { setRowResults(p => ({ ...p, [id]: { success: false, error: e.message } })); }
@@ -54,8 +51,7 @@ function AdminTradeCheckPanel() {
     setEodLoad(true); setEodRes(null);
     try {
       const res = await fetch(`${API_URL}/admin/eod-check`, {
-        method: 'POST', headers: { 'X-Session-ID': sid() }
-      });
+        credentials: 'include', method: 'POST', credentials: 'include' });
       setEodRes(await res.json());
     } catch (e) { setEodRes({ success: false, error: e.message }); }
     setEodLoad(false);
@@ -523,11 +519,10 @@ function BrokerSection({ settings, setSettings, onSave, saved, showBrokerModal, 
   const [atLoaded, setAtLoaded] = useState(false);
   const [atError,  setAtError]  = useState(null);
   const selectedBroker = BROKERS.find(b => b.id === settings.broker) || BROKERS[0];
-  const sid = () => localStorage.getItem('wavescout_session');
 
   // Load autotrade config from backend on mount
   useEffect(() => {
-    fetch(`${API_URL}/broker-config`, { headers: { 'X-Session-ID': sid() } })
+    fetch(`${API_URL}/broker-config`, { credentials: 'include' })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d?.configured) {
@@ -550,8 +545,9 @@ function BrokerSection({ settings, setSettings, onSave, saved, showBrokerModal, 
     try {
       const body = { ...atConfig, broker: settings.broker };
       const res = await fetch(`${API_URL}/broker-config`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sid() },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify(body),
       });
       if (res.ok) {

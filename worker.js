@@ -3,21 +3,81 @@
 // Signal Processing · Snapshots · Telegram · Backtesting
 // ═══════════════════════════════════════════════════════════════
 
-function hashPassword(password) {
-  return btoa(password);
+// Dummy hash used to normalize timing when a login user is not found (M4).
+const _DUMMY_HASH = 'pbkdf2:AAAAAAAAAAAAAAAAAAAAAA==:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+
+async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const enc  = new TextEncoder();
+  const km   = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 100_000 }, km, 256);
+  const b64  = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
+  return `pbkdf2:${b64(salt.buffer)}:${b64(bits)}`;
 }
 
-const CORS_HEADERS = {
+// Verifies a password against both PBKDF2 (new) and Base64 (legacy) hashes.
+// Returns [match: boolean, needsUpgrade: boolean].
+async function verifyPassword(password, stored) {
+  if (!stored || !stored.startsWith('pbkdf2:')) {
+    return [stored === btoa(password), true];
+  }
+  const [, saltB64, hashB64] = stored.split(':');
+  const salt = Uint8Array.from(atob(saltB64), c => c.charCodeAt(0));
+  const enc  = new TextEncoder();
+  const km   = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 100_000 }, km, 256);
+  const b64  = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
+  return [b64(bits) === hashB64, false];
+}
+
+// CORS is computed per-request inside the fetch handler to support
+// env.ALLOWED_ORIGIN and Access-Control-Allow-Credentials.
+// A static fallback is kept for the rare case jsonResponse is called
+// before the per-request CORS headers are in scope.
+const CORS_HEADERS_DEFAULT = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID"
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID, X-Webhook-Secret",
 };
 
+function buildCorsHeaders(request, env) {
+  const allowed = env?.ALLOWED_ORIGIN;
+  const origin  = request?.headers?.get('Origin') || '';
+  if (allowed && origin === allowed) {
+    return {
+      "Access-Control-Allow-Origin": allowed,
+      "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID, X-Webhook-Secret",
+      "Access-Control-Allow-Credentials": "true",
+      "Vary": "Origin",
+    };
+  }
+  return CORS_HEADERS_DEFAULT;
+}
+
+// Fallback — overridden by a local shadow inside fetch().
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json", ...CORS_HEADERS }
+    headers: { "Content-Type": "application/json", ...CORS_HEADERS_DEFAULT }
   });
+}
+
+// Extract session cookie value from a Cookie header string.
+function getSessionCookie(cookieHeader) {
+  if (!cookieHeader) return null;
+  const match = cookieHeader.match(/(?:^|;\s*)wavescout_session=([^;]+)/);
+  return match ? match[1] : null;
+}
+
+// Build a Set-Cookie string for the session token.
+function sessionCookieHeader(sessionId, maxAgeSeconds = 86400) {
+  return `wavescout_session=${sessionId}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${maxAgeSeconds}`;
+}
+
+// Build a Set-Cookie string that clears the session cookie.
+function clearSessionCookieHeader() {
+  return 'wavescout_session=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0';
 }
 
 const MARKET_RADAR_CACHE_TTL_MS = 20 * 60 * 1000;
@@ -89,6 +149,47 @@ async function sendAlertMessage(env, message) {
   } catch (error) {
     console.error('❌ Alert error:', error);
     return false;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FIELD ENCRYPTION (AES-256-GCM via env.ENCRYPTION_KEY secret)
+// Set ENCRYPTION_KEY to a random 32-char string in Cloudflare Secrets.
+// Without it, sensitive fields are stored as-is with a warning.
+// ═══════════════════════════════════════════════════════════════
+
+async function _getAesKey(env) {
+  if (!env.ENCRYPTION_KEY) return null;
+  const km = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.ENCRYPTION_KEY), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: new TextEncoder().encode('wavescout-aes-v1'), iterations: 10_000 },
+    km, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptField(env, plaintext) {
+  if (!plaintext) return plaintext;
+  const key = await _getAesKey(env);
+  if (!key) { console.warn('⚠️ ENCRYPTION_KEY not set — storing sensitive field unencrypted'); return plaintext; }
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plaintext));
+  const b64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b)));
+  return `aes:${b64(iv.buffer)}:${b64(ct)}`;
+}
+
+async function decryptField(env, stored) {
+  if (!stored || !stored.startsWith('aes:')) return stored;
+  const key = await _getAesKey(env);
+  if (!key) { console.warn('⚠️ ENCRYPTION_KEY not set — cannot decrypt stored field'); return ''; }
+  try {
+    const [, ivB64, ctB64] = stored.split(':');
+    const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
+    const ct = Uint8Array.from(atob(ctB64), c => c.charCodeAt(0));
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+    return new TextDecoder().decode(pt);
+  } catch (e) {
+    console.error('❌ decryptField failed:', e.message);
+    return '';
   }
 }
 
@@ -192,10 +293,20 @@ async function placeBlofInOrder(cfg, { symbol, direction, qty, tp, sl }) {
   return { orderId: data.data?.[0]?.ordId, raw: data.data?.[0] };
 }
 
-async function placeExchangeOrder(env, { symbol, direction, entry, tp, sl }) {
+// Returns the autotrade config with sensitive fields decrypted.
+async function loadAutotradeConfig(env) {
   const raw = await getSetting(env, 'autotrade_config', null);
-  if (!raw) return { ok: false, error: 'Autotrade nicht konfiguriert' };
+  if (!raw) return null;
   const cfg = JSON.parse(raw);
+  cfg.apiKey     = await decryptField(env, cfg.apiKey);
+  cfg.apiSecret  = await decryptField(env, cfg.apiSecret);
+  cfg.passphrase = await decryptField(env, cfg.passphrase);
+  return cfg;
+}
+
+async function placeExchangeOrder(env, { symbol, direction, entry, tp, sl }) {
+  const cfg = await loadAutotradeConfig(env);
+  if (!cfg) return { ok: false, error: 'Autotrade nicht konfiguriert' };
   if (!cfg.enabled) return { ok: false, error: 'Autotrade deaktiviert' };
   const amount = parseFloat(cfg.tradeAmount) || 10;
   const qty = calcOrderQty(amount, entry);
@@ -355,7 +466,7 @@ function requireNonEmptyPrompt(prompt, context = 'AI call') {
   return prompt.trim();
 }
 
-async function analyzeSignalWithAI(env, signal, strategyConfig = null) {
+async function analyzeSignalWithAI(env, signal, strategyConfig = null, abortSignal = null) {
   if (!env.ANTHROPIC_API_KEY) {
     console.log('⚠️ No AI API key, using rule-based analysis');
     return analyzeWithRules(signal);
@@ -426,6 +537,7 @@ Bewerte das Signal nach v2.0 Kriterien. Antworte NUR als JSON:
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
+      signal: abortSignal,
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': env.ANTHROPIC_API_KEY,
@@ -1119,6 +1231,8 @@ async function ensureTables(env) {
       ['skip_password_change', 'INTEGER DEFAULT 0'],
       ['blocked',              'INTEGER DEFAULT 0'],
       ['last_seen',            'INTEGER'],
+      ['login_failures',       'INTEGER DEFAULT 0'],
+      ['locked_until',         'INTEGER DEFAULT 0'],
     ];
     for (const [col, type] of userCols) {
       try { await env.DB.prepare(`ALTER TABLE users ADD COLUMN ${col} ${type}`).run(); }
@@ -1496,13 +1610,22 @@ async function processSignal(env, signal) {
   if (!strategy) strategy = await initDefaultStrategy(env);
   const strategyConfig = strategy?.config || null;
 
-  const ruleAnalysis  = analyzeWithRules(signal, strategyConfig);
+  const ruleAnalysis     = analyzeWithRules(signal, strategyConfig);
   const fallbackAnalysis = ruleAnalysis;
-  const analysis = await withTimeout(
-    analyzeSignalWithAI(env, signal, strategyConfig),
-    AI_TIMEOUT_MS,
-    fallbackAnalysis
-  ) || fallbackAnalysis;
+
+  // Use AbortController so the Anthropic fetch is actually cancelled when the
+  // timeout fires, not just orphaned in the background (M2).
+  const aiAbort = new AbortController();
+  const aiTimer = setTimeout(() => aiAbort.abort(), AI_TIMEOUT_MS);
+  let analysis;
+  try {
+    analysis = await analyzeSignalWithAI(env, signal, strategyConfig, aiAbort.signal) || fallbackAnalysis;
+  } catch (aiErr) {
+    if (aiErr.name !== 'AbortError') console.error('AI analysis error:', aiErr.message);
+    analysis = fallbackAnalysis;
+  } finally {
+    clearTimeout(aiTimer);
+  }
 
   // Apply score penalty when HIGH-impact market events are active in the last 2h.
   // This mirrors the strategy rule "Ausschluss: Major News innerhalb 15min" but
@@ -1651,9 +1774,8 @@ async function processSignal(env, signal) {
 
   // Autotrade: place real exchange order if configured and score meets threshold
   try {
-    const atRaw = await getSetting(env, 'autotrade_config', null);
-    if (atRaw) {
-      const atCfg = JSON.parse(atRaw);
+    const atCfg = await loadAutotradeConfig(env);
+    if (atCfg) {
       const minScore = atCfg.minScore || 75;
       if (atCfg.enabled && !isTest && analysis.score >= minScore && analysis.entry) {
         const amount = parseFloat(atCfg.tradeAmount) || 10;
@@ -1925,19 +2047,47 @@ async function getMarketRadar(env, session = null) {
 // AUTH FUNCTIONS (D1-backed sessions)
 // ═══════════════════════════════════════════════════════════════
 
+const LOGIN_MAX_FAILURES = 5;
+const LOGIN_LOCKOUT_MS   = 15 * 60 * 1000; // 15 minutes
+
 async function login(env, username, password) {
   const user = await env.DB.prepare(
-    `SELECT * FROM users WHERE username = ? OR email = ?`
+    `SELECT id, username, email, role, password_hash, must_change_password, skip_password_change, blocked, login_failures, locked_until FROM users WHERE username = ? OR email = ?`
   ).bind(username, username).first();
 
-  if (!user) return { success: false, error: 'Benutzer nicht gefunden' };
+  // Always run verifyPassword to normalise timing — prevents username enumeration.
+  const storedHash = user ? user.password_hash : _DUMMY_HASH;
+  const [match, needsUpgrade] = await verifyPassword(password, storedHash);
+
+  if (!user || !match) {
+    if (user) {
+      // Increment failure counter and lock account after threshold.
+      const failures  = (user.login_failures || 0) + 1;
+      const lockedUntil = failures >= LOGIN_MAX_FAILURES ? Date.now() + LOGIN_LOCKOUT_MS : (user.locked_until || 0);
+      try {
+        await env.DB.prepare(`UPDATE users SET login_failures = ?, locked_until = ?, updated_at = ? WHERE id = ?`)
+          .bind(failures, lockedUntil, Date.now(), user.id).run();
+      } catch (_) {}
+    }
+    return { success: false, error: 'Ungültige Zugangsdaten' };
+  }
   if (user.blocked) return { success: false, error: 'Konto gesperrt' };
 
-  if (user.password_hash !== hashPassword(password)) {
-    return { success: false, error: 'Falsches Passwort' };
+  // Check brute-force lockout.
+  if (user.locked_until && user.locked_until > Date.now()) {
+    const remainMin = Math.ceil((user.locked_until - Date.now()) / 60000);
+    return { success: false, error: `Konto vorübergehend gesperrt. Bitte in ${remainMin} Minute(n) erneut versuchen.` };
   }
 
   await ensureTables(env);
+
+  // Transparently upgrade legacy Base64 hash to PBKDF2.
+  if (needsUpgrade) {
+    try {
+      await env.DB.prepare(`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`)
+        .bind(await hashPassword(password), Date.now(), user.id).run();
+    } catch (_) {}
+  }
 
   const sessionId = crypto.randomUUID();
   const now = Date.now();
@@ -1951,7 +2101,9 @@ async function login(env, username, password) {
   `).bind(sessionId, user.id, user.username, user.role, mustChange ? 1 : 0, now, expiresAt).run();
 
   try {
-    await env.DB.prepare(`UPDATE users SET last_seen = ? WHERE id = ?`).bind(now, user.id).run();
+    // Reset failure counter on successful login.
+    await env.DB.prepare(`UPDATE users SET last_seen = ?, login_failures = 0, locked_until = 0 WHERE id = ?`)
+      .bind(now, user.id).run();
   } catch (_) {}
 
   return {
@@ -1976,18 +2128,27 @@ async function login(env, username, password) {
 async function changePassword(env, userId, newPassword) {
   await env.DB.prepare(
     `UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?`
-  ).bind(hashPassword(newPassword), Date.now(), userId).run();
+  ).bind(await hashPassword(newPassword), Date.now(), userId).run();
   try {
     await env.DB.prepare(`UPDATE sessions SET must_change_password = 0 WHERE user_id = ?`).bind(userId).run();
   } catch (_) {}
   return { success: true };
 }
 
-async function validateSession(env, sessionId) {
+// Accepts a session ID from: (1) HttpOnly cookie, (2) X-Session-ID header.
+// Call as validateSession(env, request) to enable cookie support.
+async function validateSession(env, requestOrId) {
+  let sessionId;
+  if (requestOrId && typeof requestOrId === 'object' && requestOrId.headers) {
+    sessionId = getSessionCookie(requestOrId.headers.get('Cookie'))
+             || requestOrId.headers.get('X-Session-ID');
+  } else {
+    sessionId = requestOrId;
+  }
   if (!sessionId) return null;
   try {
     const session = await env.DB.prepare(
-      `SELECT * FROM sessions WHERE id = ? AND expires_at > ?`
+      `SELECT id, user_id, username, role, must_change_password, expires_at, created_at FROM sessions WHERE id = ? AND expires_at > ?`
     ).bind(sessionId, Date.now()).first();
 
     if (!session) return null;
@@ -2448,8 +2609,31 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    // Per-request CORS headers (M1): uses ALLOWED_ORIGIN env var when set.
+    const corsHeaders = buildCorsHeaders(request, env);
+
+    // N1: Security headers added to every response.
+    const securityHeaders = {
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Permissions-Policy': 'geolocation=(), camera=(), microphone=()',
+    };
+
+    // Shadow the module-level jsonResponse with a request-aware version.
+    const jsonResponse = (data, status = 200, extraHeaders = {}) =>
+      new Response(JSON.stringify(data), {
+        status,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders,
+          ...securityHeaders,
+          ...extraHeaders,
+        },
+      });
+
     if (request.method === "OPTIONS") {
-      return new Response(null, { headers: CORS_HEADERS });
+      return new Response(null, { headers: { ...corsHeaders, ...securityHeaders } });
     }
 
     try {
@@ -2459,15 +2643,33 @@ export default {
       if (request.method === "POST" && url.pathname === "/auth/login") {
         const { username, password } = await request.json();
         const result = await login(env, username, password);
-        return jsonResponse(result, result.success ? 200 : 401);
+        if (!result.success) return jsonResponse(result, 401);
+        // Set HttpOnly cookie so the session ID is never accessible to JS.
+        return jsonResponse(result, 200, {
+          'Set-Cookie': sessionCookieHeader(result.session.id),
+        });
       }
 
       if (request.method === "POST" && url.pathname === "/auth/logout") {
-        return jsonResponse(await logout(env, request.headers.get("X-Session-ID")));
+        const sessionId = getSessionCookie(request.headers.get('Cookie'))
+                       || request.headers.get("X-Session-ID");
+        await logout(env, sessionId);
+        return jsonResponse({ success: true }, 200, {
+          'Set-Cookie': clearSessionCookieHeader(),
+        });
+      }
+
+      if (request.method === "GET" && url.pathname === "/auth/me") {
+        const session = await validateSession(env, request);
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        return jsonResponse({ success: true, session, user: {
+          id: session.userId, username: session.username,
+          role: session.role, mustChangePassword: session.mustChangePassword,
+        }});
       }
 
       if (request.method === "POST" && url.pathname === "/auth/change-password") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const { newPassword } = await request.json();
         return jsonResponse(await changePassword(env, session.userId, newPassword));
@@ -2476,7 +2678,7 @@ export default {
       // ── DASHBOARD LIVE DATA ─────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/dashboard/live") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
         const [stats, latestSignals, bestSignal, marketBias, todayPnL] = await Promise.all([
@@ -2507,7 +2709,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/market-radar") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         return jsonResponse(await getMarketRadar(env, session));
       }
@@ -2515,20 +2717,20 @@ export default {
       // ── DATA ─────────────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/stats") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         return jsonResponse(await getStats(env));
       }
 
       if (request.method === "GET" && url.pathname === "/history") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const limit = Math.min(500, Math.max(1, parseInt(url.searchParams.get("limit") || "50")));
         return jsonResponse(await getHistory(env, limit));
       }
 
       if (request.method === "GET" && url.pathname === "/analytics") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const stats = await getStats(env);
         const history = await getHistory(env, 200);
@@ -2540,7 +2742,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/stats/breakdown") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
         try {
@@ -2589,7 +2791,7 @@ export default {
       // ── SIGNALS PATCH ────────────────────────────────────────
 
       if (request.method === "PATCH" && url.pathname.startsWith("/signals/") && !url.pathname.includes("/loss-reason")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
         const signalId = url.pathname.replace("/signals/", "");
@@ -2631,7 +2833,7 @@ export default {
       }
 
       if (request.method === "DELETE" && url.pathname.startsWith("/signals/") && !url.pathname.includes("/loss-reason")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const signalId = url.pathname.replace("/signals/", "");
         await env.DB.prepare(`DELETE FROM signals WHERE id = ?`).bind(signalId).run();
@@ -2640,7 +2842,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/practice-trades/manual") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
         const { signalId } = await request.json();
@@ -2686,7 +2888,7 @@ export default {
       }
 
       if (request.method === "PATCH" && url.pathname.startsWith("/practice-trades/")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const tradeId = url.pathname.replace("/practice-trades/", "");
         const { status, exitPrice } = await request.json();
@@ -2704,7 +2906,7 @@ export default {
       // ── PRACTICE TRADES ─────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/practice-trades") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         return jsonResponse(await getPracticeTrades(env, {
           symbol:    url.searchParams.get("symbol")    || 'all',
@@ -2716,7 +2918,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/practice-trades/stats") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         return jsonResponse(await getPracticeTradeStats(env));
       }
@@ -2724,21 +2926,21 @@ export default {
       // ── CHECKLIST ───────────────────────────────────────────
 
       if (request.method === "POST" && url.pathname === "/checklist") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
         return jsonResponse(await saveChecklist(env, body, session.username));
       }
 
       if (request.method === "GET" && url.pathname === "/checklist") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
         return jsonResponse(await getChecklist(env, date, session.username));
       }
 
       if (request.method === "DELETE" && url.pathname.startsWith("/checklist/")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const entryId = url.pathname.slice("/checklist/".length);
         await env.DB.prepare(`DELETE FROM checklists WHERE id = ? AND user = ?`)
@@ -2749,13 +2951,13 @@ export default {
       // ── ADMIN ───────────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/users") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         return jsonResponse(await getUsers(env));
       }
 
       if (request.method === "POST" && url.pathname === "/admin/create-user") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         const { username, email, password, role, skipPasswordChange } = await request.json();
@@ -2770,12 +2972,12 @@ export default {
         await env.DB.prepare(`
           INSERT INTO users (id, username, email, password_hash, role, must_change_password, skip_password_change, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
-        `).bind(id, username, email, hashPassword(password), role || 'user', skipPasswordChange ? 1 : 0, now, now).run();
+        `).bind(id, username, email, await hashPassword(password), role || 'user', skipPasswordChange ? 1 : 0, now, now).run();
         return jsonResponse({ success: true, id });
       }
 
       if (request.method === "POST" && url.pathname === "/admin/block-user") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         const { userId, blocked } = await request.json();
@@ -2788,7 +2990,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/logout-user") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const { userId } = await request.json();
         try { await env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(userId).run(); } catch (_) {}
@@ -2796,14 +2998,14 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/change-password") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const { userId, newPassword } = await request.json();
         return jsonResponse(await changePassword(env, userId, newPassword));
       }
 
       if (request.method === "GET" && url.pathname === "/test-telegram") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const testMessage = `🧪 <b>WAVESCOUT Test</b>\n\nTelegram ist korrekt konfiguriert!\n⏰ ${new Date().toLocaleString('de-DE')}`;
         const success = await sendTelegramMessage(env, testMessage);
@@ -2812,7 +3014,7 @@ export default {
 
       // Send custom Telegram message
       if (request.method === "POST" && url.pathname === "/admin/telegram/send") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const { message } = await request.json();
         if (!message?.trim()) return jsonResponse({ error: 'message erforderlich' }, 400);
@@ -2822,7 +3024,7 @@ export default {
 
       // System status overview
       if (request.method === "GET" && url.pathname === "/admin/status") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         let dbOk = false;
@@ -2850,7 +3052,7 @@ export default {
 
       // Test Anthropic AI connection
       if (request.method === "POST" && url.pathname === "/admin/test-ai") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         if (!env.ANTHROPIC_API_KEY) {
@@ -2892,7 +3094,7 @@ export default {
 
       // Webhook tester — inject test SNAPSHOT or SIGNAL
       if (request.method === "POST" && url.pathname === "/admin/test-webhook") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         const { type } = await request.json();
@@ -2921,7 +3123,7 @@ export default {
 
       // ── 3H PROFIT-CLOSE (manual trigger) ────────────────────────
       if (request.method === "POST" && url.pathname === "/admin/check-3h-profit") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const results  = await check3hProfitClose(env);
@@ -2935,7 +3137,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/check-open-trades") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const results = await checkOpenSignals(env);
@@ -2950,7 +3152,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname.startsWith("/admin/check-trade/")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const signalId = url.pathname.replace("/admin/check-trade/", "");
         if (!signalId) return jsonResponse({ error: "Missing signal ID" }, 400);
@@ -2966,7 +3168,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/eod-check") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const results = await checkOpenSignals(env);
@@ -2980,7 +3182,7 @@ export default {
 
       // DB cleanup — remove old snapshots & expired sessions
       if (request.method === "POST" && url.pathname === "/admin/db-cleanup") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         const results = [];
@@ -3013,7 +3215,7 @@ export default {
 
       // Active sessions list
       if (request.method === "GET" && url.pathname === "/admin/sessions") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         try {
@@ -3026,7 +3228,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/setup-db") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         await ensureTables(env);
@@ -3102,7 +3304,7 @@ export default {
       // ── ADMIN DATA MANAGEMENT ───────────────────────────────
 
       if (request.method === "POST" && url.pathname === "/admin/delete-signals") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         const { type } = await request.json();
@@ -3127,7 +3329,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/live-start") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
         const { deleteTestSignals } = await request.json();
@@ -3146,7 +3348,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/admin/settings") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         await ensureTables(env);
         try {
@@ -3158,7 +3360,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/admin/settings") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         await ensureTables(env);
         const body = await request.json();
@@ -3171,7 +3373,7 @@ export default {
       // ── STRATEGIES ──────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/strategies") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         await ensureTables(env);
         const existing = await env.DB.prepare(`SELECT COUNT(*) as c FROM strategies`).first();
@@ -3183,7 +3385,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/strategies") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const { name, version, config } = await request.json();
         if (!name || !config) return jsonResponse({ error: "name and config required" }, 400);
@@ -3197,7 +3399,7 @@ export default {
       }
 
       if (request.method === "PUT" && url.pathname.startsWith("/strategies/") && !url.pathname.endsWith("/activate") && url.pathname !== "/strategies/reset-to-default" && url.pathname !== "/strategies/compare" && url.pathname !== "/strategies/ab-backtest" && url.pathname !== "/strategies/suggestions") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const stratId = url.pathname.slice("/strategies/".length);
         const existing = await env.DB.prepare(`SELECT * FROM strategies WHERE id = ?`).bind(stratId).first();
@@ -3215,7 +3417,7 @@ export default {
       }
 
       if (request.method === "DELETE" && url.pathname.startsWith("/strategies/")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const stratId = url.pathname.slice("/strategies/".length);
         const existing = await env.DB.prepare(`SELECT * FROM strategies WHERE id = ?`).bind(stratId).first();
@@ -3226,7 +3428,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname.endsWith("/activate") && url.pathname.startsWith("/strategies/")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const stratId = url.pathname.replace("/activate", "").slice("/strategies/".length);
         await env.DB.prepare(`UPDATE strategies SET active = 0`).run();
@@ -3235,7 +3437,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/strategies/reset-to-default") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         await env.DB.prepare(`UPDATE strategies SET active = 0`).run();
         await env.DB.prepare(`UPDATE strategies SET active = 1, updated_at = ? WHERE is_default = 1`).bind(Date.now()).run();
@@ -3243,7 +3445,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/strategies/compare") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const rows = await env.DB.prepare(`
@@ -3267,7 +3469,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/strategies/ab-backtest") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const { strategyIds } = await request.json();
         if (!strategyIds?.length) return jsonResponse({ error: "strategyIds required" }, 400);
@@ -3299,7 +3501,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/strategies/suggestions") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const suggestions = [];
@@ -3332,7 +3534,7 @@ export default {
       // ── SIGNAL LOSS REASONS ──────────────────────────────────
 
       if (request.method === "POST" && url.pathname.startsWith("/signals/") && url.pathname.endsWith("/loss-reason")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const signalId = url.pathname.slice("/signals/".length, -"/loss-reason".length);
         const { reason, note, strategyId } = await request.json();
@@ -3344,7 +3546,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname.startsWith("/signals/") && url.pathname.endsWith("/loss-reasons")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const signalId = url.pathname.slice("/signals/".length, -"/loss-reasons".length);
         try {
@@ -3356,7 +3558,7 @@ export default {
       // ── ADMIN: ROLE CHANGE ──────────────────────────────────
 
       if (request.method === "PATCH" && url.pathname.startsWith("/admin/users/") && url.pathname.endsWith("/role")) {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!isAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
         const userId = url.pathname.split("/")[3];
         const { role } = await request.json();
@@ -3373,16 +3575,18 @@ export default {
       // ── AUTOTRADE CONFIG ─────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/broker-config") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
-        const raw = await getSetting(env, 'autotrade_config', null);
-        if (!raw) return jsonResponse({ configured: false });
-        const cfg = JSON.parse(raw);
-        // Never return the secret or passphrase in full
+        const cfg = await loadAutotradeConfig(env);
+        if (!cfg) return jsonResponse({ configured: false });
+        // Never return the full key — return a masked version only.
+        const masked = cfg.apiKey
+          ? cfg.apiKey.slice(0, 4) + '••••' + cfg.apiKey.slice(-4)
+          : '';
         return jsonResponse({
           configured: true,
           broker: cfg.broker,
-          apiKeyMasked: cfg.apiKey ? cfg.apiKey.slice(0, 4) + '••••' + cfg.apiKey.slice(-4) : '',
+          apiKeyMasked: masked,
           testnet: cfg.testnet,
           enabled: cfg.enabled,
           tradeAmount: cfg.tradeAmount,
@@ -3392,20 +3596,17 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/broker-config") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
-        const existing = (() => {
-          try { const r = null; return r; } catch { return null; }
-        })();
-        // If secret is blank keep the previously stored one
-        const prevRaw = await getSetting(env, 'autotrade_config', null);
-        const prev = prevRaw ? JSON.parse(prevRaw) : {};
+        // Load and decrypt previous config so we can fall back to existing keys when omitted.
+        const prev = (await loadAutotradeConfig(env)) || {};
         const cfg = {
           broker:      body.broker      || prev.broker      || 'bybit',
-          apiKey:      body.apiKey      || prev.apiKey      || '',
-          apiSecret:   body.apiSecret   || prev.apiSecret   || '',
-          passphrase:  body.passphrase  || prev.passphrase  || '',
+          // Encrypt sensitive fields; fall back to existing encrypted value when blank.
+          apiKey:      await encryptField(env, body.apiKey      || prev.apiKey      || ''),
+          apiSecret:   await encryptField(env, body.apiSecret   || prev.apiSecret   || ''),
+          passphrase:  await encryptField(env, body.passphrase  || prev.passphrase  || ''),
           testnet:     body.testnet     !== undefined ? !!body.testnet : (prev.testnet ?? true),
           enabled:     body.enabled     !== undefined ? !!body.enabled : (prev.enabled ?? false),
           tradeAmount: parseFloat(body.tradeAmount) || prev.tradeAmount || 10,
@@ -3418,7 +3619,7 @@ export default {
       // ── LIVE TRADES ───────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/live-trades") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         await ensureTables(env);
         const limit = Math.min(200, parseInt(url.searchParams.get("limit") || "50"));
@@ -3431,7 +3632,7 @@ export default {
       // ── JOURNAL SYMBOLS ──────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/journal/symbols") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const raw = await getSetting(env, 'journal_symbols', '[]');
         try { return jsonResponse({ symbols: JSON.parse(raw) }); }
@@ -3439,7 +3640,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/journal/symbols") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
         let syms;
@@ -3463,7 +3664,7 @@ export default {
       // ── MORNING ROUTINE ──────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/morning-routine/status") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
         const rows = await env.DB.prepare(
@@ -3477,7 +3678,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/morning-routine") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
         const symbol = url.searchParams.get("symbol") || 'BTCUSDT';
@@ -3488,7 +3689,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/morning-routine") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
         const date = body.date || new Date().toISOString().slice(0, 10);
@@ -3519,7 +3720,7 @@ export default {
       // ── MORNING BRIEFING ─────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/morning-briefing") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const since = Date.now() - 14 * 60 * 60 * 1000; // last 14 hours
@@ -3554,7 +3755,7 @@ export default {
       // ── TODAY BIAS ───────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/today-bias") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = new Date().toISOString().slice(0, 10);
         const symbol = url.searchParams.get("symbol") || null;
@@ -3570,7 +3771,7 @@ export default {
       // ── PRE-TRADE CHECKLIST ──────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/pre-trade-checklist") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
         const symbol = url.searchParams.get("symbol") || 'BTCUSDT';
@@ -3588,7 +3789,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/pre-trade-checklist") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
         const symbol = body.symbol || 'BTCUSDT';
@@ -3630,7 +3831,7 @@ export default {
       // ── TRADE REVIEW ─────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/trade-review") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
         const symbol = url.searchParams.get("symbol") || null;
@@ -3653,7 +3854,7 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/trade-review") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const body = await request.json();
         const symbol = body.symbol || body.instrument || 'BTCUSDT';
@@ -3696,7 +3897,7 @@ export default {
       // ── BIAS STATS ───────────────────────────────────────────
 
       if (request.method === "GET" && url.pathname === "/bias-stats") {
-        const session = await validateSession(env, request.headers.get("X-Session-ID"));
+        const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         try {
           const all = await env.DB.prepare(
@@ -3723,34 +3924,43 @@ export default {
       // ── WEBHOOK (TradingView) ────────────────────────────────
 
       if (request.method === "POST" && url.pathname === "/webhook") {
-        const secret = url.searchParams.get("secret");
-        if (env.WEBHOOK_SECRET && secret !== env.WEBHOOK_SECRET) {
-          console.warn('⛔ Webhook: wrong or missing secret');
-          return jsonResponse({ error: "Unauthorized" }, 401);
-        }
+        // Secret can come from three sources (checked after body parsing):
+        //   1. X-Webhook-Secret header  (recommended — never logged)
+        //   2. JSON body field "secret"  (acceptable)
+        //   3. URL query param "secret"  (deprecated — appears in server logs)
+        const urlSecret = url.searchParams.get("secret");
+        if (urlSecret) console.warn('⚠️ Webhook: secret in URL is deprecated — use X-Webhook-Secret header instead');
 
         let rawBody = '';
         let payload = null;
 
         try {
           rawBody = await request.text();
-          console.log('📥 Webhook raw body:', rawBody.substring(0, 1000));
         } catch (readErr) {
           console.error('❌ Failed to read request body:', readErr.message);
-          return jsonResponse({ error: 'Failed to read body', message: readErr.message }, 400);
+          return jsonResponse({ error: 'Failed to read body' }, 400);
         }
 
         try {
           payload = JSON.parse(rawBody);
           console.log('📦 Parsed payload:', JSON.stringify(payload).substring(0, 500));
         } catch (parseErr) {
-          console.error('❌ JSON parse error:', parseErr.message, '| raw:', rawBody.substring(0, 200));
-          return jsonResponse({
-            error: 'Invalid JSON',
-            message: parseErr.message,
-            rawBodyPreview: rawBody.substring(0, 200)
-          }, 400);
+          console.error('❌ JSON parse error:', parseErr.message);
+          return jsonResponse({ error: 'Invalid JSON' }, 400);
         }
+
+        // Validate secret now that body is available.
+        if (env.WEBHOOK_SECRET) {
+          const effectiveSecret = request.headers.get('X-Webhook-Secret')
+                               || payload.secret
+                               || urlSecret;
+          if (effectiveSecret !== env.WEBHOOK_SECRET) {
+            console.warn('⛔ Webhook: wrong or missing secret');
+            return jsonResponse({ error: "Unauthorized" }, 401);
+          }
+        }
+        // Remove secret from payload so it is not persisted to the database.
+        if (payload.secret !== undefined) delete payload.secret;
 
         const eventType = (payload.event_type || 'SIGNAL').toUpperCase();
         console.log('🎯 event_type:', eventType, '| symbol:', payload.symbol, '| action:', payload.action);
@@ -3807,7 +4017,7 @@ export default {
         });
       }
 
-      return new Response("WAVESCOUT v3.4 Production ✅", { headers: CORS_HEADERS });
+      return new Response("WAVESCOUT v3.4 Production ✅", { headers: corsHeaders });
 
     } catch (error) {
       console.error('❌ Unhandled worker error:', error.message);
@@ -3821,13 +4031,23 @@ export default {
 
     // Every 3h: close open trades that are in profit
     if (event.cron === "0 */3 * * *") {
-      await check3hProfitClose(env);
+      try {
+        await check3hProfitClose(env);
+      } catch (err) {
+        console.error('❌ Cron 3h profit-close error:', err.message);
+        ctx.waitUntil(sendTelegramMessage(env, `⚠️ Cron-Fehler (3h): ${err.message}`).catch(() => {}));
+      }
     }
 
     // Every 4h: evaluate TP/SL hits + profit-close for 4h window
     if (event.cron === "0 */4 * * *") {
-      await check3hProfitClose(env);
-      await evaluateOpenTrades(env);
+      try {
+        await check3hProfitClose(env);
+        await evaluateOpenTrades(env);
+      } catch (err) {
+        console.error('❌ Cron 4h evaluation error:', err.message);
+        ctx.waitUntil(sendTelegramMessage(env, `⚠️ Cron-Fehler (4h): ${err.message}`).catch(() => {}));
+      }
     }
 
     // Re-evaluate open practice trades with latest snapshot prices
@@ -3849,7 +4069,11 @@ export default {
     }
 
     if (event.cron === "0 7 * * *") {
-      await sendDailySummary(env);
+      try {
+        await sendDailySummary(env);
+      } catch (err) {
+        console.error('❌ Daily summary cron error:', err.message);
+      }
     }
 
     // Refresh news cache in the background on every cron run so the News

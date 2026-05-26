@@ -175,7 +175,6 @@ const NewsPage = ({ user }) => {
   const [detail,   setDetail]   = useState(null);
   const [filter,   setFilter]   = useState('all');
   const [lastUpdate, setLastUpdate] = useState(null);
-  const sessionId = localStorage.getItem('wavescout_session');
   const isAdmin = user?.role === 'admin';
 
   useEffect(() => { load(); }, []);
@@ -183,7 +182,7 @@ const NewsPage = ({ user }) => {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/market-radar`, { headers: { 'X-Session-ID': sessionId } });
+      const res = await fetch(`${API_URL}/market-radar`, { credentials: 'include' });
       if (res.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       const data = res.ok ? await res.json() : {};
       setEvents(data.events || []);

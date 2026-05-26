@@ -62,12 +62,13 @@ const Icon = ({ name, size = 16, className = '', style = {} }) => {
 
 const OUTCOME_OPTIONS = ['WIN', 'LOSS', 'BE', 'OPEN', 'IGNORED'];
 
-async function updateOutcomeAPI({ id, outcome, type = 'signal', sessionId, exitPrice }) {
+async function updateOutcomeAPI({ id, outcome, type = 'signal', exitPrice }) {
   const route = type === 'practice' ? `/practice-trades/${id}` : `/signals/${id}`;
   const body = type === 'practice' ? { status: outcome, exitPrice } : { outcome, exitPrice };
   const res = await fetch(`${API_URL}${route}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId || localStorage.getItem('wavescout_session') },
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

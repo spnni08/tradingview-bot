@@ -39,7 +39,6 @@ function LiveModeButton({ liveMode, onToggle, refreshing }) {
 // ─── Main Dashboard ───────────────────────────────────────────
 
 const DashboardPage = ({ user, navigate }) => {
-  const sessionId = localStorage.getItem('wavescout_session');
 
   // ── State ─────────────────────────────────────────────────────
   const [loading, setLoading]       = useState(true);
@@ -70,9 +69,7 @@ const DashboardPage = ({ user, navigate }) => {
   const loadLiveData = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true);
     try {
-      const res = await fetch(`${API_URL}/dashboard/live`, {
-        headers: { 'X-Session-ID': sessionId }
-      });
+      const res = await fetch(`${API_URL}/dashboard/live`, { credentials: 'include' });
       if (res.status === 401) { localStorage.clear(); window.location.href = 'login.html'; return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData(await res.json());
@@ -88,14 +85,14 @@ const DashboardPage = ({ user, navigate }) => {
 
   const loadTodayBias = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/today-bias`, { headers: { 'X-Session-ID': sessionId } });
+      const res = await fetch(`${API_URL}/today-bias`, { credentials: 'include' });
       if (res.ok) setTodayBias(await res.json());
     } catch { /* non-critical */ }
   }, [sessionId]);
 
   const loadMarketRadar = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/market-radar`, { headers: { 'X-Session-ID': sessionId } });
+      const res = await fetch(`${API_URL}/market-radar`, { credentials: 'include' });
       if (res.ok) setRadar(await res.json());
     } catch { /* non-critical */ }
   }, [sessionId]);
@@ -159,8 +156,9 @@ const DashboardPage = ({ user, navigate }) => {
     }
     try {
       const res = await fetch(`${API_URL}/practice-trades/manual`, {
+        credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ signalId: signal.id })
       });
       const data = await res.json();
@@ -182,8 +180,9 @@ const DashboardPage = ({ user, navigate }) => {
   const handleIgnoreSignal = async (signal) => {
     try {
       await fetch(`${API_URL}/signals/${signal.id}`, {
+        credentials: 'include',
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+        headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({ outcome: 'IGNORED' })
       });
       loadLiveData(false);
