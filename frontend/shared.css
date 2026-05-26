@@ -702,8 +702,27 @@ label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
 
 /* ── Best Signal Card ───────────────────────────────────────── */
 
+.best-signal-card {
+  background: var(--gradient-card-hero);
+  border-color: rgba(59,130,246,0.2);
+}
+.best-signal-card .card-head {
+  background: transparent;
+  border-bottom-color: rgba(59,130,246,0.15);
+}
 .best-signal-card .card-body { padding: 22px; }
 .best-signal-grid { display: grid; grid-template-columns: 1fr auto; gap: 24px; }
+
+/* ── Portfolio Card ─────────────────────────────────────────── */
+
+.portfolio-card {
+  background: var(--gradient-card-hero);
+  border-color: rgba(59,130,246,0.15);
+}
+.portfolio-card .card-head {
+  background: transparent;
+  border-bottom-color: rgba(59,130,246,0.1);
+}
 
 /* ── Nav (sidebar legacy) ───────────────────────────────────── */
 
@@ -1090,7 +1109,7 @@ label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
   left: 0;
   height: 100vh;
   width: var(--sidebar-w);
-  background: var(--bg-0);
+  background: var(--gradient-sidebar);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;

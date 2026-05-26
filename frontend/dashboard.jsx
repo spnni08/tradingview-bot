@@ -311,7 +311,7 @@ const DashboardPage = ({ user, navigate }) => {
       </div>
 
       {/* Equity + Manual Refresh strip */}
-      <div className="card" style={{ marginBottom: 'var(--gap)' }}>
+      <div className="card portfolio-card" style={{ marginBottom: 'var(--gap)' }}>
         <div className="card-body" style={{ padding: '14px 20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 32, flexWrap: 'wrap' }}>
             <div>
