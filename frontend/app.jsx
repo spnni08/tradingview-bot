@@ -67,6 +67,8 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Track which pages have been visited so we only mount them once (lazy init).
+  const [mounted, setMounted] = useState(() => new Set([resolvePage(window.location.pathname)]));
 
   useEffect(() => {
     // Validate session via the HttpOnly cookie (credentials: 'include').
@@ -119,6 +121,8 @@ const App = () => {
     const path = pageToPath[p] || '/dashboard';
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
     setPage(p);
+    // Mark page as mounted so it stays alive for future visits.
+    setMounted(prev => prev.has(p) ? prev : new Set([...prev, p]));
   };
 
   useEffect(() => {
@@ -139,27 +143,25 @@ const App = () => {
     );
   }
 
-  const renderPage = () => {
-    const props = { user, navigate };
-    switch (page) {
-      case 'dashboard':     return <DashboardPage     key="dashboard"     {...props}/>;
-      case 'journal':       return <JournalPage       key="journal"       {...props}/>;
-      case 'backtest':      return <BacktestPage      key="backtest"      {...props}/>;
-      case 'statistiken':   return <StatistikenPage   key="statistiken"   {...props}/>;
-      case 'news':          return <NewsPage          key="news"          {...props}/>;
-      case 'einstellungen': return <EinstellungenPage key="einstellungen" {...props}/>;
-      case 'admin':
-        return user?.role === 'admin'
-          ? <AdminPage key="admin" {...props}/>
-          : <DashboardPage key="dashboard" {...props}/>;
-      default:              return <DashboardPage     key="dashboard"     {...props}/>;
-    }
+  // Resolve admin → dashboard for non-admins.
+  const activePage = (page === 'admin' && user?.role !== 'admin') ? 'dashboard' : page;
+  const props = { user, navigate };
+
+  // Page registry — admin only added when user has the role.
+  const PAGE_COMPONENTS = {
+    dashboard:     <DashboardPage     {...props}/>,
+    journal:       <JournalPage       {...props}/>,
+    backtest:      <BacktestPage      {...props}/>,
+    statistiken:   <StatistikenPage   {...props}/>,
+    news:          <NewsPage          {...props}/>,
+    einstellungen: <EinstellungenPage {...props}/>,
+    ...(user?.role === 'admin' ? { admin: <AdminPage {...props}/> } : {}),
   };
 
   return (
     <div className="app-with-sidebar">
       <Sidebar
-        page={page}
+        page={activePage}
         setPage={navigate}
         user={user}
         onLogout={handleLogout}
@@ -167,9 +169,18 @@ const App = () => {
         setCollapsed={setSidebarCollapsed}
       />
       <main className={`app-main${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
-        <PageErrorBoundary key={page}>
-          {renderPage()}
-        </PageErrorBoundary>
+        {Object.entries(PAGE_COMPONENTS).map(([p, component]) =>
+          // Only render pages that have been visited at least once (lazy mount).
+          // Once mounted the component stays alive — switching pages just
+          // toggles visibility so state, intervals and cached data are preserved.
+          mounted.has(p) && (
+            <div key={p} style={{ display: activePage === p ? 'contents' : 'none' }}>
+              <PageErrorBoundary>
+                {component}
+              </PageErrorBoundary>
+            </div>
+          )
+        )}
       </main>
     </div>
   );
