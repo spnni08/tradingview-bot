@@ -1230,6 +1230,8 @@ async function ensureTables(env) {
       ['skip_password_change', 'INTEGER DEFAULT 0'],
       ['blocked',              'INTEGER DEFAULT 0'],
       ['last_seen',            'INTEGER'],
+      ['login_failures',       'INTEGER DEFAULT 0'],
+      ['locked_until',         'INTEGER DEFAULT 0'],
     ];
     for (const [col, type] of userCols) {
       try { await env.DB.prepare(`ALTER TABLE users ADD COLUMN ${col} ${type}`).run(); }
@@ -2035,17 +2037,37 @@ async function getMarketRadar(env, session = null) {
 // AUTH FUNCTIONS (D1-backed sessions)
 // ═══════════════════════════════════════════════════════════════
 
+const LOGIN_MAX_FAILURES = 5;
+const LOGIN_LOCKOUT_MS   = 15 * 60 * 1000; // 15 minutes
+
 async function login(env, username, password) {
   const user = await env.DB.prepare(
-    `SELECT id, username, email, role, password_hash, must_change_password, skip_password_change, blocked FROM users WHERE username = ? OR email = ?`
+    `SELECT id, username, email, role, password_hash, must_change_password, skip_password_change, blocked, login_failures, locked_until FROM users WHERE username = ? OR email = ?`
   ).bind(username, username).first();
 
   // Always run verifyPassword to normalise timing — prevents username enumeration.
   const storedHash = user ? user.password_hash : _DUMMY_HASH;
   const [match, needsUpgrade] = await verifyPassword(password, storedHash);
 
-  if (!user || !match) return { success: false, error: 'Ungültige Zugangsdaten' };
+  if (!user || !match) {
+    if (user) {
+      // Increment failure counter and lock account after threshold.
+      const failures  = (user.login_failures || 0) + 1;
+      const lockedUntil = failures >= LOGIN_MAX_FAILURES ? Date.now() + LOGIN_LOCKOUT_MS : (user.locked_until || 0);
+      try {
+        await env.DB.prepare(`UPDATE users SET login_failures = ?, locked_until = ?, updated_at = ? WHERE id = ?`)
+          .bind(failures, lockedUntil, Date.now(), user.id).run();
+      } catch (_) {}
+    }
+    return { success: false, error: 'Ungültige Zugangsdaten' };
+  }
   if (user.blocked) return { success: false, error: 'Konto gesperrt' };
+
+  // Check brute-force lockout.
+  if (user.locked_until && user.locked_until > Date.now()) {
+    const remainMin = Math.ceil((user.locked_until - Date.now()) / 60000);
+    return { success: false, error: `Konto vorübergehend gesperrt. Bitte in ${remainMin} Minute(n) erneut versuchen.` };
+  }
 
   await ensureTables(env);
 
@@ -2069,7 +2091,9 @@ async function login(env, username, password) {
   `).bind(sessionId, user.id, user.username, user.role, mustChange ? 1 : 0, now, expiresAt).run();
 
   try {
-    await env.DB.prepare(`UPDATE users SET last_seen = ? WHERE id = ?`).bind(now, user.id).run();
+    // Reset failure counter on successful login.
+    await env.DB.prepare(`UPDATE users SET last_seen = ?, login_failures = 0, locked_until = 0 WHERE id = ?`)
+      .bind(now, user.id).run();
   } catch (_) {}
 
   return {
