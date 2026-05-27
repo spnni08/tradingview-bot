@@ -236,7 +236,9 @@ async function hmacBase64(secret, message) {
 }
 
 function calcOrderQty(tradeAmountUsdt, entryPrice) {
+  if (!entryPrice || !Number.isFinite(entryPrice) || entryPrice <= 0) return 0;
   const qty = tradeAmountUsdt / entryPrice;
+  if (!Number.isFinite(qty) || qty <= 0) return 0;
   // Round to reasonable precision based on price level
   if (entryPrice >= 10000) return parseFloat(qty.toFixed(3));
   if (entryPrice >= 100)   return parseFloat(qty.toFixed(2));
@@ -2078,6 +2080,14 @@ async function login(env, username, password) {
   const storedHash = user ? user.password_hash : _DUMMY_HASH;
   const [match, needsUpgrade] = await verifyPassword(password, storedHash);
 
+  // Check brute-force lockout before processing the match result so that
+  // (a) a locked account is always rejected, even with a correct password, and
+  // (b) we don't extend the lockout counter for attempts against an already-locked account.
+  if (user && user.locked_until && user.locked_until > Date.now()) {
+    const remainMin = Math.ceil((user.locked_until - Date.now()) / 60000);
+    return { success: false, error: `Konto vorübergehend gesperrt. Bitte in ${remainMin} Minute(n) erneut versuchen.` };
+  }
+
   if (!user || !match) {
     if (user) {
       // Increment failure counter and lock account after threshold.
@@ -2091,12 +2101,6 @@ async function login(env, username, password) {
     return { success: false, error: 'Ungültige Zugangsdaten' };
   }
   if (user.blocked) return { success: false, error: 'Konto gesperrt' };
-
-  // Check brute-force lockout.
-  if (user.locked_until && user.locked_until > Date.now()) {
-    const remainMin = Math.ceil((user.locked_until - Date.now()) / 60000);
-    return { success: false, error: `Konto vorübergehend gesperrt. Bitte in ${remainMin} Minute(n) erneut versuchen.` };
-  }
 
   await ensureTables(env);
 
@@ -2166,11 +2170,17 @@ async function validateSession(env, requestOrId) {
   }
   if (!sessionId) return null;
   try {
+    // Join users to get blocked status so canViewDashboard is enforced correctly.
     const session = await env.DB.prepare(
-      `SELECT id, user_id, username, role, must_change_password, expires_at, created_at FROM sessions WHERE id = ? AND expires_at > ?`
+      `SELECT s.id, s.user_id, s.username, s.role, s.must_change_password, s.expires_at, s.created_at, u.blocked
+       FROM sessions s JOIN users u ON u.id = s.user_id
+       WHERE s.id = ? AND s.expires_at > ?`
     ).bind(sessionId, Date.now()).first();
 
     if (!session) return null;
+
+    // Reject sessions belonging to blocked users even if the session is still valid.
+    if (session.blocked) return null;
 
     try {
       await env.DB.prepare(`UPDATE users SET last_seen = ? WHERE id = ?`)
@@ -2183,7 +2193,8 @@ async function validateSession(env, requestOrId) {
       username: session.username,
       role: session.role,
       mustChangePassword: session.must_change_password === 1,
-      createdAt: session.created_at
+      createdAt: session.created_at,
+      blocked: false,
     };
   } catch (_) {
     return null;
@@ -4940,6 +4951,7 @@ export default {
         return jsonResponse({ success: true, session, user: {
           id: session.userId, username: session.username,
           role: session.role, mustChangePassword: session.mustChangePassword,
+          sessionId: session.id,
         }});
       }
 
@@ -5272,6 +5284,18 @@ export default {
         return jsonResponse({ success: true });
       }
 
+      // Terminate a single specific session by ID (used by the admin sessions panel kick button).
+      if (request.method === "POST" && url.pathname === "/admin/kick-session") {
+        const session = await validateSession(env, request);
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const { sessionId: targetId } = await request.json();
+        if (!targetId) return jsonResponse({ error: "sessionId erforderlich" }, 400);
+        // Prevent admins from accidentally kicking their own current session via this endpoint.
+        if (targetId === session.id) return jsonResponse({ error: "Eigene Session kann nicht via Kick beendet werden" }, 400);
+        try { await env.DB.prepare(`DELETE FROM sessions WHERE id = ?`).bind(targetId).run(); } catch (_) {}
+        return jsonResponse({ success: true });
+      }
+
       if (request.method === "POST" && url.pathname === "/admin/change-password") {
         const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
@@ -5367,13 +5391,25 @@ export default {
         }
       }
 
-      // Webhook tester — inject test SNAPSHOT or SIGNAL
+      // Webhook tester — inject test SNAPSHOT or SIGNAL (fixed payloads)
       if (request.method === "POST" && url.pathname === "/admin/test-webhook") {
         const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
 
-        const { type } = await request.json();
+        const body = await request.json();
+        const type = body.type;
         try {
+          // If a full custom payload is provided (no 'type' field), process it directly.
+          if (!type) {
+            const event_type = (body.event_type || '').toUpperCase();
+            if (event_type === 'SNAPSHOT' || event_type === 'PRICE_UPDATE') {
+              const result = await saveSnapshot(env, body);
+              return jsonResponse(result);
+            } else {
+              const result = await processSignal(env, body);
+              return jsonResponse({ ok: true, type: event_type || 'SIGNAL', result });
+            }
+          }
           if (type === 'SNAPSHOT') {
             const result = await saveSnapshot(env, {
               symbol: 'BTCUSDT', event_type: 'SNAPSHOT', timeframe: '5',
