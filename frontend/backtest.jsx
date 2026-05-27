@@ -169,7 +169,7 @@ const OutcomeSelector = ({ tradeId, current, onChange }) => (
 
 // ─── Loss Reason Modal ─────────────────────────────────────────
 
-function LossReasonModal({ signalId, sessionId, onClose, onSaved }) {
+function LossReasonModal({ signalId, onClose, onSaved }) {
   const [reason, setReason] = useState('');
   const [note,   setNote]   = useState('');
   const [saving, setSaving] = useState(false);
@@ -254,27 +254,6 @@ function SignalDetailModal({ signal, onClose, onMarkLoss }) {
         : { color: 'var(--text-tertiary)', icon: '–', label: `Bias: ${signal.daily_bias}` })
     : { color: 'var(--text-quaternary)', icon: '–', label: 'Kein Tagesbias' };
 
-  const fields = [
-    ['Symbol',      signal.symbol],
-    ['Richtung',    signal.direction],
-    ['Datum',       fmtDate(signal.created_at)],
-    ['Timeframe',   signal.timeframe ? signal.timeframe + 'm' : '–'],
-    ['Entry',       signal.ai_entry  ? '$' + fmtPrice(signal.ai_entry, signal.symbol)  : '–'],
-    ['Take Profit', signal.ai_tp     ? '$' + fmtPrice(signal.ai_tp, signal.symbol)     : '–'],
-    ['Stop Loss',   signal.ai_sl     ? '$' + fmtPrice(signal.ai_sl, signal.symbol)     : '–'],
-    ['Exit',        signal.exit_price ? '$' + fmtPrice(signal.exit_price, signal.symbol) : '–'],
-    ['PnL',         pnl !== 0 ? fmtPct(pnl) : '–'],
-    ['Score',       (signal.ai_score || 0) + '/100'],
-    ['Risiko',      signal.ai_risk || '–'],
-    ['RSI',         signal.rsi ?? '–'],
-    ['EMA50',       signal.ema50  ? signal.ema50.toFixed(0)  : '–'],
-    ['EMA200',      signal.ema200 ? signal.ema200.toFixed(0) : '–'],
-    ['Trend',       signal.trend     || '–'],
-    ['Wave Bias',   signal.wave_bias || '–'],
-    ['Strategie',   signal.strategy_name    || 'WAVESCOUT Standard'],
-    ['Version',     signal.strategy_version || 'v1.0'],
-    ['Ergebnis',    signal.outcome || 'OPEN'],
-  ];
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-box" style={{ maxWidth: 640, maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
@@ -453,7 +432,7 @@ function SignalDetailModal({ signal, onClose, onMarkLoss }) {
 
 // ─── Practice Trades Tab ───────────────────────────────────────
 
-function PracticeTradesTab({ sessionId }) {
+function PracticeTradesTab() {
   const [trades, setTrades]   = useState([]);
   const [stats,  setStats]    = useState(null);
   const [loading,setLoading]  = useState(true);
@@ -579,7 +558,7 @@ const EMPTY_HIST_FILTERS = {
   scoreMin: '', scoreMax: '', ruleSearch: '',
 };
 
-function SignalHistoryTab({ sessionId }) {
+function SignalHistoryTab() {
   const [history,   setHistory]   = useState([]);
   const [stats,     setStats]     = useState(null);
   const [loading,   setLoading]   = useState(true);
@@ -655,7 +634,7 @@ function SignalHistoryTab({ sessionId }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {selected   && <SignalDetailModal signal={selected} onClose={() => setSelected(null)} onMarkLoss={() => { setLossModal(selected.id); setSelected(null); }}/>}
-      {lossModal  && <LossReasonModal signalId={lossModal} sessionId={sessionId} onClose={() => setLossModal(null)} onSaved={() => setLossModal(null)}/>}
+      {lossModal  && <LossReasonModal signalId={lossModal} onClose={() => setLossModal(null)} onSaved={() => setLossModal(null)}/>}
 
       <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <div className="kpi-card"><div className="kpi-val">{history.length}</div><div className="kpi-lbl">Total Signale</div></div>
@@ -710,10 +689,11 @@ function SignalHistoryTab({ sessionId }) {
               <label style={{ display: 'block', marginBottom: 5, fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', letterSpacing: '.06em' }}>QUALITÄT</label>
               <select value={filters.quality} onChange={e => setF('quality', e.target.value)} className="input">
                 <option value="all">Alle</option>
-                <option value="STRONG">Strong</option>
-                <option value="GOOD">Good</option>
-                <option value="WEAK">Weak</option>
-                <option value="POOR">Poor</option>
+                <option value="PREMIUM">Premium</option>
+                <option value="GUT">Gut</option>
+                <option value="OKAY">Okay</option>
+                <option value="SCHWACH">Schwach</option>
+                <option value="SKIP">Skip</option>
               </select>
             </div>
             <div>
@@ -780,13 +760,14 @@ function SignalHistoryTab({ sessionId }) {
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="tbl">
-              <thead><tr><th>Datum</th><th>Symbol</th><th>Richtung</th><th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>PnL</th><th>Score</th><th>R:R</th><th>Qualität</th><th>Strategie</th><th>Ergebnis</th></tr></thead>
+              <thead><tr><th>#</th><th>Datum</th><th>Symbol</th><th>Richtung</th><th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>PnL</th><th>Score</th><th>R:R</th><th>Auslöser</th><th>Qualität</th><th>Strategie</th><th>Ergebnis</th></tr></thead>
               <tbody>
                 {filtered.map((trade, i) => {
                   const pnl = calculatePnL(trade);
-                  const qualColor = trade.signal_quality === 'STRONG' ? 'var(--win)' : trade.signal_quality === 'GOOD' ? 'var(--blue-400)' : trade.signal_quality === 'WEAK' ? 'var(--wait)' : trade.signal_quality === 'POOR' ? 'var(--loss)' : 'var(--text-tertiary)';
+                  const qualColor = trade.signal_quality === 'PREMIUM' ? 'var(--win)' : trade.signal_quality === 'GUT' ? 'var(--blue-400)' : trade.signal_quality === 'OKAY' ? 'var(--wait)' : trade.signal_quality === 'SCHWACH' ? 'var(--loss)' : trade.signal_quality === 'SKIP' ? 'var(--text-quaternary)' : 'var(--text-tertiary)';
                   return (
                     <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setSelected(trade)}>
+                      <td className="mono" style={{ fontSize: 10, color: 'var(--text-quaternary)', letterSpacing: '.03em' }}>{trade.id ? trade.id.slice(-8) : '–'}</td>
                       <td className="mono muted" style={{ fontSize: 11 }}>{fmtDate(trade.created_at)}</td>
                       <td><AssetChip symbol={trade.symbol}/></td>
                       <td><span className={`badge ${trade.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{trade.direction}</span></td>
@@ -798,6 +779,9 @@ function SignalHistoryTab({ sessionId }) {
                       <td className="mono">{trade.ai_score || 0}</td>
                       <td className="mono" style={{ fontSize: 11 }}>
                         {trade.risk_reward ? `1:${parseFloat(trade.risk_reward).toFixed(1)}` : '–'}
+                      </td>
+                      <td style={{ fontSize: 11, color: 'var(--text-tertiary)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={trade.trigger_reason || trade.trigger || trade.action || ''}>
+                        {trade.trigger_reason || trade.trigger || trade.action || '–'}
                       </td>
                       <td style={{ fontSize: 11, fontWeight: 600, color: qualColor }}>{trade.signal_quality || '–'}</td>
                       <td style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{trade.strategy_name || 'Standard'} <span style={{ color: 'var(--text-quaternary)' }}>{trade.strategy_version || ''}</span></td>
@@ -821,7 +805,7 @@ function SignalHistoryTab({ sessionId }) {
 
 // ─── Rule Frequency Tab ────────────────────────────────────────
 
-function RuleFrequencyTab({ sessionId }) {
+function RuleFrequencyTab() {
   const [data,    setData]    = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -963,7 +947,7 @@ function TooltipInfo({ text }) {
   );
 }
 
-function StrategyLabTab({ sessionId, userRole }) {
+function StrategyLabTab({ userRole }) {
   const [strategies,     setStrategies]     = useState([]);
   const [selected,       setSelected]       = useState(null);
   const [editCfg,        setEditCfg]        = useState(null);
@@ -1162,7 +1146,7 @@ function StrategyLabTab({ sessionId, userRole }) {
   const activate = async stratId => {
     try {
       const res = await fetch(`${API_URL}/strategies/${stratId}/activate`, {
-        credentials: 'include', method: 'POST', credentials: 'include' });
+        method: 'POST', credentials: 'include' });
       if (res.ok) { showToast('Strategie aktiviert'); await load(); }
     } catch (e) { showToast(e.message, 'error'); }
   };
@@ -1170,7 +1154,7 @@ function StrategyLabTab({ sessionId, userRole }) {
   const deleteStrategy = async stratId => {
     try {
       const res = await fetch(`${API_URL}/strategies/${stratId}`, {
-        credentials: 'include', method: 'DELETE', credentials: 'include' });
+        method: 'DELETE', credentials: 'include' });
       if (res.ok) { showToast('Strategie gelöscht'); await load(); }
       else { const e = await res.json(); showToast(e.error || 'Fehler', 'error'); }
     } catch (e) { showToast(e.message, 'error'); }
@@ -1179,7 +1163,7 @@ function StrategyLabTab({ sessionId, userRole }) {
   const resetToDefault = async () => {
     try {
       const res = await fetch(`${API_URL}/strategies/reset-to-default`, {
-        credentials: 'include', method: 'POST', credentials: 'include' });
+        method: 'POST', credentials: 'include' });
       if (res.ok) { showToast('Auf Standardstrategie zurückgesetzt'); setResetDlg(false); await load(); }
     } catch (e) { showToast(e.message, 'error'); }
   };
@@ -1480,7 +1464,7 @@ function CompareTable({ rows, keyPrefix }) {
   );
 }
 
-function StrategyCompareTab({ sessionId }) {
+function StrategyCompareTab() {
   const [compareData, setCompareData] = useState([]);
   const [allStrats,   setAllStrats]   = useState([]);
   const [loading,     setLoading]     = useState(true);
@@ -1572,7 +1556,7 @@ function StrategyCompareTab({ sessionId }) {
 
 // ─── Loss Analysis Tab ─────────────────────────────────────────
 
-function LossAnalysisTab({ sessionId }) {
+function LossAnalysisTab() {
   const [losses,    setLosses]    = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [lossModal, setLossModal] = useState(null);
@@ -1607,7 +1591,7 @@ function LossAnalysisTab({ sessionId }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {lossModal && (
-        <LossReasonModal signalId={lossModal} sessionId={sessionId}
+        <LossReasonModal signalId={lossModal}
           onClose={() => setLossModal(null)}
           onSaved={() => { loadReasons(lossModal); setLossModal(null); }}/>
       )}
@@ -1681,7 +1665,7 @@ function LossAnalysisTab({ sessionId }) {
 
 // ─── Suggestions Tab ───────────────────────────────────────────
 
-function SuggestionsTab({ sessionId }) {
+function SuggestionsTab() {
   const [suggestions, setSuggestions] = useState([]);
   const [loading,     setLoading]     = useState(true);
 
@@ -1728,10 +1712,10 @@ function SuggestionsTab({ sessionId }) {
 
 // ─── Bias Stats Tab ────────────────────────────────────────────
 
-function BiasStatsTab({ sessionId }) {
+function BiasStatsTab() {
   const [stats,   setStats]   = useState(null);
   const [loading, setLoading] = useState(true);
-  const [filter,  setFilter]  = useState({ strategy: '', direction: '' });
+  const [filter,  setFilter]  = useState({ direction: '' });
 
   useEffect(() => { load(); }, []);
 
@@ -1739,14 +1723,13 @@ function BiasStatsTab({ sessionId }) {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (filter.strategy)  params.set('strategy', filter.strategy);
       if (filter.direction) params.set('direction', filter.direction);
       const res = await fetch(`${API_URL}/bias-stats?${params}`, { credentials: 'include' });
       if (res.ok) setStats(await res.json());
     } catch (e) { console.error(e); } finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); }, [filter.strategy, filter.direction]);
+  useEffect(() => { load(); }, [filter.direction]);
 
   if (loading) return <div style={{ textAlign: 'center', padding: 60 }}><div className="spinner-lg" style={{ margin: '0 auto 16px' }}/>Lade Bias-Statistiken…</div>;
 
@@ -1822,7 +1805,7 @@ function BiasStatsTab({ sessionId }) {
               <option value="LONG">LONG</option>
               <option value="SHORT">SHORT</option>
             </select>
-            <button className="btn btn-ghost btn-sm" onClick={() => setFilter({ strategy: '', direction: '' })}>Zurücksetzen</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setFilter({ direction: '' })}>Zurücksetzen</button>
           </div>
         </div>
       </div>
