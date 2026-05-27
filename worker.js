@@ -2799,6 +2799,8 @@ function _svgIcon(name, size = 16) {
     moon:     '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
     signal:   '<path d="M2 20h.01M7 20v-4M12 20v-8M17 20V8M22 4 12 14l-4-4-6 6"/>',
     clock:    '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+    users:    '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+    key:      '<circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2 10.94 12.06M21 2h-4.5M21 2v4.5M16.5 7.5l-2 2"/>',
   };
   const d = paths[name] || '<circle cx="12" cy="12" r="10"/>';
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
@@ -3943,6 +3945,672 @@ function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
 </div>`;
 }
 
+// ─── Phase 5: Einstellungen + Admin ─────────────────────────────
+
+const _WEBHOOK_DISPLAY_URL = 'https://tradingview-bot.spnn08.workers.dev/webhook';
+
+function _renderSettingsNav(activeSection, isAdmin) {
+  const secs = [
+    { id: 'account',       label: 'Account',           icon: 'users'    },
+    { id: 'design',        label: 'Design',             icon: 'moon'     },
+    { id: 'trading',       label: 'Trading',            icon: 'chart'    },
+    { id: 'notifications', label: 'Benachrichtigungen', icon: 'bell'     },
+    { id: 'broker',        label: 'Broker / API',       icon: 'cpu'      },
+    ...(isAdmin ? [
+      { id: 'admin',  label: 'Admin',  icon: 'bolt',     admin: true },
+      { id: 'system', label: 'System', icon: 'settings', admin: true },
+    ] : []),
+  ];
+  const items = secs.map((s, i) => {
+    const active = s.id === activeSection;
+    const divider = s.admin && i > 0 && !secs[i - 1].admin
+      ? '<div style="height:1px;background:var(--border);margin:8px 0 6px"></div>' : '';
+    return `${divider}<button
+      hx-get="/settings?section=${s.id}"
+      hx-target="#settings-section"
+      hx-swap="innerHTML"
+      hx-push-url="true"
+      style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:10px;border:none;
+             background:${active ? 'rgba(59,130,246,.1)' : 'transparent'};
+             color:${active ? 'var(--blue-500)' : 'var(--text-secondary)'};
+             font-size:13px;font-weight:${active ? 600 : 400};cursor:pointer;
+             font-family:var(--font-main);transition:all .15s;text-align:left;width:100%">
+      ${_svgIcon(s.icon, 15)}
+      <span style="flex:1">${_esc(s.label)}</span>
+      ${s.admin ? '<span style="font-size:9px;padding:2px 5px;background:rgba(59,130,246,.15);color:var(--blue-500);border-radius:4px;font-weight:700">ADMIN</span>' : ''}
+    </button>`;
+  }).join('');
+  return `<div style="display:flex;flex-direction:column;gap:2px;position:sticky;top:20px">${items}</div>`;
+}
+
+function _renderSettingsAccount(user) {
+  return `<div class="card">
+  <div class="card-head">${_svgIcon('users', 16)}<h3>Account</h3></div>
+  <div class="card-body">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+      <div>
+        <div style="font-size:11px;font-weight:700;color:var(--text-tertiary);letter-spacing:.08em;margin-bottom:4px">BENUTZERNAME</div>
+        <div style="font-size:14px;font-weight:600">${_esc(user.username || '–')}</div>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;color:var(--text-tertiary);letter-spacing:.08em;margin-bottom:4px">ROLLE</div>
+        <span class="badge badge-tag" style="font-size:12px">${_esc(user.role || '–')}</span>
+      </div>
+      ${user.email ? `<div style="grid-column:1/-1">
+        <div style="font-size:11px;font-weight:700;color:var(--text-tertiary);letter-spacing:.08em;margin-bottom:4px">E-MAIL</div>
+        <div style="font-size:13px;color:var(--text-secondary)">${_esc(user.email)}</div>
+      </div>` : ''}
+    </div>
+    <a href="/change-password" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;background:var(--bg-2);border:1px solid var(--border);font-size:13px;font-weight:500;color:var(--text-primary);text-decoration:none;transition:border-color .15s">
+      ${_svgIcon('key', 13)} Passwort ändern
+    </a>
+  </div>
+</div>`;
+}
+
+function _renderSettingsDesign() {
+  return `<div class="card">
+  <div class="card-head">${_svgIcon('moon', 16)}<h3>Design</h3></div>
+  <div class="card-body">
+    <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+      <input type="checkbox" id="theme-toggle" onchange="(function(el){const next=el.checked;document.documentElement.setAttribute('data-theme',next?'light':'dark');localStorage.setItem('theme',next?'light':'dark')})(this)">
+      <div>
+        <div style="font-size:13px;font-weight:500">Light Mode</div>
+        <div style="font-size:12px;color:var(--text-tertiary);margin-top:2px">Helles Theme aktivieren (auch über Sidebar-Toggle änderbar)</div>
+      </div>
+    </label>
+  </div>
+</div>
+<script>(function(){const t=localStorage.getItem('theme');const cb=document.getElementById('theme-toggle');if(cb)cb.checked=t==='light'})();</script>`;
+}
+
+function _renderSettingsTrading() {
+  const sliders = [
+    { id: 'riskPerTrade',  label: 'Risiko pro Trade',          suffix: '%', min: 0.5, max: 5,  step: 0.5, def: 2, parse: 'parseFloat' },
+    { id: 'minScore',      label: 'Minimaler Score',           suffix: '',  min: 50,  max: 90, step: 5,   def: 65, parse: 'parseInt'   },
+    { id: 'maxOpenTrades', label: 'Max. gleichzeitige Trades', suffix: '',  min: 1,   max: 10, step: 1,   def: 3,  parse: 'parseInt'   },
+  ];
+  const sliderHtml = sliders.map(s =>
+    `<div style="margin-bottom:20px">
+      <label style="display:block;margin-bottom:6px;font-size:13px;font-weight:500">
+        ${s.label}: <span style="color:var(--blue-500)" id="${s.id}Label">${s.def}${s.suffix}</span>
+      </label>
+      <input type="range" id="${s.id}" min="${s.min}" max="${s.max}" step="${s.step}" value="${s.def}" style="width:100%;max-width:360px"
+        oninput="document.getElementById('${s.id}Label').textContent=this.value+'${s.suffix}'${s.id === 'minScore' ? ";document.getElementById('scoreLabel').textContent=this.value" : ''}">
+    </div>`
+  ).join('');
+  const checks = [
+    ['useStopLoss', 'Stop-Loss immer setzen', true],
+    ['useTakeProfit', 'Take-Profit immer setzen', true],
+    ['trailingStop', 'Trailing Stop verwenden', false],
+  ];
+  const checkHtml = checks.map(([id, label, def]) =>
+    `<label style="display:flex;align-items:center;gap:8px;font-size:13px">
+      <input type="checkbox" id="${id}"${def ? ' checked' : ''}> ${label}
+    </label>`
+  ).join('');
+  return `<div class="card">
+  <div class="card-head">${_svgIcon('chart', 16)}<h3>Trading</h3></div>
+  <div class="card-body">
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;margin-bottom:20px">
+      <input type="checkbox" id="autoTrade">
+      Auto-Trading aktivieren (Score ≥ <span id="scoreLabel">65</span>)
+    </label>
+    ${sliderHtml}
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">${checkHtml}</div>
+    <div style="display:flex;gap:12px;align-items:center">
+      <button onclick="saveTradingSettings()" style="padding:8px 16px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-main)">Speichern</button>
+      <span id="tradingSaved" style="display:none;color:var(--win);font-size:12px">Gespeichert ✓</span>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  try{const s=JSON.parse(localStorage.getItem('wavescout_settings')||'{}');
+  if(s.autoTrade!=null)document.getElementById('autoTrade').checked=s.autoTrade;
+  const setSlider=(id,v,suf)=>{if(v==null)return;document.getElementById(id).value=v;document.getElementById(id+'Label').textContent=v+(suf||'')};
+  setSlider('riskPerTrade',s.riskPerTrade,'%');setSlider('minScore',s.minScore,'');setSlider('maxOpenTrades',s.maxOpenTrades,'');
+  if(s.minScore){document.getElementById('scoreLabel').textContent=s.minScore;}
+  ['useStopLoss','useTakeProfit','trailingStop'].forEach(k=>{if(s[k]!=null)document.getElementById(k).checked=s[k]});
+  }catch(_){}
+})();
+function saveTradingSettings(){
+  try{const s=JSON.parse(localStorage.getItem('wavescout_settings')||'{}');
+  s.autoTrade=document.getElementById('autoTrade').checked;
+  s.riskPerTrade=parseFloat(document.getElementById('riskPerTrade').value);
+  s.minScore=parseInt(document.getElementById('minScore').value);
+  s.maxOpenTrades=parseInt(document.getElementById('maxOpenTrades').value);
+  ['useStopLoss','useTakeProfit','trailingStop'].forEach(k=>s[k]=document.getElementById(k).checked);
+  localStorage.setItem('wavescout_settings',JSON.stringify(s));
+  const el=document.getElementById('tradingSaved');el.style.display='inline';setTimeout(()=>el.style.display='none',2500);
+  }catch(_){}
+}
+</script>`;
+}
+
+function _renderSettingsNotifications() {
+  return `<div class="card">
+  <div class="card-head">${_svgIcon('bell', 16)}<h3>Benachrichtigungen</h3></div>
+  <div class="card-body">
+    <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" id="notifBrowser" checked> Browser-Benachrichtigungen</label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" id="notifTelegram" checked> Telegram-Benachrichtigungen</label>
+    </div>
+    <div style="display:flex;gap:12px;align-items:center">
+      <button onclick="saveNotifSettings()" style="padding:8px 16px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-main)">Speichern</button>
+      <span id="notifSaved" style="display:none;color:var(--win);font-size:12px">Gespeichert ✓</span>
+    </div>
+  </div>
+</div>
+<script>
+(function(){try{const s=JSON.parse(localStorage.getItem('wavescout_settings')||'{}');
+if(s.notifications!=null)document.getElementById('notifBrowser').checked=s.notifications;
+if(s.telegramEnabled!=null)document.getElementById('notifTelegram').checked=s.telegramEnabled;
+}catch(_){}})();
+function saveNotifSettings(){try{const s=JSON.parse(localStorage.getItem('wavescout_settings')||'{}');
+s.notifications=document.getElementById('notifBrowser').checked;
+s.telegramEnabled=document.getElementById('notifTelegram').checked;
+localStorage.setItem('wavescout_settings',JSON.stringify(s));
+const el=document.getElementById('notifSaved');el.style.display='inline';setTimeout(()=>el.style.display='none',2500);
+}catch(_){}}
+</script>`;
+}
+
+function _renderSettingsBroker() {
+  const wh = _WEBHOOK_DISPLAY_URL;
+  return `<div style="display:flex;flex-direction:column;gap:16px">
+  <div class="card">
+    <div class="card-head">${_svgIcon('signal', 16)}<h3>TradingView Webhook</h3>
+      <div class="actions"><span class="badge badge-win">LIVE</span></div>
+    </div>
+    <div class="card-body">
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;line-height:1.6">
+        Diese URL in TradingView unter <strong>Alerts → Webhook URL</strong> eintragen.
+      </p>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
+        <div style="flex:1;padding:10px 14px;background:var(--bg-0);border:1px solid var(--border);border-radius:8px;font-family:var(--font-mono);font-size:13px;color:var(--text-secondary);word-break:break-all">${_esc(wh)}</div>
+        <button id="copy-wh-btn" onclick="navigator.clipboard.writeText('${wh}').then(()=>{this.textContent='Kopiert ✓';setTimeout(()=>this.textContent='Kopieren',2000)})"
+          style="flex-shrink:0;padding:8px 14px;border-radius:8px;background:var(--bg-2);border:1px solid var(--border);color:var(--text-primary);font-size:13px;cursor:pointer;font-family:var(--font-main)">Kopieren</button>
+      </div>
+      <div style="padding:10px 14px;background:rgba(245,158,11,.06);border-radius:8px;border:1px solid rgba(245,158,11,.3);font-size:12px;color:var(--text-secondary)">
+        <strong>Beispiel-Payload (SIGNAL):</strong>
+        <pre style="margin:6px 0 0;font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary);white-space:pre-wrap">{"symbol":"BTCUSDT","event_type":"SIGNAL","timeframe":"5","price":{{close}},"direction":"LONG","trigger":"EMA_CROSS","action":"BUY"}</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">${_svgIcon('chart', 16)}<h3>Autotrade Konfiguration</h3>
+      <div class="actions" id="at-badge"><span class="badge badge-tag">INAKTIV</span></div>
+    </div>
+    <div id="at-loading" class="card-body" style="text-align:center;padding:20px;font-size:13px;color:var(--text-tertiary)">Lade Konfiguration…</div>
+    <div id="at-form" class="card-body" style="display:none">
+      <label style="display:flex;align-items:center;gap:10px;margin-bottom:20px;cursor:pointer">
+        <input type="checkbox" id="at-enabled">
+        <div><div style="font-weight:600;font-size:13px">Autotrade aktivieren</div>
+          <div style="font-size:12px;color:var(--text-tertiary)">Bei qualifizierten Signalen automatisch echte Orders platzieren</div></div>
+      </label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
+        <div><label style="display:block;margin-bottom:6px;font-size:12px;font-weight:600;color:var(--text-tertiary);letter-spacing:.05em">BETRAG PRO TRADE (USDT)</label>
+          <input type="number" id="at-amount" min="1" step="1" value="10" class="input" style="width:100%"></div>
+        <div><label style="display:block;margin-bottom:6px;font-size:12px;font-weight:600;color:var(--text-tertiary);letter-spacing:.05em">MIN. SCORE</label>
+          <input type="number" id="at-minscore" min="55" max="100" step="5" value="75" class="input" style="width:100%"></div>
+      </div>
+      <div style="margin-bottom:14px">
+        <label style="display:block;margin-bottom:6px;font-size:12px;font-weight:600;color:var(--text-tertiary);letter-spacing:.05em">API KEY</label>
+        <input type="text" id="at-apikey" class="input" style="width:100%" autocomplete="off" placeholder="Broker API Key">
+      </div>
+      <div style="margin-bottom:14px">
+        <label style="display:block;margin-bottom:6px;font-size:12px;font-weight:600;color:var(--text-tertiary);letter-spacing:.05em">API SECRET</label>
+        <input type="password" id="at-secret" class="input" style="width:100%" placeholder="Leer lassen um bestehenden Key zu behalten" autocomplete="new-password">
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:16px">
+        <input type="checkbox" id="at-testnet" checked onchange="updateAtWarning()">
+        <span>Testnet / Demo-Modus <span id="at-testnet-lbl" style="font-size:12px;color:var(--win);font-weight:600">(kein echtes Geld)</span></span>
+      </label>
+      <div id="at-live-warn" style="display:none;padding:10px 14px;background:rgba(240,68,68,.08);border-radius:8px;border:1px solid rgba(240,68,68,.3);font-size:12px;color:var(--loss);margin-bottom:14px;font-weight:600">
+        ⚠️ LIVE-MODUS aktiv — echte Orders werden platziert!
+      </div>
+      <div style="padding:10px 14px;background:rgba(245,158,11,.06);border-radius:8px;border:1px solid rgba(245,158,11,.3);font-size:12px;color:var(--text-secondary);margin-bottom:16px;line-height:1.6">
+        API-Keys werden verschlüsselt auf dem Server gespeichert. Nur Trading-Rechte vergeben — <strong>kein Withdrawal-Recht</strong>.
+      </div>
+      <div id="at-err" style="display:none;padding:8px 14px;background:rgba(240,68,68,.08);border-radius:8px;font-size:12px;color:var(--loss);margin-bottom:12px"></div>
+      <button id="at-save" onclick="saveAtConfig()" style="padding:10px 20px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-main)">
+        Auf Server speichern
+      </button>
+    </div>
+  </div>
+</div>
+<script>
+function updateAtWarning(){
+  const t=document.getElementById('at-testnet')?.checked,e=document.getElementById('at-enabled')?.checked;
+  const lbl=document.getElementById('at-testnet-lbl'),warn=document.getElementById('at-live-warn');
+  if(lbl){lbl.textContent=t?'(kein echtes Geld)':'(LIVE — echtes Geld!)';lbl.style.color=t?'var(--win)':'var(--loss)';}
+  if(warn)warn.style.display=(!t&&e)?'block':'none';
+}
+(function(){
+  fetch('/broker-config',{credentials:'include'}).then(r=>r.ok?r.json():null).then(d=>{
+    document.getElementById('at-loading').style.display='none';
+    document.getElementById('at-form').style.display='block';
+    if(d?.configured){
+      document.getElementById('at-enabled').checked=d.enabled||false;
+      document.getElementById('at-amount').value=d.tradeAmount||10;
+      document.getElementById('at-minscore').value=d.minScore||75;
+      document.getElementById('at-testnet').checked=d.testnet!==false;
+      if(d.apiKeyMasked)document.getElementById('at-apikey').placeholder=d.apiKeyMasked;
+      const b=document.getElementById('at-badge');
+      if(b)b.innerHTML=d.enabled?'<span class="badge badge-win">AKTIV</span>':'<span class="badge badge-tag">INAKTIV</span>';
+    }
+    updateAtWarning();
+  }).catch(()=>{document.getElementById('at-loading').style.display='none';document.getElementById('at-form').style.display='block';});
+  document.getElementById('at-enabled')?.addEventListener('change',updateAtWarning);
+})();
+async function saveAtConfig(){
+  const btn=document.getElementById('at-save'),errEl=document.getElementById('at-err');
+  btn.disabled=true;btn.textContent='Speichern…';errEl.style.display='none';
+  try{
+    const r=await fetch('/broker-config',{credentials:'include',method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({enabled:document.getElementById('at-enabled').checked,tradeAmount:parseFloat(document.getElementById('at-amount').value)||10,
+        minScore:parseInt(document.getElementById('at-minscore').value)||75,apiKey:document.getElementById('at-apikey').value,
+        apiSecret:document.getElementById('at-secret').value,passphrase:'',testnet:document.getElementById('at-testnet').checked,broker:'bybit'})});
+    if(r.ok){
+      document.getElementById('at-secret').value='';
+      btn.textContent='Gespeichert ✓';setTimeout(()=>btn.textContent='Auf Server speichern',2500);
+      const b=document.getElementById('at-badge');if(b)b.innerHTML=document.getElementById('at-enabled').checked?'<span class="badge badge-win">AKTIV</span>':'<span class="badge badge-tag">INAKTIV</span>';
+    }else{const e=await r.json().catch(()=>({}));errEl.textContent=e.error||'Fehler';errEl.style.display='block';btn.textContent='Auf Server speichern';}
+  }catch(e){errEl.textContent='Netzwerkfehler';errEl.style.display='block';btn.textContent='Auf Server speichern';}
+  btn.disabled=false;
+}
+</script>`;
+}
+
+function _renderSettingsSystem() {
+  return `<div style="display:flex;flex-direction:column;gap:16px">
+  <div class="card">
+    <div class="card-head">${_svgIcon('settings', 16)}<h3>System Info</h3></div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        ${[['Worker Runtime','Cloudflare Workers'],['Datenbank','Cloudflare D1 (SQLite)'],['Frontend','Cloudflare Pages'],['Framework','HTMX 2.0.4']].map(([k,v]) =>
+          `<div><div style="font-size:11px;font-weight:700;color:var(--text-tertiary);letter-spacing:.08em;margin-bottom:3px">${k.toUpperCase()}</div>
+          <div style="font-size:13px;color:var(--text-secondary)">${v}</div></div>`).join('')}
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head">${_svgIcon('bolt', 16)}<h3>Cloudflare Dashboard</h3></div>
+    <div class="card-body">
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;line-height:1.6">Logs, Metrics, Bindings und Cron-Trigger im Cloudflare Dashboard verwalten.</p>
+      <a href="https://dash.cloudflare.com" target="_blank" rel="noopener noreferrer"
+         style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;background:var(--bg-2);border:1px solid var(--border);font-size:13px;color:var(--text-primary);text-decoration:none">
+        ${_svgIcon('signal', 13)} Cloudflare Dashboard öffnen
+      </a>
+    </div>
+  </div>
+</div>`;
+}
+
+function _renderSettingsAdmin({ users = [], sessions = [], systemStatus = {} }) {
+  const st = systemStatus;
+  const dotColor = ok => ok ? 'var(--win)' : 'var(--loss)';
+  const dotGlow  = ok => ok ? ';box-shadow:0 0 5px var(--win)' : '';
+  const statusText = ok => ok ? 'OK' : 'Nicht konfiguriert';
+
+  const serviceRows = [
+    ['Datenbank (D1)', st.db], ['Telegram Bot', st.telegram],
+    ['Anthropic AI', st.anthropic], ['Webhook Secret', st.webhook],
+  ].map(([label, ok]) => `<div style="display:flex;justify-content:space-between;align-items:center">
+    <span style="font-size:13px;color:var(--text-secondary)">${label}</span>
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="width:8px;height:8px;border-radius:50%;background:${dotColor(ok)}${dotGlow(ok)}"></div>
+      <span style="font-size:12px;color:${dotColor(ok)};font-weight:600">${statusText(ok)}</span>
+    </div>
+  </div>`).join('');
+
+  const tableCountRows = Object.entries(st.tables || {}).map(([t, c]) =>
+    `<div style="display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:12px;color:var(--text-tertiary);font-family:var(--font-mono)">${t}</span>
+      <span style="font-size:13px;font-weight:600;color:${c === null ? 'var(--loss)' : 'var(--text-primary)'}">${c === null ? '✗' : c.toLocaleString()}</span>
+    </div>`
+  ).join('');
+
+  const sessionRows = sessions.map(s => `<tr>
+    <td style="font-weight:600">${_esc(s.username || '')}</td>
+    <td><span class="badge ${s.role === 'admin' ? 'badge-win' : 'badge-wait'}">${_esc(s.role || '')}</span></td>
+    <td class="mono muted" style="font-size:11px">${_fmtDate(s.created_at)}</td>
+    <td class="mono muted" style="font-size:11px">${_fmtDate(s.expires_at)}</td>
+  </tr>`).join('');
+
+  const now = Date.now();
+  const userRows = users.map(u => {
+    const online = u.last_seen && u.last_seen > now - 5 * 60 * 1000;
+    return `<tr style="${u.blocked ? 'opacity:.55' : ''}">
+      <td>
+        <div style="display:flex;align-items:center;gap:6px">
+          <div style="width:7px;height:7px;border-radius:50%;background:${online ? 'var(--win)' : 'var(--text-quaternary)'}"></div>
+          <span style="font-size:11px;color:var(--text-tertiary)">${online ? 'ONLINE' : 'OFFLINE'}</span>
+        </div>
+      </td>
+      <td>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:28px;height:28px;border-radius:50%;background:${u.blocked ? 'var(--text-quaternary)' : 'var(--blue-500)'};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;flex-shrink:0">
+            ${_esc((u.username || 'U').charAt(0).toUpperCase())}
+          </div>
+          <div>
+            <div style="font-weight:600">${_esc(u.username || '')}</div>
+            ${u.email ? `<div style="font-size:11px;color:var(--text-tertiary)">${_esc(u.email)}</div>` : ''}
+          </div>
+          ${u.blocked ? '<span class="badge badge-loss" style="font-size:10px">GESPERRT</span>' : ''}
+        </div>
+      </td>
+      <td>
+        <select onchange="changeRole('${u.id}',this.value)" class="input" style="font-size:12px;padding:3px 6px;width:auto;min-width:100px">
+          ${['admin','trader','viewer','extern'].map(r => `<option value="${r}"${u.role===r?' selected':''}>${r.toUpperCase()}</option>`).join('')}
+        </select>
+      </td>
+      <td class="mono muted" style="font-size:11px">${u.last_seen ? _fmtDate(u.last_seen) : '–'}</td>
+      <td>
+        <div style="display:flex;gap:4px">
+          <button title="Passwort ändern" onclick="showChangePwModal('${u.id}','${_esc(u.username || '')}')"
+            style="padding:4px 8px;border-radius:6px;background:var(--bg-2);border:1px solid var(--border);cursor:pointer;font-size:12px">${_svgIcon('key', 13)}</button>
+          <button title="${u.blocked ? 'Entsperren' : 'Sperren'}" onclick="toggleBlock('${u.id}',${!u.blocked})"
+            style="padding:4px 8px;border-radius:6px;background:var(--bg-2);border:1px solid var(--border);cursor:pointer;font-size:12px;color:${u.blocked ? 'var(--win)' : 'var(--loss)'}">
+            ${u.blocked ? '✓' : '✗'}
+          </button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `<div style="display:flex;flex-direction:column;gap:16px">
+
+  <div class="card">
+    <div class="card-head">${_svgIcon('signal', 16)}<h3>System Status</h3>
+      <div class="actions"><span class="badge badge-tag">${_esc(st.version || '–')}</span></div>
+    </div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+        <div>
+          <div style="font-size:11px;color:var(--text-tertiary);font-weight:700;letter-spacing:.08em;margin-bottom:12px">SERVICES</div>
+          <div style="display:flex;flex-direction:column;gap:10px">${serviceRows}</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--text-tertiary);font-weight:700;letter-spacing:.08em;margin-bottom:12px">DATENBANK — ZEILEN</div>
+          <div style="display:flex;flex-direction:column;gap:8px">${tableCountRows}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">${_svgIcon('bell', 16)}<h3>Telegram Integration</h3>
+      <div class="actions">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:8px;height:8px;border-radius:50%;background:${dotColor(st.telegram)}${dotGlow(st.telegram)}"></div>
+          <span style="font-size:12px;color:${dotColor(st.telegram)};font-weight:600">${statusText(st.telegram)}</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
+      <div>
+        <div style="font-size:11px;color:var(--text-tertiary);font-weight:700;letter-spacing:.08em;margin-bottom:10px">SCHNELLTEST</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button onclick="adminAction('/test-telegram','GET','tg-result',d=>d.success?'Telegram OK ✓':(d.message||'Fehler'),d=>d.success)"
+            style="padding:7px 14px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;cursor:pointer;font-family:var(--font-main)">🔔 Verbindung testen</button>
+          <button onclick="sendTgSignal()"
+            style="padding:7px 14px;border-radius:8px;background:var(--bg-2);border:1px solid var(--border);color:var(--text-primary);font-size:13px;cursor:pointer;font-family:var(--font-main)">📊 Test-Signal Alert</button>
+        </div>
+        <div id="tg-result" style="margin-top:8px"></div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:16px">
+        <div style="font-size:11px;color:var(--text-tertiary);font-weight:700;letter-spacing:.08em;margin-bottom:8px">EIGENE NACHRICHT</div>
+        <textarea id="tg-msg" class="input" rows="3" style="width:100%;font-family:var(--font-mono);font-size:13px;resize:vertical" placeholder="Nachricht (HTML: &lt;b&gt; &lt;i&gt; &lt;code&gt;)"></textarea>
+        <div style="display:flex;justify-content:flex-end;margin-top:8px">
+          <button onclick="sendTgCustom()" style="padding:7px 14px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;cursor:pointer;font-family:var(--font-main)">📤 Senden</button>
+        </div>
+        <div id="tg-send-result" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="card">
+      <div class="card-head">${_svgIcon('cpu', 16)}<h3>Anthropic AI</h3>
+        <div class="actions">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="width:8px;height:8px;border-radius:50%;background:${dotColor(st.anthropic)}${dotGlow(st.anthropic)}"></div>
+            <span style="font-size:12px;color:${dotColor(st.anthropic)};font-weight:600">${statusText(st.anthropic)}</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <button onclick="adminAction('/admin/test-ai','POST','ai-result',d=>d.ok?'AI OK · '+d.latencyMs+'ms · '+d.model:(d.error||'Fehler'),d=>d.ok)"
+          style="padding:7px 14px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;cursor:pointer;font-family:var(--font-main)">🤖 API testen</button>
+        <div id="ai-result" style="margin-top:8px"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">${_svgIcon('target', 16)}<h3>Trade Check</h3></div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:10px">
+        <button onclick="adminAction('/admin/check-open-trades','POST','check-result',d=>d.success?'Geprüft: '+d.checked+' · Geschlossen: '+(d.closed||0):(d.error||'Fehler'),d=>d.success)"
+          style="padding:7px 14px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;cursor:pointer;font-family:var(--font-main)">Alle offenen Trades prüfen</button>
+        <button onclick="adminAction('/admin/eod-check','POST','check-result',d=>d.success?'EOD: '+d.checked+' geprüft, '+(d.closed||0)+' geschlossen':(d.error||'Fehler'),d=>d.success)"
+          style="padding:7px 14px;border-radius:8px;background:var(--bg-2);border:1px solid var(--border);color:var(--text-primary);font-size:13px;cursor:pointer;font-family:var(--font-main)">EOD-Check ausführen</button>
+        <div id="check-result" style="margin-top:4px"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">${_svgIcon('settings', 16)}<h3>Datenbank Wartung</h3></div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <div style="font-size:11px;color:var(--text-tertiary);font-weight:700;letter-spacing:.08em;margin-bottom:8px">SCHEMA MIGRATION</div>
+          <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;line-height:1.6">Erstellt fehlende Tabellen und fügt neue Spalten hinzu. Sicher jederzeit ausführbar.</p>
+          <button onclick="runSetupDB()" style="padding:7px 14px;border-radius:8px;background:var(--bg-2);border:1px solid var(--border);color:var(--text-primary);font-size:13px;cursor:pointer;font-family:var(--font-main)">🔧 Setup DB ausführen</button>
+          <div id="setup-result" style="margin-top:8px;font-size:12px;font-family:var(--font-mono);color:var(--text-secondary)"></div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--text-tertiary);font-weight:700;letter-spacing:.08em;margin-bottom:8px">BEREINIGUNG</div>
+          <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;line-height:1.6">Löscht alte Snapshots, abgelaufene Sessions und alte Practice Trades.</p>
+          <button onclick="if(confirm('DB bereinigen?'))adminAction('/admin/db-cleanup','POST','cleanup-result',d=>(d.results||[]).join('\\n')||'OK',d=>d.success)"
+            style="padding:7px 14px;border-radius:8px;background:var(--bg-2);border:1px solid var(--border);color:var(--loss);font-size:13px;cursor:pointer;font-family:var(--font-main)">🗑 DB bereinigen</button>
+          <div id="cleanup-result" style="margin-top:8px;font-size:12px;font-family:var(--font-mono);color:var(--text-secondary)"></div>
+        </div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:16px">
+        <div style="font-size:11px;color:var(--text-tertiary);font-weight:700;letter-spacing:.08em;margin-bottom:10px">SIGNALE LÖSCHEN</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          ${['test','wait','skipped','practice'].map(t =>
+            `<button onclick="if(confirm('${t}-Signale löschen?'))deleteSignals('${t}')"
+              style="padding:7px 12px;border-radius:8px;background:var(--bg-2);border:1px solid var(--border);color:var(--text-secondary);font-size:12px;cursor:pointer;font-family:var(--font-main)">
+              ${t === 'test' ? '🧪 Test' : t === 'wait' ? '⏳ WAIT' : t === 'skipped' ? '⏭ SKIPPED' : '📝 Practice'} löschen
+            </button>`
+          ).join('')}
+        </div>
+        <div id="delete-result" style="margin-top:8px;font-size:12px;color:var(--text-secondary)"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">${_svgIcon('users', 16)}<h3>Aktive Sessions</h3>
+      <div class="actions"><span class="badge badge-tag">${sessions.length} aktiv</span></div>
+    </div>
+    ${sessionRows
+      ? `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>User</th><th>Rolle</th><th>Angemeldet</th><th>Läuft ab</th></tr></thead><tbody>${sessionRows}</tbody></table></div>`
+      : `<div class="card-body" style="text-align:center;padding:30px;color:var(--text-tertiary);font-size:13px">Keine aktiven Sessions</div>`
+    }
+  </div>
+
+  <div class="card">
+    <div class="card-head">${_svgIcon('users', 16)}<h3>Benutzer-Verwaltung</h3>
+      <div class="actions">
+        <button onclick="showCreateUserModal()"
+          style="padding:6px 14px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font-main)">
+          + Neuer User
+        </button>
+      </div>
+    </div>
+    ${userRows
+      ? `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Status</th><th>Benutzer</th><th>Rolle</th><th>Zuletzt gesehen</th><th>Aktionen</th></tr></thead><tbody>${userRows}</tbody></table></div>`
+      : `<div class="card-body" style="text-align:center;padding:40px;color:var(--text-tertiary);font-size:13px">Keine Benutzer</div>`
+    }
+  </div>
+
+  <!-- Modal overlay -->
+  <div id="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;align-items:center;justify-content:center" onclick="closeModal()">
+    <div id="modal-box" style="background:var(--bg-1);border-radius:14px;padding:28px;max-width:440px;width:90%;border:1px solid var(--border)" onclick="event.stopPropagation()">
+      <div id="modal-html"></div>
+    </div>
+  </div>
+  <div id="admin-toast" style="display:none;position:fixed;top:64px;right:20px;z-index:9999;padding:12px 18px;border-radius:10px;font-size:13px;font-weight:500;box-shadow:0 4px 16px rgba(0,0,0,.25)"></div>
+
+</div>
+<script>
+function adminToast(msg,type='ok'){
+  const el=document.getElementById('admin-toast');if(!el)return;
+  el.textContent=(type==='ok'?'✅ ':'❌ ')+msg;
+  el.style.display='block';el.style.background=type==='ok'?'var(--bg-success)':'var(--bg-error)';
+  el.style.border='1px solid '+(type==='ok'?'rgba(16,185,129,.4)':'rgba(239,68,68,.4)');
+  el.style.color=type==='ok'?'var(--win)':'var(--loss)';
+  setTimeout(()=>el.style.display='none',3000);
+}
+function showResultBox(elId,text,ok){
+  const el=document.getElementById(elId);if(!el)return;
+  el.style.marginTop='10px';el.style.padding='10px 14px';el.style.borderRadius='8px';el.style.whiteSpace='pre-wrap';
+  el.style.background=ok?'var(--bg-success)':'var(--bg-error)';
+  el.style.border='1px solid '+(ok?'rgba(16,185,129,.3)':'rgba(239,68,68,.3)');
+  el.style.fontSize='12px';el.style.fontFamily='var(--font-mono)';
+  el.style.color=ok?'var(--win)':'var(--loss)';el.textContent=text;
+}
+async function adminAction(path,method,resultId,textFn,okFn){
+  try{const r=await fetch(path,{credentials:'include',method});const d=await r.json();showResultBox(resultId,textFn(d),okFn(d));}
+  catch(e){showResultBox(resultId,e.message,false);}
+}
+async function sendTgSignal(){
+  try{const r=await fetch('/admin/telegram/send',{credentials:'include',method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({message:'🟢 <b>BTCUSDT</b> LONG\n\n⭐⭐⭐ Score: <b>82/100</b>\n📡 Test-Signal aus Admin-Panel'})});
+  const d=await r.json();showResultBox('tg-result',d.success?'Test-Signal gesendet ✓':(d.error||'Fehler'),d.success);
+  }catch(e){showResultBox('tg-result',e.message,false);}
+}
+async function sendTgCustom(){
+  const msg=document.getElementById('tg-msg')?.value?.trim();if(!msg)return;
+  try{const r=await fetch('/admin/telegram/send',{credentials:'include',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
+  const d=await r.json();showResultBox('tg-send-result',d.success?'Nachricht gesendet ✓':(d.error||'Fehler'),d.success);
+  }catch(e){showResultBox('tg-send-result',e.message,false);}
+}
+async function runSetupDB(){
+  try{const r=await fetch('/admin/setup-db',{credentials:'include',method:'POST'});const d=await r.json();
+  document.getElementById('setup-result').textContent=(d.results||[d.error||'OK']).join('\\n');
+  adminToast(d.success?'Setup erfolgreich':'Fehler',d.success?'ok':'err');
+  }catch(e){document.getElementById('setup-result').textContent=e.message;}
+}
+async function deleteSignals(type){
+  try{const r=await fetch('/admin/delete-signals',{credentials:'include',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type})});
+  const d=await r.json();document.getElementById('delete-result').textContent=d.success?(d.deleted??'')+' gelöscht':(d.error||'Fehler');
+  if(d.success)adminToast('Gelöscht');
+  }catch(e){document.getElementById('delete-result').textContent=e.message;}
+}
+async function changeRole(userId,role){
+  try{const r=await fetch('/admin/users/'+userId+'/role',{credentials:'include',method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({role})});
+  const d=await r.json();adminToast(d.success?'Rolle geändert auf '+role:(d.error||'Fehler'),d.success?'ok':'err');
+  }catch(e){adminToast(e.message,'err');}
+}
+async function toggleBlock(userId,block){
+  if(!confirm(block?'User sperren?':'User entsperren?'))return;
+  try{const r=await fetch('/admin/block-user',{credentials:'include',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,blocked:block})});
+  const d=await r.json();
+  if(d.success){adminToast(block?'User gesperrt':'User entsperrt');htmx.ajax('GET','/settings?section=admin',{target:'#settings-section',swap:'innerHTML'});}
+  else adminToast(d.error||'Fehler','err');
+  }catch(e){adminToast(e.message,'err');}
+}
+function closeModal(){document.getElementById('modal-overlay').style.display='none';}
+function openModal(html){document.getElementById('modal-html').innerHTML=html;document.getElementById('modal-overlay').style.display='flex';}
+function showChangePwModal(userId,username){
+  openModal(\`<h2 style="margin-bottom:6px">Passwort ändern</h2>
+    <p style="color:var(--text-tertiary);font-size:13px;margin-bottom:20px">Für: <strong>\${username}</strong></p>
+    <div style="margin-bottom:20px"><label style="display:block;margin-bottom:6px;font-size:13px">Neues Passwort</label>
+    <input type="password" id="new-pw" class="input" style="width:100%" placeholder="Mindestens 8 Zeichen" autofocus></div>
+    <div style="display:flex;gap:10px">
+      <button onclick="doChangePw('\${userId}')" style="flex:1;padding:8px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;cursor:pointer;font-family:var(--font-main)">Ändern</button>
+      <button onclick="closeModal()" style="padding:8px 16px;border-radius:8px;background:var(--bg-2);border:1px solid var(--border);color:var(--text-primary);font-size:13px;cursor:pointer;font-family:var(--font-main)">Abbrechen</button>
+    </div>\`);
+}
+async function doChangePw(userId){
+  const pw=document.getElementById('new-pw')?.value;
+  if(!pw||pw.length<8){alert('Mindestens 8 Zeichen');return;}
+  try{const r=await fetch('/admin/change-password',{credentials:'include',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId,newPassword:pw})});
+  const d=await r.json();if(d.success){closeModal();adminToast('Passwort geändert');}else adminToast(d.error||'Fehler','err');
+  }catch(e){adminToast(e.message,'err');}
+}
+function showCreateUserModal(){
+  openModal(\`<h2 style="margin-bottom:20px">Neuen User anlegen</h2>
+    <div id="cu-err" style="display:none;padding:10px;border-radius:8px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);font-size:13px;color:var(--loss);margin-bottom:14px"></div>
+    <div style="margin-bottom:14px"><label style="display:block;margin-bottom:6px;font-size:13px">Benutzername</label>
+      <input type="text" id="cu-username" class="input" style="width:100%" placeholder="z.B. peter" autofocus></div>
+    <div style="margin-bottom:14px"><label style="display:block;margin-bottom:6px;font-size:13px">Email</label>
+      <input type="email" id="cu-email" class="input" style="width:100%" placeholder="peter@example.com"></div>
+    <div style="margin-bottom:14px"><label style="display:block;margin-bottom:6px;font-size:13px">Passwort</label>
+      <input type="password" id="cu-pw" class="input" style="width:100%" placeholder="Mindestens 8 Zeichen"></div>
+    <div style="margin-bottom:20px"><label style="display:block;margin-bottom:6px;font-size:13px">Rolle</label>
+      <select id="cu-role" class="input" style="width:100%">
+        <option value="viewer">VIEWER</option><option value="trader">TRADER</option><option value="admin">ADMIN</option>
+      </select></div>
+    <div style="display:flex;gap:10px">
+      <button onclick="doCreateUser()" style="flex:1;padding:8px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;cursor:pointer;font-family:var(--font-main)">Erstellen</button>
+      <button onclick="closeModal()" style="padding:8px 16px;border-radius:8px;background:var(--bg-2);border:1px solid var(--border);color:var(--text-primary);font-size:13px;cursor:pointer;font-family:var(--font-main)">Abbrechen</button>
+    </div>\`);
+}
+async function doCreateUser(){
+  const u=document.getElementById('cu-username')?.value?.trim();
+  const e=document.getElementById('cu-email')?.value?.trim();
+  const p=document.getElementById('cu-pw')?.value;
+  const role=document.getElementById('cu-role')?.value;
+  const errEl=document.getElementById('cu-err');
+  if(!u||!e||!p){errEl.textContent='Bitte alle Felder ausfüllen';errEl.style.display='block';return;}
+  if(p.length<8){errEl.textContent='Passwort muss mindestens 8 Zeichen haben';errEl.style.display='block';return;}
+  errEl.style.display='none';
+  try{const r=await fetch('/admin/create-user',{credentials:'include',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,email:e,password:p,role})});
+  const d=await r.json();
+  if(d.success||d.id){closeModal();adminToast('User erstellt');htmx.ajax('GET','/settings?section=admin',{target:'#settings-section',swap:'innerHTML'});}
+  else{errEl.textContent=d.error||'Fehler';errEl.style.display='block';}
+  }catch(ex){errEl.textContent=ex.message;errEl.style.display='block';}
+}
+</script>`;
+}
+
+function _renderSettingsSection(section, data, session) {
+  const isAdmin = session?.role === 'admin';
+  switch (section) {
+    case 'account':       return _renderSettingsAccount(session);
+    case 'design':        return _renderSettingsDesign();
+    case 'trading':       return _renderSettingsTrading();
+    case 'notifications': return _renderSettingsNotifications();
+    case 'broker':        return _renderSettingsBroker();
+    case 'admin':         return isAdmin ? _renderSettingsAdmin(data) : _renderSettingsAccount(session);
+    case 'system':        return isAdmin ? _renderSettingsSystem() : _renderSettingsAccount(session);
+    default:              return _renderSettingsAccount(session);
+  }
+}
+
+function _renderSettingsPage(section, data, session) {
+  const isAdmin = session?.role === 'admin';
+  const nav = _renderSettingsNav(section, isAdmin);
+  const sectionHtml = _renderSettingsSection(section, data, session);
+  return `
+<div class="content page-enter">
+  <div class="page-header">
+    <h2>Einstellungen</h2>
+    <div class="subtitle">Konfiguration &amp; Verwaltung</div>
+  </div>
+  <div id="settings-section" style="display:grid;grid-template-columns:220px 1fr;gap:20px;align-items:start">
+    ${nav}
+    <div id="settings-content">${sectionHtml}</div>
+  </div>
+</div>`;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // MAIN WORKER
 // ═══════════════════════════════════════════════════════════════
@@ -4200,6 +4868,42 @@ export default {
             : 0;
           const aAnalytics = { avgHoldTimeMs, totalSignals: aStats.total };
           content = _renderStatistikenContent({ stats: aStats, history: aHistory, analytics: aAnalytics, breakdown: aBreakdown });
+        } else if (url.pathname === '/settings') {
+          const section = url.searchParams.get('section') || 'account';
+          const isAdminUser = pageSess.role === 'admin';
+          let sData = {};
+          if (section === 'admin' && isAdminUser) {
+            const [uRows, sRows] = await Promise.all([
+              env.DB.prepare(`SELECT id, username, email, role, blocked, last_seen, created_at FROM users ORDER BY created_at DESC`).all(),
+              env.DB.prepare(`SELECT s.id, s.created_at, s.expires_at, u.username, u.role FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.expires_at > ? ORDER BY s.created_at DESC`).bind(Date.now()).all()
+            ]);
+            let dbOk = false;
+            try { await env.DB.prepare('SELECT 1').first(); dbOk = true; } catch (_) {}
+            const tbls = ['signals', 'snapshots', 'practice_trades', 'users', 'sessions'];
+            const tblCounts = {};
+            for (const t of tbls) {
+              try { const r = await env.DB.prepare(`SELECT COUNT(*) as c FROM ${t}`).first(); tblCounts[t] = r?.c ?? 0; }
+              catch (_) { tblCounts[t] = null; }
+            }
+            sData = {
+              users: uRows.results || [],
+              sessions: sRows.results || [],
+              systemStatus: {
+                db: dbOk,
+                telegram: !!(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID),
+                anthropic: !!env.ANTHROPIC_API_KEY,
+                webhook: !!env.WEBHOOK_SECRET,
+                tables: tblCounts,
+                version: '3.5.0'
+              }
+            };
+          }
+          if (isHtmx && htmxTarget === 'settings-section') {
+            const sNav = _renderSettingsNav(section, isAdminUser);
+            const sContent = _renderSettingsSection(section, sData, pageSess);
+            return new Response(`${sNav}<div id="settings-content">${sContent}</div>`, { headers: htmlHdrs });
+          }
+          content = _renderSettingsPage(section, sData, pageSess);
         } else {
           content = _renderPlaceholderPage(activePage);
         }
