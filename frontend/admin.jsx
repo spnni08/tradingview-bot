@@ -130,7 +130,8 @@ function TelegramCard({ status }) {
     setTesting(true); setTestResult(null);
     try {
       const res = await fetch(`${API_URL}/test-telegram`, { credentials: 'include' });
-      setTestResult(await res.json());
+      const data = await res.json();
+      setTestResult(res.ok ? data : { success: false, message: data.error || `HTTP ${res.status}` });
     } catch (e) { setTestResult({ success: false, message: e.message }); }
     finally { setTesting(false); }
   };
@@ -142,10 +143,11 @@ function TelegramCard({ status }) {
       const res = await fetch(`${API_URL}/admin/telegram/send`, {
         credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json'},
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: customMsg })
       });
-      setSendResult(await res.json());
+      const data = await res.json();
+      setSendResult(res.ok ? data : { success: false, message: data.error || `HTTP ${res.status}` });
     } catch (e) { setSendResult({ success: false, message: e.message }); }
     finally { setSending(false); }
   };
@@ -156,12 +158,13 @@ function TelegramCard({ status }) {
       const res = await fetch(`${API_URL}/admin/telegram/send`, {
         credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json'},
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: `🟢 <b>BTCUSDT</b> LONG\n\n⭐⭐⭐ Score: <b>82/100</b>\n📊 Timeframe: 5\n💰 Entry: $80,000.00\n🎯 TP: $81,600.00\n🛑 SL: $79,200.00\n\n📡 Dies ist ein Test-Signal aus dem Admin-Panel`
         })
       });
-      setSignalResult(await res.json());
+      const data = await res.json();
+      setSignalResult(res.ok ? data : { success: false, message: data.error || `HTTP ${res.status}` });
     } catch (e) { setSignalResult({ success: false, message: e.message }); }
     finally { setSendingSignal(false); }
   };
@@ -227,7 +230,7 @@ function AIStatusCard({ status }) {
     setTesting(true); setResult(null);
     try {
       const res = await fetch(`${API_URL}/admin/test-ai`, {
-        credentials: 'include', method: 'POST', credentials: 'include' });
+        credentials: 'include', method: 'POST' });
       setResult(await res.json());
     } catch (e) { setResult({ ok: false, error: e.message }); }
     finally { setTesting(false); }
@@ -315,10 +318,11 @@ function WebhookTesterCard() {
       const res = await fetch(`${API_URL}/admin/test-webhook`, {
         credentials: 'include',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json'},
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type })
       });
-      setResult(await res.json());
+      const data = await res.json();
+      setResult(res.ok ? data : { ok: false, error: data.error || `HTTP ${res.status}` });
     } catch (e) { setResult({ ok: false, error: e.message }); }
     finally { setLoading(null); }
   };
@@ -432,7 +436,7 @@ function DBMaintenanceCard({ onStatusRefresh }) {
     setLoading(true); setResult(null);
     try {
       const res = await fetch(`${API_URL}/admin/db-cleanup`, {
-        credentials: 'include', method: 'POST', credentials: 'include' });
+        credentials: 'include', method: 'POST' });
       const data = await res.json();
       setResult(data);
       onStatusRefresh();
@@ -444,7 +448,7 @@ function DBMaintenanceCard({ onStatusRefresh }) {
     setSetupLoading(true); setSetupResult(null);
     try {
       const res = await fetch(`${API_URL}/admin/setup-db`, {
-        credentials: 'include', method: 'POST', credentials: 'include' });
+        credentials: 'include', method: 'POST' });
       const data = await res.json();
       setSetupResult({ ok: data.success, results: data.results });
       onStatusRefresh();
@@ -517,7 +521,7 @@ function DBMaintenanceCard({ onStatusRefresh }) {
 
 // ─── Section: Active Sessions ────────────────────────────────
 
-function SessionsCard() {
+function SessionsCard({ mySid }) {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading]   = useState(true);
 
@@ -534,13 +538,15 @@ function SessionsCard() {
 
   const handleKick = async (sessionId) => {
     try {
-      await fetch(`${API_URL}/auth/logout`, {
-        credentials: 'include', method: 'POST', credentials: 'include' });
-      setSessions(prev => prev.filter(s => s.id !== sessionId));
+      const res = await fetch(`${API_URL}/admin/kick-session`, {
+        credentials: 'include',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId })
+      });
+      if (res.ok) setSessions(prev => prev.filter(s => s.id !== sessionId));
     } catch (_) {}
   };
-
-  const mySid = null;
 
   return (
     <div className="card">
@@ -609,7 +615,7 @@ function SessionsCard() {
 
 // ─── Section: Data Cleanup & Live Mode ───────────────────────
 
-function DataCleanupCard({ onRefresh }) {
+function DataCleanupCard({ onRefresh, showToast }) {
   const [mode, setMode]           = useState(null);
   const [liveStartedAt, setLiveStartedAt] = useState(null);
   const [loading, setLoading]     = useState(false);
@@ -618,7 +624,6 @@ function DataCleanupCard({ onRefresh }) {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showLiveConfirm, setShowLiveConfirm] = useState(false);
   const [deleteTestOnLive, setDeleteTestOnLive] = useState(true);
-  const { show: showToast, ToastEl } = useAdminToast();
 
   useEffect(() => { loadSettings(); }, []);
 
@@ -685,7 +690,6 @@ function DataCleanupCard({ onRefresh }) {
 
   return (
     <div className="card">
-      {ToastEl}
       <div className="card-head">
         <Icon name="trash" className="ico" style={{ color: 'var(--loss)' }}/>
         <h3>Daten-Bereinigung & Live-Start</h3>
@@ -1028,10 +1032,10 @@ const AdminPage = ({ user }) => {
       <DBMaintenanceCard onStatusRefresh={loadAll}/>
 
       {/* Data Cleanup & Live Mode */}
-      <DataCleanupCard onRefresh={loadAll}/>
+      <DataCleanupCard onRefresh={loadAll} showToast={showToast}/>
 
       {/* Active Sessions */}
-      <SessionsCard/>
+      <SessionsCard mySid={user?.sessionId}/>
 
       {/* User Management */}
       <div className="card">

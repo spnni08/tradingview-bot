@@ -30,7 +30,7 @@ function AdminTradeCheckPanel() {
     setLoading(true); setResult(null); setRowResults({});
     try {
       const res = await fetch(`${API_URL}/admin/check-open-trades`, {
-        credentials: 'include', method: 'POST', credentials: 'include' });
+        credentials: 'include', method: 'POST' });
       setResult(await res.json());
     } catch (e) { setResult({ success: false, error: e.message }); }
     setLoading(false);
@@ -40,7 +40,7 @@ function AdminTradeCheckPanel() {
     setRowLoading(p => ({ ...p, [id]: true }));
     try {
       const res = await fetch(`${API_URL}/admin/check-trade/${id}`, {
-        credentials: 'include', method: 'POST', credentials: 'include' });
+        credentials: 'include', method: 'POST' });
       const data = await res.json();
       setRowResults(p => ({ ...p, [id]: data }));
     } catch (e) { setRowResults(p => ({ ...p, [id]: { success: false, error: e.message } })); }
@@ -51,7 +51,7 @@ function AdminTradeCheckPanel() {
     setEodLoad(true); setEodRes(null);
     try {
       const res = await fetch(`${API_URL}/admin/eod-check`, {
-        credentials: 'include', method: 'POST', credentials: 'include' });
+        credentials: 'include', method: 'POST' });
       setEodRes(await res.json());
     } catch (e) { setEodRes({ success: false, error: e.message }); }
     setEodLoad(false);
@@ -227,8 +227,9 @@ function AdminWebhookTester() {
     try {
       let body;
       try { body = JSON.parse(payload); } catch { setResponse({ ok: false, error: 'Ungültiges JSON' }); setLoading(false); return; }
-      const res = await fetch(WEBHOOK_URL, {
+      const res = await fetch(`${API_URL}/admin/test-webhook`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
