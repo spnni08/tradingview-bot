@@ -17,17 +17,26 @@ const StatistikenPage = ({ user }) => {
 
   const loadStats = async () => {
     try {
-      const [statsRes, histRes, analyticsRes, breakdownRes] = await Promise.all([
+      const [statsRes, histRes, breakdownRes] = await Promise.all([
         fetch(`${API_URL}/stats`,             { credentials: 'include' }),
         fetch(`${API_URL}/history?limit=200`, { credentials: 'include' }),
-        fetch(`${API_URL}/analytics`,         { credentials: 'include' }),
         fetch(`${API_URL}/stats/breakdown`,   { credentials: 'include' })
       ]);
       if (statsRes.status === 401) { localStorage.removeItem('wavescout_user'); window.location.href = 'login.html'; return; }
-      setStats(statsRes.ok      ? await statsRes.json()      : null);
-      setHistory(histRes.ok     ? await histRes.json()       : []);
-      setAnalytics(analyticsRes.ok ? await analyticsRes.json() : null);
-      setBreakdown(breakdownRes.ok ? await breakdownRes.json() : null);
+      const parsedStats   = statsRes.ok     ? await statsRes.json()     : null;
+      const parsedHistory = histRes.ok      ? await histRes.json()      : [];
+      const parsedBD      = breakdownRes.ok ? await breakdownRes.json() : null;
+      setStats(parsedStats);
+      setHistory(parsedHistory);
+      setBreakdown(parsedBD);
+      // Compute analytics locally — /analytics path conflicts with the SSR page route and returns HTML.
+      if (parsedStats) {
+        const closed = parsedHistory.filter(t => (t.outcome === 'WIN' || t.outcome === 'LOSS') && t.updated_at);
+        const avgHoldTimeMs = closed.length > 0
+          ? closed.reduce((s, t) => s + (t.updated_at - t.created_at), 0) / closed.length
+          : 0;
+        setAnalytics({ avgHoldTimeMs, totalSignals: parsedStats.total });
+      }
     } catch (err) {
       console.error('Stats load error:', err);
     } finally {
