@@ -3381,6 +3381,354 @@ function _renderNewsContent({ events, filter }) {
 </div>`;
 }
 
+// ── Backtesting helpers ─────────────────────────────────────────
+
+function _renderBTTabBar(activeTab, isTrader) {
+  const tabs = [
+    { id: 'practice',      label: 'Übungstrades'        },
+    { id: 'history',       label: 'Signal-Historie'      },
+    ...(isTrader ? [
+      { id: 'strategy',    label: 'Strategie-Labor'      },
+      { id: 'compare',     label: 'Strategie-Vergleich'  },
+      { id: 'regelanalyse',label: 'Regel-Analyse'        },
+    ] : []),
+    { id: 'loss',          label: 'Loss-Analyse'         },
+    { id: 'biasstats',     label: 'Bias-Statistiken'     },
+    { id: 'suggestions',   label: 'Vorschläge'           },
+  ];
+  const btns = tabs.map(t => {
+    const active = t.id === activeTab;
+    return `<button
+      hx-get="/backtesting?tab=${t.id}"
+      hx-target="#bt-section"
+      hx-swap="innerHTML"
+      hx-push-url="true"
+      style="background:none;border:none;padding:10px 18px;cursor:pointer;font-size:14px;
+             font-weight:${active ? 600 : 400};font-family:var(--font-main);white-space:nowrap;
+             color:${active ? 'var(--blue-500)' : 'var(--text-secondary)'};
+             border-bottom:2px solid ${active ? 'var(--blue-500)' : 'transparent'};
+             margin-bottom:-1px;transition:all .15s"
+      id="bt-tab-${t.id}">${t.label}</button>`;
+  }).join('');
+  return `<div style="overflow-x:auto;margin-bottom:20px;padding-bottom:1px">
+  <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);min-width:max-content">${btns}</div>
+</div>`;
+}
+
+function _renderBTPracticeTab(practiceTrades, practiceStats) {
+  const ps = practiceStats || {};
+  const statRow = `
+<div class="grid grid-4" style="margin-bottom:var(--gap)">
+  <div class="stat"><div class="label">Gesamt</div><div class="value" style="font-size:22px">${ps.total || 0}</div></div>
+  <div class="stat"><div class="label">Offen</div><div class="value" style="font-size:22px">${ps.open || 0}</div></div>
+  <div class="stat"><div class="label">Win-Rate</div><div class="value" style="font-size:22px">${_fmtPct(ps.winRate)}</div><div class="sub muted">${ps.wins || 0}W / ${ps.losses || 0}L</div></div>
+  <div class="stat"><div class="label">Ø Win %</div><div class="value" style="font-size:22px;color:var(--win)">+${_fmtNum(ps.avgWinPct)}</div><div class="sub loss">Loss Ø −${_fmtNum(Math.abs(ps.avgLossPct || 0))}</div></div>
+</div>`;
+  const pts = practiceTrades || [];
+  if (!pts.length) return statRow + `<div class="card"><div class="card-body" style="text-align:center;color:var(--text-tertiary);padding:40px">Keine Practice Trades vorhanden</div></div>`;
+  const rows = pts.map(t => {
+    const dc = t.direction === 'LONG' ? 'badge-long' : 'badge-short';
+    const sc = t.status === 'WIN' ? 'win' : t.status === 'LOSS' ? 'loss' : 'muted';
+    const rp = t.result_pct != null ? `<span style="${t.result_pct >= 0 ? 'color:var(--win)' : 'color:var(--loss)'}">${t.result_pct >= 0 ? '+' : ''}${Number(t.result_pct).toFixed(2)}%</span>` : '—';
+    return `<tr>
+      <td class="mono" style="font-weight:600">${_esc(t.symbol||'')}</td>
+      <td><span class="badge ${dc}">${_esc(t.direction||'')}</span></td>
+      <td class="mono">${_fmtNum(t.entry_price,4)}</td>
+      <td class="mono" style="color:var(--win)">${_fmtNum(t.tp_price,4)}</td>
+      <td class="mono" style="color:var(--loss)">${_fmtNum(t.sl_price,4)}</td>
+      <td class="mono">${t.exit_price ? _fmtNum(t.exit_price,4) : '—'}</td>
+      <td>${rp}</td>
+      <td class="${sc}" style="font-weight:600">${_esc(t.status||'OPEN')}</td>
+      <td style="font-size:11px;color:var(--text-tertiary)">${_fmtDate(t.created_at)}</td>
+    </tr>`;
+  }).join('');
+  return statRow + `<div class="card"><div style="overflow-x:auto"><table class="tbl">
+    <thead><tr><th>Symbol</th><th>Richtung</th><th>Einstieg</th><th>TP</th><th>SL</th><th>Ausstieg</th><th>P&L%</th><th>Status</th><th>Zeit</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div></div>`;
+}
+
+function _renderBTHistoryTab(history, stats) {
+  const s = stats || {};
+  const statRow = `
+<div class="grid grid-4" style="margin-bottom:var(--gap)">
+  <div class="stat"><div class="label">Trades Total</div><div class="value" style="font-size:22px">${s.total||0}</div></div>
+  <div class="stat"><div class="label">Win-Rate</div><div class="value" style="font-size:22px">${_fmtPct(s.winRate)}</div><div class="sub muted">${s.wins||0}W / ${s.losses||0}L</div></div>
+  <div class="stat"><div class="label">Break Even</div><div class="value" style="font-size:22px">${s.be||0}</div></div>
+  <div class="stat"><div class="label">Offen</div><div class="value" style="font-size:22px">${s.open||0}</div></div>
+</div>`;
+  const hist = history || [];
+  if (!hist.length) return statRow + `<div class="card"><div class="card-body" style="text-align:center;color:var(--text-tertiary);padding:40px">Keine Signale vorhanden</div></div>`;
+  const rows = hist.map(sig => {
+    const dc = sig.direction === 'LONG' ? 'badge-long' : 'badge-short';
+    const oc = sig.outcome === 'WIN' ? 'win' : sig.outcome === 'LOSS' ? 'loss' : 'muted';
+    const pnl = sig.exit_price && sig.entry_price
+      ? (sig.direction === 'LONG' ? (sig.exit_price - sig.entry_price) / sig.entry_price * 100 : (sig.entry_price - sig.exit_price) / sig.entry_price * 100)
+      : null;
+    const pnlHtml = pnl != null ? `<span style="${pnl>=0?'color:var(--win)':'color:var(--loss)'}">${pnl>=0?'+':''}${pnl.toFixed(2)}%</span>` : '—';
+    return `<tr>
+      <td class="mono" style="font-weight:600">${_esc(sig.symbol||'')}</td>
+      <td><span class="badge ${dc}">${_esc(sig.direction||'')}</span></td>
+      <td class="mono">${sig.ai_score||'—'}</td>
+      <td class="mono">${_fmtNum(sig.entry_price,4)}</td>
+      <td class="mono" style="color:var(--win)">${_fmtNum(sig.tp_price,4)}</td>
+      <td class="mono" style="color:var(--loss)">${_fmtNum(sig.sl_price,4)}</td>
+      <td>${pnlHtml}</td>
+      <td class="${oc}" style="font-weight:600">${_esc(sig.outcome||'OPEN')}</td>
+      <td style="font-size:11px;color:var(--text-tertiary)">${_fmtDate(sig.created_at)}</td>
+    </tr>`;
+  }).join('');
+  return statRow + `<div class="card"><div style="overflow-x:auto"><table class="tbl">
+    <thead><tr><th>Symbol</th><th>Richtung</th><th>Score</th><th>Einstieg</th><th>TP</th><th>SL</th><th>P&L%</th><th>Ergebnis</th><th>Zeit</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div></div>`;
+}
+
+function _renderBTStrategyTab(strategies) {
+  const strats = strategies || [];
+  if (!strats.length) return `<div class="card"><div class="card-body" style="text-align:center;color:var(--text-tertiary);padding:40px">Keine Strategien vorhanden</div></div>`;
+  const cards = strats.map(s => {
+    const cfg = s.config || {};
+    const isActive = !!s.active;
+    const isProtected = !!s.protected;
+    return `<div class="card" style="margin-bottom:10px;${isActive ? 'border-left:3px solid var(--blue-500)' : ''}">
+      <div class="card-body" style="padding:16px 20px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <div style="flex:1">
+            <div style="font-weight:700;font-size:15px">${_esc(s.name||'')}</div>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-top:2px">v${_esc(s.version||'1.0')} · ID: ${_esc(s.id||'').slice(-8)}</div>
+          </div>
+          ${isActive ? '<span class="badge badge-win">AKTIV</span>' : ''}
+          ${isProtected ? '<span class="badge badge-tag">Standard</span>' : ''}
+          ${!isActive ? `<button onclick="activateStrategy('${_esc(s.id)}',this)" style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg-3);color:var(--text-secondary);cursor:pointer;font-size:12px;font-weight:600;font-family:var(--font-main)">Aktivieren</button>` : ''}
+        </div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text-tertiary)">
+          ${cfg.min_trade_score != null ? `<span>Min Score: <b style="color:var(--text-primary)">${cfg.min_trade_score}</b></span>` : ''}
+          ${cfg.min_telegram_score != null ? `<span>Telegram: <b style="color:var(--text-primary)">${cfg.min_telegram_score}</b></span>` : ''}
+          ${cfg.tp_pct != null ? `<span>TP: <b style="color:var(--win)">${cfg.tp_pct}%</b></span>` : ''}
+          ${cfg.sl_pct != null ? `<span>SL: <b style="color:var(--loss)">${cfg.sl_pct}%</b></span>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div>${cards}</div>
+  <script>
+  function activateStrategy(id, btn) {
+    if (!confirm('Strategie aktivieren?')) return;
+    btn.disabled = true; btn.textContent = '...';
+    fetch('/strategies/' + id + '/activate', { method:'POST', credentials:'include' })
+      .then(r => r.json())
+      .then(d => { if (d.success) location.reload(); else { btn.disabled=false; btn.textContent='Aktivieren'; alert(d.error||'Fehler'); } })
+      .catch(() => { btn.disabled=false; btn.textContent='Aktivieren'; });
+  }
+  <\/script>`;
+}
+
+function _renderBTCompareTab(strategies, history) {
+  const hist = history || [];
+  const strats = strategies || [];
+  if (!strats.length) return `<div class="card"><div class="card-body" style="text-align:center;color:var(--text-tertiary);padding:40px">Keine Strategien zum Vergleichen</div></div>`;
+  const withSignals = strats.map(s => {
+    const sigs = hist.filter(h => h.strategy_id === s.id || (!h.strategy_id && s.is_default));
+    const closed = sigs.filter(h => h.outcome === 'WIN' || h.outcome === 'LOSS');
+    const wins = sigs.filter(h => h.outcome === 'WIN').length;
+    const wr = closed.length > 0 ? (wins / closed.length * 100).toFixed(1) : '—';
+    const scores = sigs.map(h => h.ai_score).filter(Boolean);
+    const avgScore = scores.length ? (scores.reduce((a,b) => a+b, 0) / scores.length).toFixed(1) : '—';
+    return { ...s, totalSigs: sigs.length, closedSigs: closed.length, wins, winRate: wr, avgScore };
+  });
+  const rows = withSignals.map(s => `<tr>
+    <td style="font-weight:600">${_esc(s.name||'')} ${s.active ? '<span class="badge badge-win" style="margin-left:4px">Aktiv</span>' : ''}</td>
+    <td class="mono">${s.totalSigs}</td>
+    <td class="mono">${s.closedSigs}</td>
+    <td class="mono">${s.wins}</td>
+    <td class="mono" style="font-weight:700;${parseFloat(s.winRate)>=50?'color:var(--win)':s.winRate!=='—'?'color:var(--loss)':''}">${s.winRate !== '—' ? s.winRate+'%' : '—'}</td>
+    <td class="mono">${s.avgScore}</td>
+  </tr>`).join('');
+  return `<div class="card"><div style="overflow-x:auto"><table class="tbl">
+    <thead><tr><th>Strategie</th><th>Signale</th><th>Closed</th><th>Wins</th><th>Win-Rate</th><th>Ø Score</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div></div>`;
+}
+
+function _renderBTRegelTab(history) {
+  const hist = history || [];
+  if (!hist.length) return `<div class="card"><div class="card-body" style="text-align:center;color:var(--text-tertiary);padding:40px">Keine Daten</div></div>`;
+  const closed = hist.filter(h => h.outcome === 'WIN' || h.outcome === 'LOSS');
+  // Group by symbol
+  const bySym = {};
+  closed.forEach(h => {
+    const s = h.symbol || 'Unknown';
+    if (!bySym[s]) bySym[s] = { symbol: s, wins: 0, losses: 0 };
+    if (h.outcome === 'WIN') bySym[s].wins++;
+    else bySym[s].losses++;
+  });
+  const symRows = Object.values(bySym)
+    .sort((a,b) => (b.wins+b.losses) - (a.wins+a.losses))
+    .slice(0, 20)
+    .map(r => {
+      const total = r.wins + r.losses;
+      const wr = total > 0 ? (r.wins / total * 100) : 0;
+      const pct = wr.toFixed(1);
+      const barColor = wr >= 60 ? 'var(--win)' : wr >= 40 ? 'var(--wait)' : 'var(--loss)';
+      return `<tr>
+        <td class="mono" style="font-weight:600">${_esc(r.symbol)}</td>
+        <td class="mono">${total}</td>
+        <td class="mono win">${r.wins}</td>
+        <td class="mono loss">${r.losses}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="flex:1;height:6px;background:var(--bg-3);border-radius:3px;overflow:hidden">
+              <div style="height:100%;width:${Math.min(100,wr)}%;background:${barColor};border-radius:3px"></div>
+            </div>
+            <span style="font-size:12px;font-weight:700;color:${barColor};width:42px;text-align:right">${pct}%</span>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+
+  // By direction
+  const long = closed.filter(h => h.direction === 'LONG');
+  const short = closed.filter(h => h.direction === 'SHORT');
+  const longWR = long.length ? (long.filter(h=>h.outcome==='WIN').length/long.length*100).toFixed(1) : '—';
+  const shortWR = short.length ? (short.filter(h=>h.outcome==='WIN').length/short.length*100).toFixed(1) : '—';
+  return `
+<div class="grid grid-2" style="margin-bottom:var(--gap)">
+  <div class="card">
+    <div class="card-head"><h3>LONG-Trades</h3><span class="badge badge-long">LONG</span></div>
+    <div class="card-body" style="padding:20px;text-align:center">
+      <div style="font-size:32px;font-weight:700;font-family:var(--font-mono);color:var(--win)">${longWR}%</div>
+      <div style="font-size:12px;color:var(--text-tertiary);margin-top:4px">${long.length} Trades</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head"><h3>SHORT-Trades</h3><span class="badge badge-short">SHORT</span></div>
+    <div class="card-body" style="padding:20px;text-align:center">
+      <div style="font-size:32px;font-weight:700;font-family:var(--font-mono);color:var(--loss)">${shortWR}%</div>
+      <div style="font-size:12px;color:var(--text-tertiary);margin-top:4px">${short.length} Trades</div>
+    </div>
+  </div>
+</div>
+<div class="card">
+  <div class="card-head"><span class="ico">${_svgIcon('stats',14)}</span><h3>Win-Rate nach Symbol</h3></div>
+  <div style="overflow-x:auto"><table class="tbl">
+    <thead><tr><th>Symbol</th><th>Trades</th><th>Win</th><th>Loss</th><th>Win-Rate</th></tr></thead>
+    <tbody>${symRows}</tbody>
+  </table></div>
+</div>`;
+}
+
+function _renderBTLossTab(history) {
+  const hist = history || [];
+  const losses = hist.filter(h => h.outcome === 'LOSS');
+  if (!losses.length) return `<div class="card"><div class="card-body" style="text-align:center;color:var(--text-tertiary);padding:40px">Keine Loss-Trades vorhanden</div></div>`;
+  const scoreGroups = { '<60': [], '60-69': [], '70-79': [], '80+': [] };
+  losses.forEach(l => {
+    const sc = l.ai_score || 0;
+    if (sc < 60) scoreGroups['<60'].push(l);
+    else if (sc < 70) scoreGroups['60-69'].push(l);
+    else if (sc < 80) scoreGroups['70-79'].push(l);
+    else scoreGroups['80+'].push(l);
+  });
+  const groupCards = Object.entries(scoreGroups).map(([range, items]) => {
+    if (!items.length) return '';
+    return `<div class="stat"><div class="label">Score ${range}</div><div class="value" style="font-size:22px;color:var(--loss)">${items.length}</div><div class="sub muted">Losses</div></div>`;
+  }).join('');
+  const rows = losses.slice(0, 50).map(l => {
+    const dc = l.direction === 'LONG' ? 'badge-long' : 'badge-short';
+    return `<tr>
+      <td class="mono" style="font-weight:600">${_esc(l.symbol||'')}</td>
+      <td><span class="badge ${dc}">${_esc(l.direction||'')}</span></td>
+      <td class="mono">${l.ai_score||'—'}</td>
+      <td class="mono">${_fmtNum(l.entry_price,4)}</td>
+      <td class="mono" style="color:var(--loss)">${_fmtNum(l.sl_price,4)}</td>
+      <td style="font-size:11px;color:var(--text-tertiary)">${_fmtDate(l.created_at)}</td>
+    </tr>`;
+  }).join('');
+  return `
+<div class="grid grid-4" style="margin-bottom:var(--gap)">${groupCards}</div>
+<div class="card">
+  <div class="card-head"><span class="ico">${_svgIcon('chart',14)}</span><h3>Loss-Trades (letzte 50)</h3></div>
+  <div style="overflow-x:auto"><table class="tbl">
+    <thead><tr><th>Symbol</th><th>Richtung</th><th>Score</th><th>Einstieg</th><th>SL</th><th>Zeit</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>
+</div>`;
+}
+
+function _renderBTBiasTab(biasData) {
+  const b = biasData || {};
+  const card = (title, data, color) => {
+    const d = data || {};
+    return `<div class="stat">
+      <div class="label">${title}</div>
+      <div class="value" style="font-size:22px;color:${color || 'var(--text-primary)'}">${_fmtPct(d.winRate)}</div>
+      <div class="sub muted">${d.wins||0}W / ${d.losses||0}L (${d.total||0})</div>
+    </div>`;
+  };
+  return `
+<div class="grid grid-3" style="margin-bottom:var(--gap)">
+  ${card('Offizielle Trades', b.official, 'var(--blue-400)')}
+  ${card('Alle Trades', b.all, 'var(--text-primary)')}
+  ${card('Vor Morgenroutine', b.beforeRoutine, 'var(--wait)')}
+</div>
+<div class="card">
+  <div class="card-body">
+    <p style="font-size:13px;color:var(--text-tertiary);line-height:1.6">
+      Bias-Statistiken zeigen, wie gut Trades mit dem Tages-Bias übereinstimmen.
+      <b>Offizielle Trades</b> sind jene, die als <code>counts_for_strategy=1</code> markiert sind.
+      <b>Vor Morgenroutine</b> sind Signale die vor der täglichen Analyse eingegangen sind.
+    </p>
+  </div>
+</div>`;
+}
+
+function _renderBTSuggestionsTab(suggestions) {
+  const suggs = suggestions || [];
+  if (!suggs.length) return `<div class="card"><div class="card-body" style="text-align:center;color:var(--text-tertiary);padding:40px">Keine Vorschläge verfügbar</div></div>`;
+  const priorityColor = p => p === 'high' ? 'var(--loss)' : p === 'medium' ? 'var(--wait)' : 'var(--text-tertiary)';
+  const priorityBg    = p => p === 'high' ? 'rgba(240,79,79,0.08)' : p === 'medium' ? 'rgba(245,158,11,0.08)' : 'var(--bg-2)';
+  const cards = suggs.map(s => `
+  <div style="border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin-bottom:10px;background:${priorityBg(s.priority)};${s.priority==='high'?'border-left:3px solid var(--loss)':''}">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <div style="font-weight:700;font-size:14px;flex:1">${_esc(s.title||'')}</div>
+      <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;background:var(--bg-0);color:${priorityColor(s.priority)};text-transform:uppercase;letter-spacing:.06em">${_esc(s.priority||'')}</span>
+    </div>
+    <div style="font-size:13px;color:var(--text-secondary);line-height:1.5">${_esc(s.message||'')}</div>
+    ${s.action ? `<div style="margin-top:8px;font-size:12px;font-weight:600;color:var(--blue-400)">→ ${_esc(s.action)}</div>` : ''}
+  </div>`).join('');
+  return `<div>${cards}</div>`;
+}
+
+function _getBTTabContent(tab, data) {
+  if (tab === 'practice')     return _renderBTPracticeTab(data.practiceTrades, data.practiceStats);
+  if (tab === 'history')      return _renderBTHistoryTab(data.history, data.stats);
+  if (tab === 'strategy')     return _renderBTStrategyTab(data.strategies);
+  if (tab === 'compare')      return _renderBTCompareTab(data.strategies, data.history);
+  if (tab === 'regelanalyse') return _renderBTRegelTab(data.history);
+  if (tab === 'loss')         return _renderBTLossTab(data.history);
+  if (tab === 'biasstats')    return _renderBTBiasTab(data.biasData);
+  if (tab === 'suggestions')  return _renderBTSuggestionsTab(data.suggestions);
+  return _renderBTPracticeTab(data.practiceTrades, data.practiceStats);
+}
+
+function _renderBacktestContent(tab, data, session) {
+  const isTrader  = session?.role === 'admin' || session?.role === 'trader';
+  const tabBar    = _renderBTTabBar(tab, isTrader);
+  const tabContent = _getBTTabContent(tab, data);
+  return `
+<div class="content page-enter">
+  <div class="page-header">
+    <h2>Backtesting &amp; Strategie-Labor</h2>
+    <div class="subtitle">Practice Trades · Strategie-Versionen · Loss-Analyse · Vorschläge</div>
+  </div>
+  <div id="bt-section">
+    ${tabBar}
+    <div id="backtest-content">${tabContent}</div>
+  </div>
+</div>`;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // MAIN WORKER
 // ═══════════════════════════════════════════════════════════════
@@ -3537,6 +3885,81 @@ export default {
             return new Response(_renderNewsList(events, filter), { headers: htmlHdrs });
           }
           content = _renderNewsContent({ events, filter });
+        } else if (url.pathname === '/backtesting') {
+          const tab = url.searchParams.get('tab') || 'practice';
+          const isTrader = pageSess.role === 'admin' || pageSess.role === 'trader';
+          let data = {};
+          if (tab === 'practice') {
+            const [pt, ps] = await Promise.all([getPracticeTrades(env), getPracticeTradeStats(env)]);
+            data = { practiceTrades: pt, practiceStats: ps };
+          } else if (tab === 'history') {
+            const [hist, stats] = await Promise.all([getHistory(env, 500), getStats(env)]);
+            data = { history: hist, stats };
+          } else if (tab === 'strategy' && isTrader) {
+            await ensureTables(env);
+            const rows = await env.DB.prepare(`SELECT * FROM strategies ORDER BY is_default DESC, created_at DESC`).all();
+            data = { strategies: (rows.results || []).map(s => ({ ...s, config: s.config_json ? JSON.parse(s.config_json) : {} })) };
+          } else if (tab === 'compare' && isTrader) {
+            const [rows, hist] = await Promise.all([
+              env.DB.prepare(`SELECT * FROM strategies ORDER BY is_default DESC, created_at DESC`).all(),
+              getHistory(env, 500)
+            ]);
+            data = { strategies: rows.results || [], history: hist };
+          } else if (tab === 'regelanalyse' && isTrader) {
+            data = { history: await getHistory(env, 500) };
+          } else if (tab === 'loss') {
+            data = { history: await getHistory(env, 200) };
+          } else if (tab === 'biasstats') {
+            const all = await env.DB.prepare(`SELECT outcome, daily_bias, before_morning_routine, counts_for_strategy FROM signals WHERE outcome IN ('WIN','LOSS')`).all();
+            const bRows = all.results || [];
+            const calc = f => {
+              const s = bRows.filter(f);
+              const w = s.filter(r => r.outcome === 'WIN').length;
+              const l = s.filter(r => r.outcome === 'LOSS').length;
+              return { total: s.length, wins: w, losses: l, winRate: (w + l) > 0 ? parseFloat((w / (w + l) * 100).toFixed(1)) : 0 };
+            };
+            data = {
+              biasData: {
+                official:      calc(r => r.counts_for_strategy === 1),
+                all:           calc(() => true),
+                beforeRoutine: calc(r => r.before_morning_routine === 1),
+                noTradeDay:    calc(r => r.daily_bias === 'KEIN_TRADE')
+              }
+            };
+          } else if (tab === 'suggestions') {
+            const suggestions = [];
+            const [lowScoreLosses, lowScoreWins] = await Promise.all([
+              env.DB.prepare(`SELECT COUNT(*) as c FROM signals WHERE outcome='LOSS' AND ai_score < 75`).first(),
+              env.DB.prepare(`SELECT COUNT(*) as c FROM signals WHERE outcome='WIN'  AND ai_score < 75`).first()
+            ]);
+            if ((lowScoreLosses?.c || 0) > (lowScoreWins?.c || 0) && (lowScoreLosses?.c || 0) > 2) {
+              suggestions.push({ type: 'score_threshold', priority: 'high', title: 'Min. Score erhöhen', message: `${lowScoreLosses.c} Losses hatten Score < 75. Erwäge min_trade_score auf 80+ zu erhöhen.`, action: 'Schwellenwert anpassen' });
+            }
+            const symRows = await env.DB.prepare(`
+              SELECT symbol,
+                SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses
+              FROM signals WHERE outcome IN ('WIN','LOSS')
+              GROUP BY symbol HAVING (wins+losses) >= 3
+              ORDER BY (wins*1.0/(wins+losses)) ASC LIMIT 3`).all();
+            for (const sym of (symRows.results || [])) {
+              const wr = (sym.wins + sym.losses) > 0 ? (sym.wins / (sym.wins + sym.losses)) * 100 : 0;
+              if (wr < 35) suggestions.push({ type: 'symbol_filter', priority: 'medium', title: `${sym.symbol} performat schlecht`, message: `${sym.symbol}: ${wr.toFixed(0)}% Win-Rate bei ${sym.wins + sym.losses} Trades`, action: 'Symbol-Filter prüfen' });
+            }
+            const lrRows = await env.DB.prepare(`SELECT reason, COUNT(*) as cnt FROM signal_loss_reasons GROUP BY reason ORDER BY cnt DESC LIMIT 5`).all();
+            for (const r of (lrRows.results || [])) {
+              suggestions.push({ type: 'rule_weight', priority: 'low', title: `Häufiger Loss-Grund: ${r.reason}`, message: `"${r.reason}" wurde ${r.cnt}× als Verlustgrund markiert`, action: 'Regel-Gewicht anpassen' });
+            }
+            if (suggestions.length === 0) suggestions.push({ type: 'info', priority: 'low', title: 'Zu wenig Daten', message: 'Für aussagekräftige Vorschläge werden mehr abgeschlossene Trades benötigt.', action: null });
+            data = { suggestions };
+          }
+          if (isHtmx && htmxTarget === 'bt-section') {
+            return new Response(
+              `${_renderBTTabBar(tab, isTrader)}<div id="backtest-content">${_getBTTabContent(tab, data)}</div>`,
+              { headers: htmlHdrs }
+            );
+          }
+          content = _renderBacktestContent(tab, data, pageSess);
         } else {
           content = _renderPlaceholderPage(activePage);
         }
