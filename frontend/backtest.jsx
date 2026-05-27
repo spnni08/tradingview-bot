@@ -226,6 +226,34 @@ function LossReasonModal({ signalId, sessionId, onClose, onSaved }) {
 function SignalDetailModal({ signal, onClose, onMarkLoss }) {
   if (!signal) return null;
   const pnl = calculatePnL(signal);
+
+  const sc         = signal.ai_score || 0;
+  const scoreColor = sc >= 80 ? 'var(--win)' : sc >= 65 ? 'var(--wait)' : 'var(--loss)';
+  const scoreLabel = sc >= 90 ? 'PREMIUM' : sc >= 75 ? 'GUT' : sc >= 60 ? 'OKAY' : sc >= 45 ? 'SCHWACH' : 'SKIP';
+  const rr         = signal.risk_reward;
+  const rrStr      = rr ? '1:' + parseFloat(rr).toFixed(1) : '–';
+  const fmt        = (v) => { const n = Number(v); return Number.isFinite(n) ? '$' + n.toFixed(2) : '–'; };
+
+  const safeParse      = (s, def) => { try { return JSON.parse(s) ?? def; } catch (_) { return def; } };
+  const matchedRules   = safeParse(signal.matched_rules,  []);
+  const failedRules    = safeParse(signal.failed_rules,   []);
+  const unknownRules   = safeParse(signal.unknown_rules,  []);
+  const breakdownEntries = Object.entries(safeParse(signal.score_breakdown, {})).filter(([, v]) => v !== 0);
+
+  const RULE_LABELS = {
+    rsi: 'RSI', ema: 'EMA', trend: 'Trend', wave_bias: 'Wave Bias',
+    support_resistance: 'S&R Zone', timeframe: 'Timeframe',
+    confidence: 'Konfidenz', session_filter: 'Session',
+  };
+
+  const biasStatus = signal.daily_bias
+    ? (signal.bias_match === 'conform'
+        ? { color: 'var(--win)',          icon: '✓', label: `Bias konform (${signal.daily_bias})` }
+        : signal.bias_match === 'against'
+        ? { color: 'var(--loss)',         icon: '✗', label: `Gegen Bias (${signal.daily_bias})` }
+        : { color: 'var(--text-tertiary)', icon: '–', label: `Bias: ${signal.daily_bias}` })
+    : { color: 'var(--text-quaternary)', icon: '–', label: 'Kein Tagesbias' };
+
   const fields = [
     ['Symbol',      signal.symbol],
     ['Richtung',    signal.direction],
