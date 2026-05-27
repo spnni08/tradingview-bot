@@ -2793,6 +2793,7 @@ function _svgIcon(name, size = 16) {
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.7l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.7-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.7.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.7 1.6 1.6 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.7.3h.1a1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.7-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.7v.1a1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>',
     logout:   '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
     bolt:     '<path d="m13 2-9 12h7l-1 8 9-12h-7z"/>',
+    target:   '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>',
     cpu:      '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/>',
     chevron:  '<path d="m6 9 6 6 6-6"/>',
     moon:     '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
@@ -3141,7 +3142,7 @@ function _renderDashboardContent(data) {
 }
 
 function _renderPlaceholderPage(pageName) {
-  const labels = { backtesting: 'Backtesting', journal: 'Journal', news: 'News & Radar', statistiken: 'Statistiken', einstellungen: 'Einstellungen' };
+  const labels = { backtesting: 'Backtesting', statistiken: 'Statistiken', einstellungen: 'Einstellungen' };
   const label = labels[pageName] || pageName;
   return `
 <div class="content page-enter">
@@ -3156,6 +3157,227 @@ function _renderPlaceholderPage(pageName) {
       <div style="font-size:13px">Diese Seite wird in der nächsten Migrationsphase umgesetzt.</div>
     </div>
   </div>
+</div>`;
+}
+
+// ── Journal helpers ─────────────────────────────────────────────
+
+function _renderJournalTable(signals, outcome) {
+  if (!signals || signals.length === 0) {
+    return `<div id="journal-table" style="text-align:center;padding:40px;color:var(--text-tertiary);font-size:13px">Keine Trades für diesen Filter</div>`;
+  }
+  const rows = signals.map(s => {
+    const dirClass = s.direction === 'LONG' ? 'badge-long' : 'badge-short';
+    const oc       = s.outcome === 'WIN' ? 'win' : s.outcome === 'LOSS' ? 'loss' : s.outcome === 'BE' ? '' : 'muted';
+    const pnl      = s.exit_price && s.entry_price
+      ? (s.direction === 'LONG'
+          ? ((s.exit_price - s.entry_price) / s.entry_price * 100)
+          : ((s.entry_price - s.exit_price) / s.entry_price * 100))
+      : null;
+    const pnlStr   = pnl != null ? `<span style="${pnl >= 0 ? 'color:var(--win)' : 'color:var(--loss)'}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%</span>` : '—';
+    return `<tr>
+      <td style="font-family:var(--font-mono);font-weight:600">${_esc(s.symbol || '')}</td>
+      <td><span class="badge ${dirClass}">${_esc(s.direction || '')}</span></td>
+      <td class="mono">${s.ai_score || '—'}</td>
+      <td class="mono">${_fmtNum(s.entry_price, 4)}</td>
+      <td class="mono" style="color:var(--win)">${_fmtNum(s.tp_price, 4)}</td>
+      <td class="mono" style="color:var(--loss)">${_fmtNum(s.sl_price, 4)}</td>
+      <td>${pnlStr}</td>
+      <td class="${oc}" style="font-weight:600">${_esc(s.outcome || 'OPEN')}</td>
+      <td style="font-size:11px;color:var(--text-tertiary)">${_fmtDate(s.created_at)}</td>
+    </tr>`;
+  }).join('');
+  return `<div id="journal-table" style="overflow-x:auto">
+    <table class="tbl">
+      <thead><tr>
+        <th>Symbol</th><th>Richtung</th><th>Score</th>
+        <th>Einstieg</th><th>TP</th><th>SL</th>
+        <th>P&amp;L %</th><th>Ergebnis</th><th>Zeit</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function _renderJournalContent({ history, practiceData, outcome }) {
+  const outcomes = ['all', 'OPEN', 'WIN', 'LOSS', 'BE'];
+  const outcomeLabels = { all: 'Alle', OPEN: 'Offen', WIN: 'Win', LOSS: 'Loss', BE: 'Break Even' };
+  const filterBar = outcomes.map(o => {
+    const active = o === outcome;
+    const bg = active ? (o === 'WIN' ? 'rgba(16,185,129,0.15)' : o === 'LOSS' ? 'rgba(240,79,79,0.15)' : 'rgba(59,130,246,0.15)') : 'var(--bg-3)';
+    const color = active ? (o === 'WIN' ? 'var(--win)' : o === 'LOSS' ? 'var(--loss)' : o === 'OPEN' ? 'var(--blue-400)' : 'var(--text-primary)') : 'var(--text-secondary)';
+    return `<button
+      hx-get="/journal?outcome=${o}"
+      hx-target="#journal-table"
+      hx-swap="outerHTML"
+      style="padding:6px 14px;border-radius:20px;border:1px solid var(--border);cursor:pointer;font-size:12px;font-weight:600;font-family:var(--font-main);background:${bg};color:${color};transition:all .12s">
+      ${outcomeLabels[o]}
+    </button>`;
+  }).join('');
+
+  // Practice trade stats
+  const pt = practiceData || [];
+  const ptOpen   = pt.filter(t => t.status === 'OPEN').length;
+  const ptWins   = pt.filter(t => t.status === 'WIN').length;
+  const ptLosses = pt.filter(t => t.status === 'LOSS').length;
+  const ptClosed = ptWins + ptLosses;
+  const ptWR     = ptClosed > 0 ? (ptWins / ptClosed * 100).toFixed(1) : '—';
+
+  const ptRows = pt.slice(0, 20).map(t => {
+    const dc = t.direction === 'LONG' ? 'badge-long' : 'badge-short';
+    const sc = t.status === 'WIN' ? 'win' : t.status === 'LOSS' ? 'loss' : 'muted';
+    const rp = t.result_pct != null ? `<span style="${t.result_pct >= 0 ? 'color:var(--win)' : 'color:var(--loss)'}">${t.result_pct >= 0 ? '+' : ''}${Number(t.result_pct).toFixed(2)}%</span>` : '—';
+    return `<tr>
+      <td class="mono" style="font-weight:600">${_esc(t.symbol || '')}</td>
+      <td><span class="badge ${dc}">${_esc(t.direction || '')}</span></td>
+      <td class="mono">${_fmtNum(t.entry_price, 4)}</td>
+      <td class="mono">${t.exit_price ? _fmtNum(t.exit_price, 4) : '—'}</td>
+      <td>${rp}</td>
+      <td class="${sc}" style="font-weight:600">${_esc(t.status || 'OPEN')}</td>
+      <td style="font-size:11px;color:var(--text-tertiary)">${_fmtDate(t.created_at)}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+<div class="content page-enter">
+  <div class="page-header">
+    <h2>Journal</h2>
+    <div class="subtitle">Trade-Historie &amp; Practice Trades — ${history.length} Signale</div>
+  </div>
+
+  <div class="card" style="margin-bottom:var(--gap)">
+    <div class="card-head">
+      <span class="ico">${_svgIcon('chart', 14)}</span>
+      <h3>Signal-Historie</h3>
+      <div class="actions" style="gap:4px">${filterBar}</div>
+    </div>
+    ${_renderJournalTable(history, outcome)}
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <span class="ico">${_svgIcon('target', 14)}</span>
+      <h3>Practice Trades</h3>
+      <div style="display:flex;gap:12px;font-size:12px;color:var(--text-tertiary)">
+        <span>${ptOpen} offen</span>
+        <span style="color:var(--win)">${ptWins}W</span>
+        <span style="color:var(--loss)">${ptLosses}L</span>
+        <span>WR ${ptWR}%</span>
+      </div>
+    </div>
+    ${pt.length === 0
+      ? `<div class="card-body" style="text-align:center;color:var(--text-tertiary);padding:40px;font-size:13px">Keine Practice Trades vorhanden</div>`
+      : `<div style="overflow-x:auto"><table class="tbl">
+          <thead><tr><th>Symbol</th><th>Richtung</th><th>Einstieg</th><th>Ausstieg</th><th>P&amp;L %</th><th>Status</th><th>Zeit</th></tr></thead>
+          <tbody>${ptRows}</tbody>
+        </table></div>`}
+  </div>
+</div>`;
+}
+
+// ── News helpers ────────────────────────────────────────────────
+
+const _NEWS_SCOPE_LABELS = {
+  MACRO: 'Makro', REGULATION: 'Regulierung', EXCHANGE: 'Exchange',
+  COIN_SPECIFIC: 'Coin', GLOBAL: 'Global',
+};
+const _NEWS_SCOPE_COLORS = {
+  MACRO: 'var(--wait)', REGULATION: '#a78bfa', EXCHANGE: 'var(--blue-400)',
+  COIN_SPECIFIC: 'var(--win)', GLOBAL: 'var(--text-secondary)',
+};
+const _NEWS_IMPACT_COLORS = { HIGH: 'var(--loss)', MEDIUM: 'var(--wait)', LOW: 'var(--text-tertiary)' };
+
+function _applyNewsFilter(events, filter) {
+  if (!filter || filter === 'all') return events;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  if (filter === 'today')  return events.filter(e => e.event_time && e.event_time >= today.getTime());
+  if (filter === 'HIGH')   return events.filter(e => e.impact === 'HIGH');
+  if (filter === 'MACRO')  return events.filter(e => e.affected_scope === 'MACRO');
+  if (filter === 'REGULATION') return events.filter(e => e.affected_scope === 'REGULATION');
+  if (filter === 'EXCHANGE')   return events.filter(e => e.affected_scope === 'EXCHANGE');
+  // Symbol filters
+  return events.filter(e => {
+    try { return (JSON.parse(e.affected_symbols || '[]')).includes(filter + 'USDT') || e.title?.includes(filter); }
+    catch { return e.title?.includes(filter); }
+  });
+}
+
+function _renderNewsList(events, filter) {
+  const filtered = _applyNewsFilter(events, filter);
+  if (!filtered.length) {
+    return `<div id="news-list" style="text-align:center;padding:40px;color:var(--text-tertiary);font-size:13px">Keine News für diesen Filter</div>`;
+  }
+  const cards = filtered.map(e => {
+    const impactColor = _NEWS_IMPACT_COLORS[e.impact] || _NEWS_IMPACT_COLORS.LOW;
+    const scopeLabel  = _NEWS_SCOPE_LABELS[e.affected_scope] || 'Global';
+    const scopeColor  = _NEWS_SCOPE_COLORS[e.affected_scope] || 'var(--text-secondary)';
+    const dateStr     = e.event_time ? _fmtDate(e.event_time) : '—';
+    const href        = e.source_url ? ` href="${_esc(e.source_url)}" target="_blank" rel="noopener"` : '';
+    return `<a${href} style="display:block;text-decoration:none;color:inherit">
+      <div class="card" style="margin-bottom:10px;transition:box-shadow .15s${e.impact === 'HIGH' ? ';border-left:3px solid var(--loss)' : ''}">
+        <div class="card-body" style="padding:16px 20px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+            ${e.impact ? `<span style="font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;background:var(--bg-0);border:1px solid ${impactColor};color:${impactColor}">${_esc(e.impact)}</span>` : ''}
+            <span style="font-size:11px;font-weight:600;padding:2px 7px;border-radius:5px;background:var(--bg-0);border:1px solid var(--border);color:${scopeColor}">${_esc(scopeLabel)}</span>
+            ${e.category ? `<span class="badge badge-tag">${_esc(e.category)}</span>` : ''}
+          </div>
+          <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:6px;line-height:1.4">${_esc(e.title || '')}</div>
+          ${e.summary ? `<div style="font-size:12px;color:var(--text-secondary);line-height:1.5;margin-bottom:8px">${_esc(e.summary)}</div>` : ''}
+          <div style="display:flex;gap:16px;font-size:11px;color:var(--text-quaternary)">
+            ${e.source ? `<span>📡 ${_esc(e.source)}</span>` : ''}
+            <span>🕒 ${dateStr}</span>
+            ${e.source_url ? `<span style="color:var(--blue-400)">↗ Artikel lesen</span>` : ''}
+          </div>
+        </div>
+      </div>
+    </a>`;
+  }).join('');
+  return `<div id="news-list">${cards}</div>`;
+}
+
+function _renderNewsContent({ events, filter }) {
+  const filters = [
+    { id: 'all',         label: 'Alle' },
+    { id: 'HIGH',        label: 'High Impact' },
+    { id: 'MACRO',       label: 'Makro' },
+    { id: 'REGULATION',  label: 'Regulierung' },
+    { id: 'EXCHANGE',    label: 'Exchanges' },
+    { id: 'BTC',         label: 'BTC' },
+    { id: 'ETH',         label: 'ETH' },
+    { id: 'SOL',         label: 'SOL' },
+    { id: 'today',       label: 'Heute' },
+  ];
+  const filterBar = filters.map(f => {
+    const active = f.id === filter;
+    return `<button
+      hx-get="/news?filter=${f.id}"
+      hx-target="#news-list"
+      hx-swap="outerHTML"
+      style="padding:5px 13px;border-radius:20px;border:1px solid var(--border);cursor:pointer;font-size:12px;font-weight:600;font-family:var(--font-main);background:${active ? 'rgba(59,130,246,0.15)' : 'var(--bg-3)'};color:${active ? 'var(--blue-400)' : 'var(--text-secondary)'};transition:all .12s">
+      ${f.label}
+    </button>`;
+  }).join('');
+
+  const highCount = events.filter(e => e.impact === 'HIGH').length;
+  const statusBadge = highCount > 0
+    ? `<span style="font-size:12px;font-weight:600;color:var(--loss);padding:3px 10px;background:rgba(240,79,79,0.1);border:1px solid rgba(240,79,79,0.25);border-radius:20px">${highCount} High Impact</span>`
+    : `<span class="status-pill"><span class="status-dot status-pulse"></span>Kein High Impact</span>`;
+
+  return `
+<div class="content page-enter">
+  <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div>
+      <h2>News &amp; Market Radar</h2>
+      <div class="subtitle">${events.length} Events geladen</div>
+    </div>
+    ${statusBadge}
+  </div>
+
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:var(--gap);padding:4px 0">
+    ${filterBar}
+  </div>
+
+  ${_renderNewsList(events, filter)}
 </div>`;
 }
 
@@ -3279,6 +3501,7 @@ export default {
         }
         const activePage = PAGE_ROUTES[url.pathname];
         let content;
+        const htmxTarget = request.headers.get('HX-Target') || '';
         if (url.pathname === '/dashboard') {
           const [dStats, dSignals, dBest, dBias, dTodayPnL] = await Promise.all([
             getStats(env), getHistory(env, 10), getBestSignal(env), getMarketBias(env), getTodayPnL(env)
@@ -3296,6 +3519,24 @@ export default {
             },
             bestSignal: dBest, latestSignals: dSignals, marketBias: dBias, user: pageSess
           });
+        } else if (url.pathname === '/journal') {
+          const outcome = url.searchParams.get('outcome') || 'all';
+          const [jHistory, jPractice] = await Promise.all([
+            getHistory(env, 200), getPracticeTrades(env)
+          ]);
+          const filtered = outcome === 'all' ? jHistory : jHistory.filter(s => s.outcome === outcome);
+          if (isHtmx && htmxTarget === 'journal-table') {
+            return new Response(_renderJournalTable(filtered, outcome), { headers: htmlHdrs });
+          }
+          content = _renderJournalContent({ history: filtered, practiceData: jPractice, outcome });
+        } else if (url.pathname === '/news') {
+          const filter = url.searchParams.get('filter') || 'all';
+          const radarData = await getMarketRadar(env, pageSess);
+          const events = radarData.events || [];
+          if (isHtmx && htmxTarget === 'news-list') {
+            return new Response(_renderNewsList(events, filter), { headers: htmlHdrs });
+          }
+          content = _renderNewsContent({ events, filter });
         } else {
           content = _renderPlaceholderPage(activePage);
         }
