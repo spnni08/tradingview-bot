@@ -383,6 +383,11 @@ function calcRR(entry, tp, sl, isLong) {
 
 // ─── Telegram formatting ──────────────────────────────────────
 
+function escapeHtml(text) {
+  if (text == null) return '';
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function formatSignalForTelegram(signal) {
   const emoji = signal.direction === 'LONG' ? '🟢' : '🔴';
   const sc    = signal.ai_score || 0;
@@ -393,12 +398,12 @@ function formatSignalForTelegram(signal) {
   const fmt     = (v) => v != null && !isNaN(v) ? `$${parseFloat(v).toFixed(2)}` : 'unbekannt';
 
   const biasLine = signal.daily_bias
-    ? `\n📐 Tagesbias: ${signal.daily_bias}${signal.bias_match ? ` · ${signal.bias_match}` : ''}` : '';
+    ? `\n📐 Tagesbias: ${escapeHtml(signal.daily_bias)}${signal.bias_match ? ` · ${escapeHtml(signal.bias_match)}` : ''}` : '';
 
   const matched = tryParseJSON(signal.matched_rules) || [];
   const failed  = tryParseJSON(signal.failed_rules)  || [];
-  const matchedStr = matched.slice(0, 3).map(r => `✅ ${r}`).join('\n') || '–';
-  const failedStr  = failed.slice(0, 3).map(r => `❌ ${r}`).join('\n')  || '–';
+  const matchedStr = matched.slice(0, 3).map(r => `✅ ${escapeHtml(r)}`).join('\n') || '–';
+  const failedStr  = failed.slice(0, 3).map(r => `❌ ${escapeHtml(r)}`).join('\n')  || '–';
 
   const disclaimer = '\n\n⚠️ <i>Hinweis: Keine Finanzberatung. Signale dienen nur zu Analyse- und Backtesting-Zwecken. Trading birgt Risiko. Keine Garantie für Gewinne.</i>';
 
@@ -416,7 +421,7 @@ ${matchedStr}
 ❌ <b>Fehlt / Warnung:</b>
 ${failedStr}
 
-📋 ${signal.ai_reason || 'Signal von TradingView'}${disclaimer}`.trim();
+📋 ${escapeHtml(signal.ai_reason) || 'Signal von TradingView'}${disclaimer}`.trim();
 }
 
 function formatPriorityAlert(signal) {
@@ -437,7 +442,7 @@ ${stars} Score: <b>${sc}/100</b> · ${getSignalQuality(sc)}
 🛑 SL:    <b>${fmt(signal.ai_sl)}</b>
 ⚖️ R:R:   <b>${rrStr}</b>
 ━━━━━━━━━━━━━━━━━━━━━
-📋 ${signal.ai_reason || ''}
+📋 ${escapeHtml(signal.ai_reason) || ''}
 
 ⚠️ <i>Keine Finanzberatung. Eigenverantwortlich prüfen.</i>`.trim();
 }
