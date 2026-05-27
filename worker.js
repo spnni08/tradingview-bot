@@ -2797,6 +2797,8 @@ function _svgIcon(name, size = 16) {
     cpu:      '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/>',
     chevron:  '<path d="m6 9 6 6 6-6"/>',
     moon:     '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
+    signal:   '<path d="M2 20h.01M7 20v-4M12 20v-8M17 20V8M22 4 12 14l-4-4-6 6"/>',
+    clock:    '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
   };
   const d = paths[name] || '<circle cx="12" cy="12" r="10"/>';
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
@@ -3729,6 +3731,218 @@ function _renderBacktestContent(tab, data, session) {
 </div>`;
 }
 
+// ─── Phase 4: Statistiken ───────────────────────────────────────
+
+function _fmtDuration(ms) {
+  if (!ms || ms === 0) return 'N/A';
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function _renderPnLChart(history) {
+  const closed = history
+    .filter(t => (t.outcome === 'WIN' || t.outcome === 'LOSS') && t.ai_entry && t.exit_price)
+    .sort((a, b) => a.created_at - b.created_at);
+  if (closed.length < 2) return '';
+  let cum = 0;
+  const points = closed.map(t => {
+    const diff = t.exit_price - t.ai_entry;
+    cum += t.direction === 'LONG' ? diff : -diff;
+    return cum;
+  });
+  const W = 100, H = 60;
+  const min = Math.min(...points, 0);
+  const max = Math.max(...points, 0);
+  const range = max - min || 1;
+  const toY = v => H - ((v - min) / range) * H;
+  const toX = i => (i / (points.length - 1)) * W;
+  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${toX(i).toFixed(1)} ${toY(p).toFixed(1)}`).join(' ');
+  const zero  = toY(0);
+  const fill  = `${pathD} L ${toX(points.length - 1).toFixed(1)} ${zero} L 0 ${zero} Z`;
+  const last  = points[points.length - 1];
+  const color = last >= 0 ? 'var(--win)' : 'var(--loss)';
+  const badge = `<span class="badge ${last >= 0 ? 'badge-win' : 'badge-loss'}">${last >= 0 ? '+' : ''}$${_fmtNum(last)}</span>`;
+  return `
+<div class="card">
+  <div class="card-head">
+    ${_svgIcon('chart', 16)}<h3>Kumulativer PnL (Dollar)</h3>
+    <div class="actions">${badge}</div>
+  </div>
+  <div class="card-body" style="padding:12px 20px 16px">
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:90px" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="statPnlGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${color}" stop-opacity="0.3"/>
+          <stop offset="100%" stop-color="${color}" stop-opacity="0.02"/>
+        </linearGradient>
+      </defs>
+      ${zero > 0 && zero < H ? `<line x1="0" y1="${zero.toFixed(1)}" x2="${W}" y2="${zero.toFixed(1)}" stroke="var(--border)" stroke-width="0.5"/>` : ''}
+      <path d="${fill}" fill="url(#statPnlGrad)"/>
+      <path d="${pathD}" fill="none" stroke="${color}" stroke-width="1.2"/>
+    </svg>
+  </div>
+</div>`;
+}
+
+function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
+  const totalClosed = stats.wins + stats.losses;
+  const winRate = totalClosed > 0 ? (stats.wins / totalClosed * 100) : 0;
+
+  // Score distribution
+  const sg = { '90–100': 0, '75–89': 0, '60–74': 0, '<60': 0 };
+  history.forEach(t => {
+    const s = t.ai_score || 0;
+    if (s >= 90) sg['90–100']++;
+    else if (s >= 75) sg['75–89']++;
+    else if (s >= 60) sg['60–74']++;
+    else sg['<60']++;
+  });
+  const scoreBars = Object.entries(sg).map(([lbl, cnt]) => {
+    const pct = history.length > 0 ? (cnt / history.length * 100) : 0;
+    return `
+<div style="margin-bottom:14px">
+  <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
+    <span style="color:var(--text-secondary)">Score ${lbl}</span>
+    <span class="mono" style="color:var(--text-primary)">${cnt} (${pct.toFixed(0)}%)</span>
+  </div>
+  <div style="height:6px;background:var(--bg-3);border-radius:3px;overflow:hidden">
+    <div style="height:100%;width:${pct.toFixed(1)}%;background:var(--blue-500);border-radius:3px"></div>
+  </div>
+</div>`;
+  }).join('');
+
+  // Direction breakdown rows
+  const dirRows = (breakdown.directions || []).map(d => {
+    const closed = d.wins + d.losses;
+    const pct = closed > 0 ? (d.wins / closed * 100) : 0;
+    const cls = d.direction === 'LONG' ? 'badge-long' : 'badge-short';
+    return `
+<div style="margin-bottom:20px">
+  <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="badge ${cls}">${_esc(d.direction)}</span>
+      <span style="font-size:13px;color:var(--text-tertiary)">${d.total} Trades</span>
+    </div>
+    <div class="mono" style="font-size:13px;font-weight:600;color:${d.winRate >= 50 ? 'var(--win)' : 'var(--loss)'}">${d.winRate}%</div>
+  </div>
+  <div style="display:flex;gap:6px;margin-bottom:6px">
+    <span style="font-size:12px;color:var(--win)">${d.wins}W</span>
+    <span style="font-size:12px;color:var(--text-tertiary)">·</span>
+    <span style="font-size:12px;color:var(--loss)">${d.losses}L</span>
+    <span style="font-size:12px;color:var(--text-tertiary)">·</span>
+    <span style="font-size:12px;color:var(--text-tertiary)">${d.total - closed} offen</span>
+  </div>
+  <div style="height:8px;background:var(--bg-3);border-radius:4px;overflow:hidden;display:flex">
+    ${closed > 0 ? `<div style="height:100%;width:${pct.toFixed(1)}%;background:var(--win)"></div><div style="height:100%;width:${(100 - pct).toFixed(1)}%;background:var(--loss);opacity:0.6"></div>` : ''}
+  </div>
+</div>`;
+  }).join('') || `<p style="color:var(--text-tertiary);text-align:center;padding:20px 0">Noch keine Daten</p>`;
+
+  // Timeframe table rows
+  const tfRows = (breakdown.timeframes || []).map(tf =>
+    `<tr>
+      <td class="mono">${_esc(String(tf.timeframe))}m</td>
+      <td class="mono">${tf.total}</td>
+      <td class="mono win">${tf.wins}</td>
+      <td class="mono loss">${tf.losses}</td>
+      <td class="mono" style="color:${tf.winRate >= 50 ? 'var(--win)' : 'var(--loss)'}">${tf.winRate}%</td>
+    </tr>`
+  ).join('');
+
+  const tfSection = tfRows
+    ? `<table class="tbl"><thead><tr><th>TF</th><th>Trades</th><th>W</th><th>L</th><th>Win-%</th></tr></thead><tbody>${tfRows}</tbody></table>`
+    : `<div class="card-body" style="padding:40px;text-align:center"><p style="color:var(--text-tertiary)">Noch keine Trade-Daten</p></div>`;
+
+  // Symbol table rows
+  const symRows = (breakdown.symbols || []).slice(0, 8).map(s =>
+    `<tr>
+      <td class="mono" style="font-weight:600">${_esc(s.symbol)}</td>
+      <td class="mono">${s.total}</td>
+      <td class="mono win">${s.wins}</td>
+      <td class="mono loss">${s.losses}</td>
+      <td class="mono" style="color:${s.winRate >= 50 ? 'var(--win)' : 'var(--loss)'}">${s.winRate}%</td>
+    </tr>`
+  ).join('');
+
+  const symSection = symRows
+    ? `<table class="tbl"><thead><tr><th>Symbol</th><th>Trades</th><th>W</th><th>L</th><th>Win-%</th></tr></thead><tbody>${symRows}</tbody></table>`
+    : `<div class="card-body" style="padding:40px;text-align:center"><p style="color:var(--text-tertiary)">Noch keine Trade-Daten</p></div>`;
+
+  // Recent trades table
+  const recentRows = history.slice(0, 10).map(t => {
+    const oc = t.outcome === 'WIN' ? 'win' : t.outcome === 'LOSS' ? 'loss' : 'muted';
+    const dc = t.direction === 'LONG' ? 'badge-long' : 'badge-short';
+    return `<tr>
+      <td class="mono muted" style="font-size:11px">${_fmtDate(t.created_at)}</td>
+      <td class="mono" style="font-weight:600">${_esc(t.symbol || '')}</td>
+      <td><span class="badge ${dc}">${_esc(t.direction || '')}</span></td>
+      <td class="mono muted">${_esc(String(t.timeframe || ''))}m</td>
+      <td class="mono">${t.ai_score || 0}/100</td>
+      <td><span class="mono ${oc}" style="font-size:12px;font-weight:600">${_esc(t.outcome || '')}</span></td>
+    </tr>`;
+  }).join('');
+
+  const convRate = (analytics.totalSignals || stats.total) > 0
+    ? ((totalClosed / (analytics.totalSignals || stats.total)) * 100).toFixed(1)
+    : '0.0';
+
+  return `
+<div class="content page-enter">
+  <div class="page-header">
+    <h2>Statistiken &amp; Analytics</h2>
+    <div class="subtitle">${stats.total} Total Signale · ${totalClosed} abgeschlossen · ${stats.open} offen</div>
+  </div>
+
+  <div class="grid grid-4" style="margin-bottom:var(--gap)">
+    <div class="stat"><div class="label">Abgeschlossen</div><div class="value" style="font-size:22px">${totalClosed}</div><div class="sub muted">${stats.total} Total Signale</div></div>
+    <div class="stat"><div class="label">Win-Rate</div><div class="value" style="font-size:22px;color:${winRate >= 50 ? 'var(--win)' : 'var(--loss)'}">${winRate.toFixed(1)}%</div><div class="sub muted">${stats.wins}W / ${stats.losses}L</div></div>
+    <div class="stat"><div class="label">Gewonnen</div><div class="value" style="font-size:22px;color:var(--win)">${stats.wins}</div><div class="sub win">Profitable Trades</div></div>
+    <div class="stat"><div class="label">Verloren</div><div class="value" style="font-size:22px;color:var(--loss)">${stats.losses}</div><div class="sub loss">Unprofitable Trades</div></div>
+  </div>
+
+  ${_renderPnLChart(history)}
+
+  <div class="grid grid-2">
+    <div class="card">
+      <div class="card-head">${_svgIcon('signal', 16)}<h3>Long vs. Short</h3></div>
+      <div class="card-body">${dirRows}</div>
+    </div>
+    <div class="card">
+      <div class="card-head">${_svgIcon('clock', 16)}<h3>Performance nach Timeframe</h3></div>
+      ${tfSection}
+    </div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="card">
+      <div class="card-head">${_svgIcon('target', 16)}<h3>Performance nach Symbol</h3>
+        <div class="actions"><span class="badge badge-tag">Top ${Math.min((breakdown.symbols || []).length, 8)}</span></div>
+      </div>
+      ${symSection}
+    </div>
+    <div class="card">
+      <div class="card-head">${_svgIcon('chart', 16)}<h3>Score-Verteilung</h3></div>
+      <div class="card-body">${scoreBars}</div>
+    </div>
+  </div>
+
+  <div class="grid grid-3" style="margin-bottom:var(--gap)">
+    <div class="stat"><div class="label">Avg. Hold Time</div><div class="value" style="font-size:22px">${_fmtDuration(analytics.avgHoldTimeMs)}</div><div class="sub muted">Ø Trade-Dauer</div></div>
+    <div class="stat"><div class="label">Total Signale</div><div class="value" style="font-size:22px">${analytics.totalSignals || stats.total}</div><div class="sub muted">Alle empfangenen Webhooks</div></div>
+    <div class="stat"><div class="label">Conversion Rate</div><div class="value" style="font-size:22px">${convRate}%</div><div class="sub muted">Signale → abgeschl. Trades</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">${_svgIcon('signal', 16)}<h3>Letzte 10 Trades</h3></div>
+    ${recentRows
+      ? `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Zeit</th><th>Symbol</th><th>Richtung</th><th>TF</th><th>Score</th><th>Ergebnis</th></tr></thead><tbody>${recentRows}</tbody></table></div>`
+      : `<div class="card-body" style="padding:40px;text-align:center"><p style="color:var(--text-tertiary)">Noch keine Trades</p></div>`
+    }
+  </div>
+</div>`;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // MAIN WORKER
 // ═══════════════════════════════════════════════════════════════
@@ -3960,6 +4174,32 @@ export default {
             );
           }
           content = _renderBacktestContent(tab, data, pageSess);
+        } else if (url.pathname === '/analytics') {
+          const [aStats, aHistory, aBreakdown] = await Promise.all([
+            getStats(env),
+            getHistory(env, 200),
+            (async () => {
+              try {
+                const [tfR, dirR, symR] = await Promise.all([
+                  env.DB.prepare(`SELECT timeframe, COUNT(*) as total, SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses FROM signals GROUP BY timeframe ORDER BY total DESC`).all(),
+                  env.DB.prepare(`SELECT direction, COUNT(*) as total, SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses FROM signals WHERE direction IN ('LONG','SHORT') GROUP BY direction`).all(),
+                  env.DB.prepare(`SELECT symbol, COUNT(*) as total, SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses FROM signals GROUP BY symbol ORDER BY total DESC LIMIT 10`).all()
+                ]);
+                const cwr = r => (r.wins + r.losses) > 0 ? parseFloat(((r.wins / (r.wins + r.losses)) * 100).toFixed(1)) : 0;
+                return {
+                  timeframes: (tfR.results || []).map(r => ({ ...r, winRate: cwr(r) })),
+                  directions: (dirR.results || []).map(r => ({ ...r, winRate: cwr(r) })),
+                  symbols:    (symR.results || []).map(r => ({ ...r, winRate: cwr(r) }))
+                };
+              } catch (_) { return { timeframes: [], directions: [], symbols: [] }; }
+            })()
+          ]);
+          const closedTrades = aHistory.filter(t => t.outcome !== 'OPEN' && t.updated_at);
+          const avgHoldTimeMs = closedTrades.length > 0
+            ? closedTrades.reduce((s, t) => s + (t.updated_at - t.created_at), 0) / closedTrades.length
+            : 0;
+          const aAnalytics = { avgHoldTimeMs, totalSignals: aStats.total };
+          content = _renderStatistikenContent({ stats: aStats, history: aHistory, analytics: aAnalytics, breakdown: aBreakdown });
         } else {
           content = _renderPlaceholderPage(activePage);
         }
