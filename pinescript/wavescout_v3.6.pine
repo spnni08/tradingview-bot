@@ -1,0 +1,361 @@
+//@version=6
+indicator("WAVESCOUT v3.6 — Signals + Snapshots + Volume Profile", overlay=true)
+
+// ======================================================
+// Webhook-URL im TradingView Alert-Dialog setzen:
+// https://tradingview-bot.spnn08.workers.dev/webhook
+// ======================================================
+
+// ─── BESTEHENDE EINSTELLUNGEN ──────────────────────────
+rsiLength       = input.int(14,  "RSI Length")
+emaFastLength   = input.int(50,  "EMA Fast")
+emaSlowLength   = input.int(200, "EMA Slow")
+srLookback      = input.int(50,  "Support/Resistance Lookback")
+
+sendSignals     = input.bool(true, "Send Signals")
+sendSnapshots   = input.bool(true, "Send Snapshots")
+sendZoneAlerts  = input.bool(true, "Send Zone Alerts")
+
+signalCooldownM = input.int(30, "Signal Cooldown (min)", minval=1)
+zoneCooldownM   = input.int(15, "Zone Snapshot Cooldown (min)", minval=1)
+
+scriptVersion   = input.string("wavescout_v3.6", "Script Version")
+originTag       = input.string("tradingview", "Origin Tag")
+
+// ─── VOLUME PROFILE EINSTELLUNGEN ──────────────────────
+vpLookback  = input.int(288,   "VP Lookback (Bars)",  minval=50,   maxval=500,  group="Volume Profile", tooltip="288 = 24h auf 3m-Chart")
+vpBins      = input.int(50,    "VP Bins",              minval=10,   maxval=100,  group="Volume Profile")
+vpVaPercent = input.float(70,  "Value Area %",         minval=50.0, maxval=95.0, group="Volume Profile")
+vpTolerance = input.float(0.15,"Zone-Toleranz (%)",    minval=0.05, maxval=1.0,  group="Volume Profile", tooltip="Preis muss innerhalb dieser % am Level sein")
+vpShow      = input.bool(true,  "VP-Linien anzeigen",                            group="Volume Profile")
+
+// ─── INDIKATOREN ───────────────────────────────────────
+rsi    = ta.rsi(close, rsiLength)
+ema50  = ta.ema(close, emaFastLength)
+ema200 = ta.ema(close, emaSlowLength)
+
+sup = ta.lowest(low,   srLookback)
+res = ta.highest(high, srLookback)
+
+longBias  = close > ema200
+shortBias = close < ema200
+
+nearSup = math.abs(close - sup) < close * 0.0075
+nearRes = math.abs(close - res) < close * 0.0075
+
+emaSlope = (ema50 - ema50[5]) / close * 100
+trend    = emaSlope > 0.1 ? "bullish" : emaSlope < -0.1 ? "bearish" : "neutral"
+
+// ─── HÖHERE TIMEFRAMES ─────────────────────────────────
+ema200_1h = request.security(syminfo.tickerid, "60",  ta.ema(close, 200))
+ema200_4h = request.security(syminfo.tickerid, "240", ta.ema(close, 200))
+price_1h  = request.security(syminfo.tickerid, "60",  close)
+price_4h  = request.security(syminfo.tickerid, "240", close)
+
+trend_1h = price_1h > ema200_1h ? "GREEN" : price_1h < ema200_1h ? "RED" : "NEUTRAL"
+trend_4h = price_4h > ema200_4h ? "GREEN" : price_4h < ema200_4h ? "RED" : "NEUTRAL"
+
+// ─── VOLUME PROFILE BERECHNUNG ─────────────────────────
+// Rollierendes Fenster über vpLookback Bars.
+// Arrays statisch auf 100 Elemente (vpBins max=100).
+vpHigh = ta.highest(high, vpLookback)
+vpLow  = ta.lowest(low,  vpLookback)
+vpRng  = vpHigh - vpLow
+
+var float[] binVol   = array.new_float(100, 0.0)
+var float[] binPrice = array.new_float(100, 0.0)
+
+float poc = na
+float vah = na
+float val = na
+
+if vpRng > 0
+    // Bins zurücksetzen und Mittelpunkte vorberechnen
+    for i = 0 to vpBins - 1
+        array.set(binVol,   i, 0.0)
+        array.set(binPrice, i, vpLow + (i + 0.5) * vpRng / vpBins)
+
+    // Volumen auf Bins verteilen (typischer Preis HLC/3)
+    for i = 0 to vpLookback - 1
+        if na(high[i]) or na(low[i]) or na(close[i]) or na(volume[i]) or volume[i] <= 0
+            continue
+        tp  = (high[i] + low[i] + close[i]) / 3.0
+        idx = int(math.min(vpBins - 1, math.max(0, math.floor((tp - vpLow) / vpRng * vpBins))))
+        array.set(binVol, idx, array.get(binVol, idx) + volume[i])
+
+    // POC = Bin mit maximalem Volumen
+    pocIdx    = 0
+    pocMaxVol = 0.0
+    for i = 0 to vpBins - 1
+        v = array.get(binVol, i)
+        if v > pocMaxVol
+            pocMaxVol := v
+            pocIdx    := i
+
+    poc := array.get(binPrice, pocIdx)
+
+    // VAH/VAL = vom POC nach außen expandieren bis vaPercent% des Gesamtvolumens abgedeckt
+    totalVol  = array.sum(binVol)
+    targetVol = totalVol * vpVaPercent / 100.0
+
+    vahIdx = pocIdx
+    valIdx = pocIdx
+    covVol = pocMaxVol
+
+    // Maximal vpBins Iterationen (for-loop statt while, Pine kennt kein while)
+    for _ = 0 to 99
+        if covVol >= targetVol
+            break
+        upVol   = vahIdx + 1 < vpBins ? array.get(binVol, vahIdx + 1) : 0.0
+        downVol = valIdx - 1 >= 0     ? array.get(binVol, valIdx - 1) : 0.0
+        if upVol >= downVol
+            if vahIdx + 1 < vpBins
+                vahIdx := vahIdx + 1
+                covVol := covVol + upVol
+            else if valIdx - 1 >= 0
+                valIdx := valIdx - 1
+                covVol := covVol + downVol
+            else
+                break
+        else
+            if valIdx - 1 >= 0
+                valIdx := valIdx - 1
+                covVol := covVol + downVol
+            else if vahIdx + 1 < vpBins
+                vahIdx := vahIdx + 1
+                covVol := covVol + upVol
+            else
+                break
+
+    vah := array.get(binPrice, vahIdx)
+    val := array.get(binPrice, valIdx)
+
+// ─── VP KONFLUENZ ──────────────────────────────────────
+tol          = vpTolerance / 100.0
+nearVAL_flag = not na(val) and math.abs(close - val) / close < tol
+nearVAH_flag = not na(vah) and math.abs(close - vah) / close < tol
+nearPOC_flag = not na(poc) and math.abs(close - poc) / close < tol
+
+vp_zone_str = nearVAL_flag ? "VAL" : nearVAH_flag ? "VAH" : nearPOC_flag ? "POC" : "none"
+
+// Richtungsabhängiger VP-Score (0–25):
+// LONG profitiert von VAL (Support-Bounce), SHORT von VAH (Resistance-Bounce).
+// HTF-Bestätigung (1H + 4H) gibt vollen Score.
+vpScoreLong = 0
+if vp_zone_str == "VAL"
+    vpScoreLong := trend_1h == "GREEN" and trend_4h == "GREEN" ? 25 : trend_1h == "GREEN" ? 20 : 15
+else if vp_zone_str == "POC"
+    vpScoreLong := 10
+
+vpScoreShort = 0
+if vp_zone_str == "VAH"
+    vpScoreShort := trend_1h == "RED" and trend_4h == "RED" ? 25 : trend_1h == "RED" ? 20 : 15
+else if vp_zone_str == "POC"
+    vpScoreShort := 10
+
+// ─── SIGNAL LOGIC ──────────────────────────────────────
+longSigRaw  = sendSignals and longBias  and nearSup and rsi < 45
+shortSigRaw = sendSignals and shortBias and nearRes and rsi > 55
+
+strongLongSigRaw  = longSigRaw  and trend_1h == "GREEN" and trend_4h == "GREEN"
+strongShortSigRaw = shortSigRaw and trend_1h == "RED"   and trend_4h == "RED"
+
+// ─── TIMERS ────────────────────────────────────────────
+var int last1HSent      = 0
+var int last4HSent      = 0
+var int lastZoneSent    = 0
+var int lastLongSignal  = 0
+var int lastShortSignal = 0
+
+new1HBar = ta.change(time("60"))  != 0
+new4HBar = ta.change(time("240")) != 0
+
+send1H = sendSnapshots and new1HBar and (time - last1HSent > 55 * 60 * 1000)
+send4H = sendSnapshots and new4HBar and (time - last4HSent > 3 * 60 * 60 * 1000)
+
+zoneEntry = sendZoneAlerts and (nearSup or nearRes) and (time - lastZoneSent > zoneCooldownM * 60 * 1000)
+
+canLongSignal  = (time - lastLongSignal)  > signalCooldownM * 60 * 1000
+canShortSignal = (time - lastShortSignal) > signalCooldownM * 60 * 1000
+
+longSig        = longSigRaw        and canLongSignal
+shortSig       = shortSigRaw       and canShortSignal
+strongLongSig  = strongLongSigRaw  and canLongSignal
+strongShortSig = strongShortSigRaw and canShortSignal
+
+if send1H
+    last1HSent := time
+if send4H
+    last4HSent := time
+if zoneEntry
+    lastZoneSent := time
+if longSig
+    lastLongSignal := time
+if shortSig
+    lastShortSignal := time
+
+// ─── HELPER FUNCTIONS ──────────────────────────────────
+normalizeSymbol() =>
+    s = syminfo.ticker
+    s := str.replace_all(s, ".P",   "")
+    s := str.replace_all(s, "PERP", "")
+    s
+
+mapTimeframe(tf) =>
+    switch tf
+        "1"   => "1m"
+        "3"   => "3m"
+        "5"   => "5m"
+        "15"  => "15m"
+        "30"  => "30m"
+        "45"  => "45m"
+        "60"  => "1h"
+        "120" => "2h"
+        "180" => "3h"
+        "240" => "4h"
+        "D"   => "1d"
+        "W"   => "1w"
+        "M"   => "1M"
+        => tf
+
+// ─── PAYLOAD BUILDER ───────────────────────────────────
+// Felder poc/vah/val/vp_zone/vp_score werden ab v3.6 mitgesendet.
+// vp_score ist richtungsabhängig (LONG → vpScoreLong, SHORT → vpScoreShort).
+buildPayload(eventType, eventSubtype, direction, trigger, strength, signalClass) =>
+    action   = direction == "LONG" ? "BUY" : direction == "SHORT" ? "SELL" : "NONE"
+    vpScore  = direction == "LONG" ? vpScoreLong : direction == "SHORT" ? vpScoreShort : 0
+    symbol   = normalizeSymbol()
+    tf       = mapTimeframe(timeframe.period)
+    pocStr   = not na(poc) ? str.tostring(poc) : "null"
+    vahStr   = not na(vah) ? str.tostring(vah) : "null"
+    valStr   = not na(val) ? str.tostring(val) : "null"
+
+    payload  = "{"
+    payload := payload + "\"symbol\":\""          + symbol                    + "\","
+    payload := payload + "\"event_type\":\""       + eventType                 + "\","
+    payload := payload + "\"event_subtype\":\""    + eventSubtype              + "\","
+    payload := payload + "\"timeframe\":\""        + tf                        + "\","
+    payload := payload + "\"source_timeframe\":\""  + tf                       + "\","
+    payload := payload + "\"context_timeframe_1h\":\"1h\","
+    payload := payload + "\"context_timeframe_4h\":\"4h\","
+    payload := payload + "\"price\":"              + str.tostring(close)       + ","
+    payload := payload + "\"rsi\":"                + str.tostring(rsi)         + ","
+    payload := payload + "\"ema50\":"              + str.tostring(ema50)       + ","
+    payload := payload + "\"ema200\":"             + str.tostring(ema200)      + ","
+    payload := payload + "\"support\":"            + str.tostring(sup)         + ","
+    payload := payload + "\"resistance\":"         + str.tostring(res)         + ","
+    payload := payload + "\"trend\":\""            + trend                     + "\","
+    payload := payload + "\"trend_1h\":\""         + trend_1h                  + "\","
+    payload := payload + "\"trend_4h\":\""         + trend_4h                  + "\","
+    payload := payload + "\"direction\":\""        + direction                  + "\","
+    payload := payload + "\"action\":\""           + action                    + "\","
+    payload := payload + "\"trigger\":\""          + trigger                   + "\","
+    payload := payload + "\"strength\":\""         + strength                  + "\","
+    payload := payload + "\"signal_class\":\""     + signalClass               + "\","
+    payload := payload + "\"timestamp\":\""        + str.tostring(time)        + "\","
+    payload := payload + "\"origin\":\""           + originTag                 + "\","
+    payload := payload + "\"script_version\":\""   + scriptVersion             + "\","
+    payload := payload + "\"poc\":"                + pocStr                    + ","
+    payload := payload + "\"vah\":"                + vahStr                    + ","
+    payload := payload + "\"val\":"                + valStr                    + ","
+    payload := payload + "\"vp_zone\":\""          + vp_zone_str               + "\","
+    payload := payload + "\"vp_score\":"           + str.tostring(vpScore)
+    payload := payload + "}"
+    payload
+
+// ─── ALERTS ────────────────────────────────────────────
+if strongLongSig
+    alert(buildPayload("SIGNAL", "SIGNAL_LONG", "LONG", "SUPPORT_RSI_HTF_CONFIRM", "STRONG", "STRONG"), alert.freq_once_per_bar_close)
+else if longSig
+    alert(buildPayload("SIGNAL", "SIGNAL_LONG", "LONG", "SUPPORT_RSI", "NORMAL", "NORMAL"), alert.freq_once_per_bar_close)
+
+if strongShortSig
+    alert(buildPayload("SIGNAL", "SIGNAL_SHORT", "SHORT", "RESISTANCE_RSI_HTF_CONFIRM", "STRONG", "STRONG"), alert.freq_once_per_bar_close)
+else if shortSig
+    alert(buildPayload("SIGNAL", "SIGNAL_SHORT", "SHORT", "RESISTANCE_RSI", "NORMAL", "NORMAL"), alert.freq_once_per_bar_close)
+
+if send1H
+    alert(buildPayload("SNAPSHOT", "SNAPSHOT_1H",   "NONE", "1H_INTERVAL", "INFO", "INFO"), alert.freq_once_per_bar_close)
+if send4H
+    alert(buildPayload("SNAPSHOT", "SNAPSHOT_4H",   "NONE", "4H_INTERVAL", "INFO", "INFO"), alert.freq_once_per_bar_close)
+if zoneEntry
+    alert(buildPayload("SNAPSHOT", "SNAPSHOT_ZONE", "NONE", "ZONE_ENTRY",  "INFO", "INFO"), alert.freq_once_per_bar_close)
+
+// ─── VISUALS — INDIKATOREN ──────────────────────────────
+plot(ema50,  "EMA 50",      color=color.new(color.blue,  40), linewidth=2)
+plot(ema200, "EMA 200",     color=color.new(color.white, 40), linewidth=2)
+plot(sup,    "Support",     color=color.new(color.green, 40))
+plot(res,    "Resistance",  color=color.new(color.red,   40))
+
+plotshape(longSig,  "Long",  location=location.belowbar, color=color.green, style=shape.triangleup,   size=size.normal)
+plotshape(shortSig, "Short", location=location.abovebar, color=color.red,   style=shape.triangledown, size=size.normal)
+
+bgcolor(nearSup and longBias  ? color.new(color.green, 92) : na)
+bgcolor(nearRes and shortBias ? color.new(color.red,   92) : na)
+
+// ─── VISUALS — VOLUME PROFILE LINIEN ───────────────────
+var line pocLine = na
+var line vahLine = na
+var line valLine = na
+
+if barstate.islast and vpShow and not na(poc)
+    if not na(pocLine)
+        line.delete(pocLine)
+    if not na(vahLine)
+        line.delete(vahLine)
+    if not na(valLine)
+        line.delete(valLine)
+    startBar = bar_index - (vpLookback - 1)
+    pocLine := line.new(startBar, poc, bar_index, poc,
+                        xloc=xloc.bar_index, color=color.orange, width=2,
+                        style=line.style_solid, extend=extend.right)
+    if not na(vah)
+        vahLine := line.new(startBar, vah, bar_index, vah,
+                            xloc=xloc.bar_index, color=color.teal, width=1,
+                            style=line.style_dashed, extend=extend.right)
+    if not na(val)
+        valLine := line.new(startBar, val, bar_index, val,
+                            xloc=xloc.bar_index, color=color.teal, width=1,
+                            style=line.style_dashed, extend=extend.right)
+
+// ─── VISUALS — VP INFO-TABELLE (oben rechts) ───────────
+var table vpTable = na
+
+if barstate.islast and vpShow and not na(poc)
+    if not na(vpTable)
+        table.delete(vpTable)
+    vpTable := table.new(position.top_right, 2, 5,
+                         bgcolor=color.new(color.navy, 82),
+                         border_width=1, border_color=color.new(color.gray, 65),
+                         frame_color=color.new(color.gray, 55), frame_width=1)
+
+    zoneColor = vp_zone_str == "none" ? color.gray : color.yellow
+    table.cell(vpTable, 0, 0, "VP",          text_color=color.silver, text_size=size.small, bgcolor=color.new(color.navy, 65), text_halign=text.align_center)
+    table.cell(vpTable, 1, 0, vp_zone_str,   text_color=zoneColor,    text_size=size.small, bgcolor=color.new(color.navy, 65), text_halign=text.align_center)
+    table.cell(vpTable, 0, 1, "POC",         text_color=color.orange, text_size=size.tiny)
+    table.cell(vpTable, 1, 1, str.tostring(math.round(poc, 2)), text_color=color.white, text_size=size.tiny, text_halign=text.align_right)
+    table.cell(vpTable, 0, 2, "VAH",         text_color=color.teal,   text_size=size.tiny)
+    table.cell(vpTable, 1, 2, na(vah) ? "–" : str.tostring(math.round(vah, 2)), text_color=color.white, text_size=size.tiny, text_halign=text.align_right)
+    table.cell(vpTable, 0, 3, "VAL",         text_color=color.teal,   text_size=size.tiny)
+    table.cell(vpTable, 1, 3, na(val) ? "–" : str.tostring(math.round(val, 2)), text_color=color.white, text_size=size.tiny, text_halign=text.align_right)
+    scoreDisplay = vp_zone_str != "none" ? str.tostring(math.max(vpScoreLong, vpScoreShort)) + "/25" : "–"
+    table.cell(vpTable, 0, 4, "Score",        text_color=color.gray,   text_size=size.tiny)
+    table.cell(vpTable, 1, 4, scoreDisplay,   text_color=color.yellow, text_size=size.tiny, text_halign=text.align_right)
+
+// ─── VISUALS — INFO LABEL (unverändert aus v3.5) ───────
+var label infoLabel = na
+if barstate.islast
+    label.delete(infoLabel)
+    infoLabel := label.new(
+         bar_index,
+         high * 1.002,
+         "WAVESCOUT v3.6" +
+         "\nRSI: "  + str.tostring(math.round(rsi, 1)) +
+         "\nBias: " + (longBias ? "LONG" : shortBias ? "SHORT" : "NEUTRAL") +
+         "\nZone: " + (nearSup  ? "Support" : nearRes ? "Resistance" : "—") +
+         "\n1H: "   + trend_1h + " | 4H: " + trend_4h,
+         color=color.new(color.navy, 10),
+         textcolor=color.white,
+         style=label.style_label_left,
+         size=size.small
+    )

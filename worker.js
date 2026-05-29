@@ -405,6 +405,9 @@ function formatSignalForTelegram(signal) {
   const matchedStr = matched.slice(0, 3).map(r => `✅ ${escapeHtml(r)}`).join('\n') || '–';
   const failedStr  = failed.slice(0, 3).map(r => `❌ ${escapeHtml(r)}`).join('\n')  || '–';
 
+  const vpLine = (signal.vp_zone && signal.vp_zone !== 'none' && signal.vp_score > 0)
+    ? `\n📊 Volume Profile: Bounce an <b>${signal.vp_zone}</b> (+${signal.vp_score} Score)` : '';
+
   const disclaimer = '\n\n⚠️ <i>Hinweis: Keine Finanzberatung. Signale dienen nur zu Analyse- und Backtesting-Zwecken. Trading birgt Risiko. Keine Garantie für Gewinne.</i>';
 
   return `${emoji} <b>${signal.symbol}</b> ${signal.direction}
@@ -413,7 +416,7 @@ ${scoreEmoji} Score: <b>${sc}/100</b> · ${quality}
 💰 Entry: ${fmt(signal.ai_entry ?? signal.price)}
 🎯 TP: ${fmt(signal.ai_tp)}
 🛑 SL: ${fmt(signal.ai_sl)}
-⚖️ R:R: ${rrStr}${biasLine}
+⚖️ R:R: ${rrStr}${biasLine}${vpLine}
 
 ✅ <b>Erfüllt:</b>
 ${matchedStr}
@@ -1247,6 +1250,11 @@ async function ensureTables(env) {
       ['bias_match',           'TEXT'],
       ['before_morning_routine','INTEGER DEFAULT 0'],
       ['counts_for_strategy',  'INTEGER DEFAULT 0'],
+      ['poc',                  'REAL'],
+      ['vah',                  'REAL'],
+      ['val',                  'REAL'],
+      ['vp_zone',              'TEXT'],
+      ['vp_score',             'INTEGER DEFAULT 0'],
     ];
     for (const [col, type] of signalIndicatorCols) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); }
@@ -1640,13 +1648,30 @@ async function processSignal(env, signal) {
   const ruleAnalysis     = analyzeWithRules(signal, strategyConfig);
   const fallbackAnalysis = ruleAnalysis;
 
+  // VP-Felder aus Payload parsen (defensiv — Pine sendet diese ab v3.6)
+  const vpScore = Math.max(0, Math.min(25, parseInt(signal.vp_score, 10) || 0));
+  const vpZone  = ['VAL', 'VAH', 'POC'].includes(String(signal.vp_zone || '')) ? signal.vp_zone : 'none';
+  const vpPoc   = parseFloat(signal.poc) || null;
+  const vpVah   = parseFloat(signal.vah) || null;
+  const vpVal   = parseFloat(signal.val) || null;
+
+  // Score-Gate: (rule_score + vp_score) entscheidet ob Claude aufgerufen wird.
+  // VP-Konfluenz senkt die Schwelle von 55 auf 50 (bessere Signalqualität erwartet).
+  const preAiScore  = ruleAnalysis.score + vpScore;
+  const aiThreshold = vpZone !== 'none' ? 50 : 55;
+
   // Use AbortController so the Anthropic fetch is actually cancelled when the
   // timeout fires, not just orphaned in the background (M2).
   const aiAbort = new AbortController();
   const aiTimer = setTimeout(() => aiAbort.abort(), AI_TIMEOUT_MS);
   let analysis;
   try {
-    analysis = await analyzeSignalWithAI(env, signal, strategyConfig, aiAbort.signal) || fallbackAnalysis;
+    if (preAiScore >= aiThreshold) {
+      analysis = await analyzeSignalWithAI(env, signal, strategyConfig, aiAbort.signal) || fallbackAnalysis;
+    } else {
+      console.log(`⏭️ Score-Gate: ${preAiScore} < ${aiThreshold} → Claude-Call übersprungen`);
+      analysis = fallbackAnalysis;
+    }
   } catch (aiErr) {
     if (aiErr.name !== 'AbortError') console.error('AI analysis error:', aiErr.message);
     analysis = fallbackAnalysis;
@@ -1672,6 +1697,13 @@ async function processSignal(env, signal) {
       ruleAnalysis.failed_rules.unshift(`⚠️ ${newsWarning}`);
     }
   } catch (_) {}
+
+  // VP-Score on top addieren (nach News-Penalty, damit Penalty nicht durch VP überkompensiert wird)
+  if (vpScore > 0) {
+    const before = analysis.score;
+    analysis.score = Math.min(100, analysis.score + vpScore);
+    console.log(`📊 VP boost: ${before} → ${analysis.score} (+${vpScore}, zone: ${vpZone})`);
+  }
 
   const signalId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -1707,6 +1739,8 @@ async function processSignal(env, signal) {
       risk_reward:    riskReward,
       matched_rules:  matchedRulesJSON,
       failed_rules:   failedRulesJSON,
+      vp_zone:        vpZone,
+      vp_score:       vpScore,
     });
     const sent = await withTimeout(sendTelegramMessage(env, telegramMessage), TELEGRAM_TIMEOUT_MS, false);
     if (sent) telegramSent = 1;
@@ -1741,10 +1775,12 @@ async function processSignal(env, signal) {
       matched_rules, failed_rules, unknown_rules, score_breakdown,
       signal_quality, risk_reward, planned_profit_pct, planned_risk_pct,
       trigger_reason, disclaimer_shown,
+      poc, vah, val, vp_zone, vp_score,
       created_at, outcome
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?
     )
   `).bind(
     signalId,
@@ -1789,6 +1825,11 @@ async function processSignal(env, signal) {
     plannedRiskPct,
     triggerReason,
     1,
+    vpPoc,
+    vpVah,
+    vpVal,
+    vpZone,
+    vpScore,
     Date.now(),
     'OPEN'
   ).run();
