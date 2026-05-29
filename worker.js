@@ -1831,7 +1831,7 @@ async function processSignal(env, signal) {
     vpZone,
     vpScore,
     Date.now(),
-    'OPEN'
+    analysis.score >= 75 ? 'OPEN' : 'SKIPPED'
   ).run();
 
   // Only open a practice trade for signals that meet the quality threshold
@@ -1843,7 +1843,7 @@ async function processSignal(env, signal) {
   try {
     const atCfg = await loadAutotradeConfig(env);
     if (atCfg) {
-      const minScore = atCfg.minScore || 75;
+      const minScore = Math.max(75, atCfg.minScore || 75);
       if (atCfg.enabled && !isTest && analysis.score >= minScore && analysis.entry) {
         const amount = parseFloat(atCfg.tradeAmount) || 10;
         const qty    = calcOrderQty(amount, analysis.entry);
@@ -4084,7 +4084,7 @@ function _renderSettingsDesign() {
 function _renderSettingsTrading() {
   const sliders = [
     { id: 'riskPerTrade',  label: 'Risiko pro Trade',          suffix: '%', min: 0.5, max: 5,  step: 0.5, def: 2, parse: 'parseFloat' },
-    { id: 'minScore',      label: 'Minimaler Score',           suffix: '',  min: 50,  max: 90, step: 5,   def: 65, parse: 'parseInt'   },
+    { id: 'minScore',      label: 'Minimaler Score',           suffix: '',  min: 75,  max: 90, step: 5,   def: 75, parse: 'parseInt'   },
     { id: 'maxOpenTrades', label: 'Max. gleichzeitige Trades', suffix: '',  min: 1,   max: 10, step: 1,   def: 3,  parse: 'parseInt'   },
   ];
   const sliderHtml = sliders.map(s =>
