@@ -1837,28 +1837,20 @@ function BiasStatsTab() {
 
 const BacktestPage = ({ user }) => {
   const [activeTab, setActiveTab] = useState('practice');
-  const userRole  = user?.role || 'user';
-
-  const isTraderOrAdmin = userRole === 'admin' || userRole === 'trader';
-
   const tabs = [
-    { id: 'practice',      label: 'Übungstrades'       },
-    { id: 'history',       label: 'Signal-Historie'     },
-    ...(isTraderOrAdmin ? [
-      { id: 'strategy',    label: 'Strategie-Labor'     },
-      { id: 'compare',     label: 'Strategie-Vergleich' },
-      { id: 'regelanalyse',label: 'Regel-Analyse'       },
-    ] : []),
-    { id: 'loss',          label: 'Loss-Analyse'        },
-    { id: 'biasstats',     label: 'Bias-Statistiken'    },
-    { id: 'suggestions',   label: 'Vorschläge'          },
+    { id: 'practice',      label: 'Übungstrades'    },
+    { id: 'history',       label: 'Signal-Historie' },
+    { id: 'regelanalyse',  label: 'Regel-Analyse'   },
+    { id: 'loss',          label: 'Loss-Analyse'    },
+    { id: 'biasstats',     label: 'Bias-Statistiken'},
+    { id: 'suggestions',   label: 'Vorschläge'      },
   ];
 
   return (
     <div className="content page-enter">
       <div className="page-header">
-        <h2>Backtesting & Strategie-Labor</h2>
-        <p className="subtitle">Paper-Trades · Strategie-Versionen · Loss-Analyse · Verbesserungsvorschläge</p>
+        <h2>Backtesting</h2>
+        <p className="subtitle">Paper-Trades · Regel-Analyse · Loss-Analyse · Verbesserungsvorschläge</p>
       </div>
 
       <div style={{ overflowX: 'auto', marginBottom: 20, paddingBottom: 1 }}>
@@ -1877,8 +1869,6 @@ const BacktestPage = ({ user }) => {
 
       {activeTab === 'practice'      && <PracticeTradesTab/>}
       {activeTab === 'history'       && <SignalHistoryTab/>}
-      {activeTab === 'strategy'      && <StrategyLabTab     userRole={userRole}/>}
-      {activeTab === 'compare'       && <StrategyCompareTab/>}
       {activeTab === 'regelanalyse'  && <RuleFrequencyTab/>}
       {activeTab === 'loss'          && <LossAnalysisTab/>}
       {activeTab === 'biasstats'     && <BiasStatsTab/>}
