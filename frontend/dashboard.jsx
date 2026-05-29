@@ -501,6 +501,11 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
               <div className="cell">
                 <div className="l">Entry</div>
                 <div className="v mono">${(signal.ai_entry || signal.price || 0).toFixed(2)}</div>
+                {signal.poc && <div style={{ fontSize: 10, color: 'var(--text-quaternary)', marginTop: 2 }}>
+                  <span style={{ color: '#f97316' }}>POC {signal.poc.toFixed(2)}</span>
+                  {signal.vah && <span style={{ color: '#2dd4bf' }}> · VAH {signal.vah.toFixed(2)}</span>}
+                  {signal.val && <span style={{ color: '#2dd4bf' }}> · VAL {signal.val.toFixed(2)}</span>}
+                </div>}
               </div>
               <div className="cell">
                 <div className="l">Stop Loss</div>
@@ -572,6 +577,11 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
             {signal.ai_risk && (
               <span className={`badge ${signal.ai_risk === 'LOW' ? 'badge-win' : signal.ai_risk === 'HIGH' ? 'badge-loss' : 'badge-wait'}`}>
                 {signal.ai_risk} RISK
+              </span>
+            )}
+            {signal.vp_zone && signal.vp_zone !== 'none' && (
+              <span className="badge badge-tag" style={{ fontSize: 10, background: 'rgba(20,184,166,0.15)', color: '#2dd4bf', border: '1px solid rgba(20,184,166,0.3)' }} title={`POC: ${signal.poc ?? '–'} · VAH: ${signal.vah ?? '–'} · VAL: ${signal.val ?? '–'}`}>
+                📊 VP: {signal.vp_zone}
               </span>
             )}
             {signal.telegram_sent === 1 && (
