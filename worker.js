@@ -1720,35 +1720,31 @@ async function processSignal(env, signal) {
 
   // Determine Telegram notification
   const isTest       = signal.test === true || signal.is_test === 1;
-  const shouldNotify = isTest || analysis.score >= 75;
+  let   shouldNotify = isTest || analysis.score >= 75;
   let telegramSent   = 0;
   let telegramReason = 'below_threshold';
 
-  if (shouldNotify) {
-    telegramReason = isTest ? 'test_signal' : 'score_75';
-    const debugPrefix = isTest ? `🧪 <b>[TEST]</b>\n` : '';
-    const telegramMessage = debugPrefix + formatSignalForTelegram({
-      ...signal,
-      direction,
-      ai_score:       analysis.score,
-      ai_entry:       analysis.entry,
-      ai_tp:          analysis.tp,
-      ai_sl:          analysis.sl,
-      ai_reason:      analysis.reason,
-      signal_quality: signalQuality,
-      risk_reward:    riskReward,
-      matched_rules:  matchedRulesJSON,
-      failed_rules:   failedRulesJSON,
-      vp_zone:        vpZone,
-      vp_score:       vpScore,
-    });
-    const sent = await withTimeout(sendTelegramMessage(env, telegramMessage), TELEGRAM_TIMEOUT_MS, false);
-    if (sent) telegramSent = 1;
+  // Worker-seitiger Cooldown: gleiches Symbol innerhalb von 15 Minuten nicht doppelt senden.
+  // Verhindert Spam wenn TradingView mehrere gequeute Alerts auf einmal feuert.
+  if (shouldNotify && !isTest) {
+    try {
+      const recent = await env.DB.prepare(
+        `SELECT created_at FROM signals WHERE symbol = ? AND telegram_sent = 1 AND created_at > ? ORDER BY created_at DESC LIMIT 1`
+      ).bind(signal.symbol, Date.now() - 15 * 60 * 1000).first();
+      if (recent) {
+        const agoMin = ((Date.now() - recent.created_at) / 60000).toFixed(1);
+        console.log(`🔕 Telegram Cooldown: ${signal.symbol} bereits vor ${agoMin}min gesendet → übersprungen`);
+        shouldNotify = false;
+        telegramReason = 'cooldown_15min';
+      }
+    } catch (_) {}
+  }
 
-    // Score >= 80: send an additional prominent priority alert via a separate
-    // bot/chat (TELEGRAM_ALERT_BOT_TOKEN / TELEGRAM_ALERT_CHAT_ID) or, if those
-    // aren't configured, as a second message via the regular bot.
+  if (shouldNotify) {
+    // Score >= 80 → nur Priority-Alert (kein zusätzliches reguläres Signal).
+    // Score 75–79 → reguläre Nachricht.
     if (!isTest && analysis.score >= 80) {
+      telegramReason = 'score_80_priority';
       const alertMsg = formatPriorityAlert({
         ...signal,
         direction,
@@ -1759,7 +1755,28 @@ async function processSignal(env, signal) {
         ai_reason:   analysis.reason,
         risk_reward: riskReward,
       });
-      await withTimeout(sendAlertMessage(env, alertMsg), TELEGRAM_TIMEOUT_MS, false);
+      const sent = await withTimeout(sendAlertMessage(env, alertMsg), TELEGRAM_TIMEOUT_MS, false);
+      if (sent) telegramSent = 1;
+    } else {
+      telegramReason = isTest ? 'test_signal' : 'score_75';
+      const debugPrefix = isTest ? `🧪 <b>[TEST]</b>\n` : '';
+      const telegramMessage = debugPrefix + formatSignalForTelegram({
+        ...signal,
+        direction,
+        ai_score:       analysis.score,
+        ai_entry:       analysis.entry,
+        ai_tp:          analysis.tp,
+        ai_sl:          analysis.sl,
+        ai_reason:      analysis.reason,
+        signal_quality: signalQuality,
+        risk_reward:    riskReward,
+        matched_rules:  matchedRulesJSON,
+        failed_rules:   failedRulesJSON,
+        vp_zone:        vpZone,
+        vp_score:       vpScore,
+      });
+      const sent = await withTimeout(sendTelegramMessage(env, telegramMessage), TELEGRAM_TIMEOUT_MS, false);
+      if (sent) telegramSent = 1;
     }
   }
 
