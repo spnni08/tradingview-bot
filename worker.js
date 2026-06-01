@@ -1255,6 +1255,7 @@ async function ensureTables(env) {
       ['val',                  'REAL'],
       ['vp_zone',              'TEXT'],
       ['vp_score',             'INTEGER DEFAULT 0'],
+      ['dashboard_seen',    'INTEGER DEFAULT 0'],
     ];
     for (const [col, type] of signalIndicatorCols) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); }
@@ -1720,7 +1721,7 @@ async function processSignal(env, signal) {
 
   // Determine Telegram notification
   const isTest       = signal.test === true || signal.is_test === 1;
-  let   shouldNotify = isTest || analysis.score >= 75;
+  let   shouldNotify = isTest || analysis.score >= 80;
   let telegramSent   = 0;
   let telegramReason = 'below_threshold';
 
@@ -5077,6 +5078,41 @@ export default {
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
         const limit = Math.min(500, Math.max(1, parseInt(url.searchParams.get("limit") || "50")));
         return jsonResponse(await getHistory(env, limit));
+      }
+
+      if (request.method === "GET" && url.pathname === "/notifications") {
+        const session = await validateSession(env, request);
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const limit = Math.min(50, parseInt(url.searchParams.get("limit") || "30"));
+          const rows = await env.DB.prepare(
+            `SELECT id, symbol, direction, timeframe, price, ai_score, ai_entry, ai_tp, ai_sl,
+                    ai_reason, signal_quality, risk_reward, vp_zone, vp_score, created_at, dashboard_seen
+             FROM signals
+             WHERE ai_score >= 70 AND outcome != 'SKIPPED'
+             ORDER BY created_at DESC LIMIT ?`
+          ).bind(limit).all();
+          const list   = rows.results || [];
+          const unseen = list.filter(r => !r.dashboard_seen).length;
+          return jsonResponse({ notifications: list, unseen });
+        } catch (e) {
+          return jsonResponse({ notifications: [], unseen: 0 });
+        }
+      }
+
+      if (request.method === "POST" && url.pathname.startsWith("/notifications/") && url.pathname.endsWith("/seen")) {
+        const session = await validateSession(env, request);
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        const id = url.pathname.slice("/notifications/".length, -"/seen".length);
+        try { await env.DB.prepare(`UPDATE signals SET dashboard_seen = 1 WHERE id = ?`).bind(id).run(); } catch (_) {}
+        return jsonResponse({ ok: true });
+      }
+
+      if (request.method === "POST" && url.pathname === "/notifications/seen-all") {
+        const session = await validateSession(env, request);
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        try { await env.DB.prepare(`UPDATE signals SET dashboard_seen = 1 WHERE ai_score >= 70 AND dashboard_seen = 0`).run(); } catch (_) {}
+        return jsonResponse({ ok: true });
       }
 
       if (request.method === "GET" && url.pathname === "/analytics") {

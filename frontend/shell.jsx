@@ -167,6 +167,33 @@ const Sidebar = ({ page, setPage, user, onLogout, collapsed, setCollapsed }) => 
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const menuRef = useRef(null);
 
+  const [notifList,   setNotifList]   = useState([]);
+  const [notifUnseen, setNotifUnseen] = useState(0);
+  const [notifOpen,   setNotifOpen]   = useState(false);
+  const [notifDetail, setNotifDetail] = useState(null);
+  const notifRef = useRef(null);
+
+  const loadNotifs = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/notifications?limit=30`, { credentials: 'include' });
+      if (res.ok) { const d = await res.json(); setNotifList(d.notifications || []); setNotifUnseen(d.unseen || 0); }
+    } catch (_) {}
+  }, []);
+
+  useEffect(() => { loadNotifs(); const t = setInterval(loadNotifs, 30000); return () => clearInterval(t); }, [loadNotifs]);
+
+  const dismissNotif = async (id) => {
+    setNotifList(l => l.map(n => n.id === id ? { ...n, dashboard_seen: 1 } : n));
+    setNotifUnseen(c => Math.max(0, c - 1));
+    try { await fetch(`${API_URL}/notifications/${id}/seen`, { method: 'POST', credentials: 'include' }); } catch (_) {}
+  };
+
+  const dismissAll = async () => {
+    setNotifList(l => l.map(n => ({ ...n, dashboard_seen: 1 })));
+    setNotifUnseen(0);
+    try { await fetch(`${API_URL}/notifications/seen-all`, { method: 'POST', credentials: 'include' }); } catch (_) {}
+  };
+
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(t);
@@ -243,6 +270,26 @@ const Sidebar = ({ page, setPage, user, onLogout, collapsed, setCollapsed }) => 
         ))}
       </div>
 
+      {/* Notification Bell */}
+      <div style={{ padding: '4px 8px' }}>
+        <button
+          className="sidebar-link"
+          onClick={() => setNotifOpen(o => !o)}
+          title={collapsed ? `Signale${notifUnseen > 0 ? ` (${notifUnseen})` : ''}` : ''}
+          style={{ position: 'relative' }}
+        >
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <Icon name="bell" size={16}/>
+            {notifUnseen > 0 && (
+              <span style={{ position: 'absolute', top: -5, right: -6, background: 'var(--loss)', color: '#fff', fontSize: 9, fontWeight: 700, borderRadius: 8, minWidth: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 3px', lineHeight: 1 }}>
+                {notifUnseen > 9 ? '9+' : notifUnseen}
+              </span>
+            )}
+          </div>
+          {!collapsed && <span className="link-label">Signale{notifUnseen > 0 ? ` (${notifUnseen})` : ''}</span>}
+        </button>
+      </div>
+
       {/* Bottom: theme + user */}
       <div className="sidebar-bottom">
         <button
@@ -314,6 +361,19 @@ const Sidebar = ({ page, setPage, user, onLogout, collapsed, setCollapsed }) => 
           </div>
         )}
       </div>
+
+      {/* Notification panel + detail modal rendered via fixed positioning */}
+      {notifOpen && (
+        <NotificationPanel
+          notifs={notifList}
+          unseen={notifUnseen}
+          onDismiss={dismissNotif}
+          onDismissAll={dismissAll}
+          onOpenDetail={(n) => { setNotifDetail(n); if (!n.dashboard_seen) dismissNotif(n.id); }}
+          onClose={() => setNotifOpen(false)}
+        />
+      )}
+      {notifDetail && <SignalDetailMini signal={notifDetail} onClose={() => setNotifDetail(null)}/>}
     </nav>
   );
 };
@@ -373,6 +433,123 @@ const CountUp = ({ to, prefix = '', suffix = '', duration = 900, decimals = 0, s
     maximumFractionDigits: decimals
   });
   return <span>{sign && to > 0 ? '+' : ''}{prefix}{formatted}{suffix}</span>;
+};
+
+// ═══════════════════════════════════════════════════════════════
+// NOTIFICATION SYSTEM
+// ═══════════════════════════════════════════════════════════════
+
+const SignalDetailMini = ({ signal, onClose }) => {
+  const [copied, setCopied] = useState(false);
+  const fmt  = (v) => v != null && !isNaN(v) ? `$${parseFloat(v).toFixed(2)}` : '–';
+  const copy = () => {
+    const lines = [
+      `${signal.symbol} ${signal.direction}`,
+      `Score: ${signal.ai_score}/100 (${signal.signal_quality || '–'})`,
+      `Entry: ${fmt(signal.ai_entry ?? signal.price)}`,
+      `TP:    ${fmt(signal.ai_tp)}`,
+      `SL:    ${fmt(signal.ai_sl)}`,
+      signal.risk_reward ? `R:R:   1:${parseFloat(signal.risk_reward).toFixed(1)}` : null,
+      signal.ai_reason   ? `\n${signal.ai_reason}` : null,
+    ].filter(Boolean).join('\n');
+    navigator.clipboard.writeText(lines).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+  const sc = signal.ai_score || 0;
+  const scoreColor = sc >= 90 ? 'var(--win)' : sc >= 75 ? 'var(--wait)' : 'var(--loss)';
+  return (
+    <div className="modal-overlay" onClick={onClose} style={{ zIndex: 1100 }}>
+      <div className="modal-box" style={{ maxWidth: 400 }} onClick={e => e.stopPropagation()}>
+        <div className="modal-head">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className={`badge ${signal.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{signal.direction}</span>
+            <strong>{signal.symbol}</strong>
+            {signal.timeframe && <span className="badge badge-tag" style={{ fontSize: 11 }}>{signal.timeframe}</span>}
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ fontSize: 28, fontWeight: 800, fontFamily: 'var(--font-mono)', color: scoreColor }}>{sc}</div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase' }}>Score</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: scoreColor }}>{signal.signal_quality || '–'}</div>
+            </div>
+            {signal.vp_zone && signal.vp_zone !== 'none' && (
+              <span className="badge badge-tag" style={{ marginLeft: 'auto', fontSize: 10, background: 'rgba(20,184,166,0.15)', color: '#2dd4bf', border: '1px solid rgba(20,184,166,0.3)' }}>
+                📊 VP: {signal.vp_zone}
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            {[['Entry', fmt(signal.ai_entry ?? signal.price), ''], ['Take Profit', fmt(signal.ai_tp), 'var(--win)'], ['Stop Loss', fmt(signal.ai_sl), 'var(--loss)'], ['R:R', signal.risk_reward ? `1:${parseFloat(signal.risk_reward).toFixed(1)}` : '–', '']].map(([l, v, c]) => (
+              <div key={l} style={{ background: 'var(--bg-0)', borderRadius: 8, padding: '8px 12px' }}>
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 2 }}>{l}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: c || 'var(--text-primary)', fontSize: 13 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          {signal.ai_reason && (
+            <div style={{ padding: '10px 12px', background: 'var(--bg-0)', borderRadius: 8, fontSize: 12, lineHeight: 1.6, borderLeft: '3px solid var(--blue-500)', color: 'var(--text-secondary)' }}>
+              {signal.ai_reason}
+            </div>
+          )}
+        </div>
+        <div className="modal-foot">
+          <button className="btn btn-ghost" onClick={onClose}>Schließen</button>
+          <button className="btn btn-primary" onClick={copy}>
+            {copied ? '✓ Kopiert!' : '📋 Kopieren'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const NotificationPanel = ({ notifs, unseen, onDismiss, onDismissAll, onOpenDetail, onClose }) => {
+  const fmt = (ts) => {
+    const d = Date.now() - ts;
+    if (d < 60000) return 'gerade eben';
+    if (d < 3600000) return `vor ${Math.floor(d / 60000)}min`;
+    if (d < 86400000) return `vor ${Math.floor(d / 3600000)}h`;
+    return `vor ${Math.floor(d / 86400000)}d`;
+  };
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 900, background: 'rgba(0,0,0,0.35)' }}/>
+      <div style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 360, background: 'var(--bg-1)', borderLeft: '1px solid var(--border)', zIndex: 950, display: 'flex', flexDirection: 'column', boxShadow: '-4px 0 24px rgba(0,0,0,0.3)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid var(--border)', gap: 8 }}>
+          <Icon name="bell" size={16} style={{ color: 'var(--blue-400)' }}/>
+          <span style={{ fontWeight: 600, fontSize: 14, flex: 1 }}>Signale</span>
+          {unseen > 0 && <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={onDismissAll}>Alle gelesen</button>}
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {notifs.length === 0 ? (
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>Keine neuen Signale</div>
+          ) : notifs.map(n => {
+            const sc = n.ai_score || 0;
+            const scoreColor = sc >= 90 ? 'var(--win)' : sc >= 80 ? 'var(--wait)' : 'var(--blue-400)';
+            return (
+              <div key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--border)', background: n.dashboard_seen ? 'transparent' : 'rgba(59,130,246,0.04)', transition: 'background .2s' }}>
+                {!n.dashboard_seen && <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--blue-500)', flexShrink: 0 }}/>}
+                {n.dashboard_seen  && <div style={{ width: 6, flexShrink: 0 }}/>}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                    <span className={`badge ${n.direction === 'LONG' ? 'badge-long' : 'badge-short'}`} style={{ fontSize: 10 }}>{n.direction}</span>
+                    <span style={{ fontWeight: 600, fontSize: 13 }}>{n.symbol}</span>
+                    <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: scoreColor, marginLeft: 'auto' }}>{sc}/100</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{fmt(n.created_at)}</div>
+                </div>
+                <button className="btn btn-sm" style={{ fontSize: 11, padding: '3px 8px' }} onClick={() => onOpenDetail(n)}>Details</button>
+                <button className="btn btn-ghost btn-sm" style={{ padding: '3px 6px', color: 'var(--text-quaternary)' }} onClick={() => onDismiss(n.id)} title="Schließen">✕</button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
 };
 
 // ═══════════════════════════════════════════════════════════════
