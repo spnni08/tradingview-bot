@@ -173,6 +173,37 @@ async function sendAlertMessage(env, message) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// NTFY.SH
+// ═══════════════════════════════════════════════════════════════
+
+// Sends an urgent ntfy.sh push notification for top-tier signals (score ≥ 95).
+// Requires NTFY_TOPIC env secret. Runs in addition to Telegram.
+async function sendNtfyAlert(env, symbol, timeframe, score) {
+  const topic = env.NTFY_TOPIC;
+  if (!topic) {
+    console.log('⚠️ ntfy not configured (NTFY_TOPIC missing)');
+    return false;
+  }
+  try {
+    const res = await fetch(`https://ntfy.sh/${topic}`, {
+      method: 'POST',
+      headers: {
+        'Title':    `🚨 WAVESCOUT ${score}/100`,
+        'Priority': 'urgent',
+        'Tags':     'rotating_light,chart_with_upwards_trend',
+        'Content-Type': 'text/plain',
+      },
+      body: `${symbol} | ${timeframe} | Score: ${score}`,
+    });
+    console.log('🔔 ntfy sent:', res.status);
+    return res.ok;
+  } catch (error) {
+    console.error('❌ ntfy error:', error);
+    return false;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // FIELD ENCRYPTION (AES-256-GCM via env.ENCRYPTION_KEY secret)
 // Set ENCRYPTION_KEY to a random 32-char string in Cloudflare Secrets.
 // Without it, sensitive fields are stored as-is with a warning.
@@ -1300,6 +1331,13 @@ async function ensureTables(env) {
       catch (_) {}
     }
 
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS alert_dedup (
+        dedup_key TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL
+      )
+    `).run();
+
     _tablesReady = true;
   } catch (error) {
     console.error('❌ ensureTables error:', error.message);
@@ -1725,19 +1763,27 @@ async function processSignal(env, signal) {
   let telegramSent   = 0;
   let telegramReason = 'below_threshold';
 
-  // Worker-seitiger Cooldown: gleiches Symbol innerhalb von 15 Minuten nicht doppelt senden.
-  // Verhindert Spam wenn TradingView mehrere gequeute Alerts auf einmal feuert.
+  // Atomic dedup: INSERT OR IGNORE into alert_dedup using a 15-min window key.
+  // Because INSERT is atomic in SQLite/D1, only the first concurrent request
+  // succeeds — all others (including TradingView retries / queued duplicates)
+  // get changes=0 and are suppressed. This replaces the old SELECT-before-INSERT
+  // which had a race window that caused ~4x duplicate alerts.
   if (shouldNotify && !isTest) {
     try {
-      const recent = await env.DB.prepare(
-        `SELECT created_at FROM signals WHERE symbol = ? AND telegram_sent = 1 AND created_at > ? ORDER BY created_at DESC LIMIT 1`
-      ).bind(signal.symbol, Date.now() - 15 * 60 * 1000).first();
-      if (recent) {
-        const agoMin = ((Date.now() - recent.created_at) / 60000).toFixed(1);
-        console.log(`🔕 Telegram Cooldown: ${signal.symbol} bereits vor ${agoMin}min gesendet → übersprungen`);
+      const windowKey = Math.floor(Date.now() / (15 * 60 * 1000));
+      const dedupKey  = `${signal.symbol}|${signal.timeframe || ''}|${windowKey}`;
+      const ins = await env.DB.prepare(
+        `INSERT OR IGNORE INTO alert_dedup (dedup_key, created_at) VALUES (?, ?)`
+      ).bind(dedupKey, Date.now()).run();
+      if (ins.meta?.changes === 0) {
+        console.log(`🔕 Dedup: ${signal.symbol} ${signal.timeframe} already alerted in this 15-min window`);
         shouldNotify = false;
         telegramReason = 'cooldown_15min';
       }
+      // Prune entries older than 2h to keep table lean
+      await env.DB.prepare(
+        `DELETE FROM alert_dedup WHERE created_at < ?`
+      ).bind(Date.now() - 2 * 60 * 60 * 1000).run();
     } catch (_) {}
   }
 
@@ -1778,6 +1824,10 @@ async function processSignal(env, signal) {
       });
       const sent = await withTimeout(sendTelegramMessage(env, telegramMessage), TELEGRAM_TIMEOUT_MS, false);
       if (sent) telegramSent = 1;
+    }
+    // ntfy.sh push for top-tier signals (score ≥ 95), runs in addition to Telegram
+    if (!isTest && analysis.score >= 95) {
+      await withTimeout(sendNtfyAlert(env, signal.symbol, signal.timeframe || '', analysis.score), 5000, false);
     }
   }
 
