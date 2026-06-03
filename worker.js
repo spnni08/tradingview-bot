@@ -4221,23 +4221,18 @@ function _renderSettingsNotifications() {
       <label style="display:flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" id="notifBrowser" checked> Browser-Benachrichtigungen</label>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" id="notifTelegram" checked> Telegram-Benachrichtigungen</label>
     </div>
-    <div style="display:flex;gap:12px;align-items:center">
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px">
       <button onclick="saveNotifSettings()" style="padding:8px 16px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-main)">Speichern</button>
-      <span id="notifSaved" style="display:none;color:var(--win);font-size:12px">Gespeichert ✓</span>
+      <span id="notifSaved" style="display:none;color:var(--win);font-size:12px">Gespeichert &#10003;</span>
     </div>
-  </div>
-</div>
-<div class="card" style="margin-top:16px">
-  <div class="card-head">${_svgIcon('bell', 16)}<h3>ntfy.sh Push</h3></div>
-  <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
-    <div style="font-size:13px;color:var(--text-secondary)">
-      Sendet ein Echtzeit-Push für Signale mit Score ≥ 95 via <b>ntfy.sh</b>.<br>
-      Benötigt das Worker-Secret <code>NTFY_TOPIC</code>.
-    </div>
-    <div style="display:flex;gap:10px;align-items:center">
-      <button id="ntfy-test-btn" onclick="(async()=>{const btn=document.getElementById('ntfy-test-btn');const res=document.getElementById('ntfy-test-result');btn.disabled=true;try{const r=await fetch('/admin/test-ntfy',{credentials:'include'});const d=await r.json();res.textContent=d.success?'ntfy OK ✓':(d.message||'Fehler');res.style.color=d.success?'var(--win)':'var(--loss)';}catch(e){res.textContent=e.message;res.style.color='var(--loss)';}finally{btn.disabled=false;}})()"
-        style="padding:7px 14px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;cursor:pointer;font-family:var(--font-main)">🔔 Test senden</button>
-      <div id="ntfy-test-result" style="font-size:13px"></div>
+    <div style="border-top:1px solid var(--border);padding-top:16px">
+      <div style="font-size:11px;color:var(--text-tertiary);font-weight:700;letter-spacing:.08em;margin-bottom:10px">NTFY.SH TEST</div>
+      <div style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">Sendet einen Test-Push via ntfy.sh (Score&nbsp;97, BTCUSDT). Benoetigt das Secret <code>NTFY_TOPIC</code>.</div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <button id="ntfy-test-btn" onclick="(async()=>{const btn=document.getElementById('ntfy-test-btn');const res=document.getElementById('ntfy-test-result');btn.disabled=true;btn.textContent='Sende...';try{const r=await fetch('/admin/test-ntfy',{credentials:'include'});const d=await r.json();res.textContent=d.success?'ntfy OK ✓':(d.message||'Fehler');res.style.color=d.success?'var(--win)':'var(--loss)';}catch(e){res.textContent=e.message;res.style.color='var(--loss)';}finally{btn.disabled=false;btn.textContent='ntfy Test senden';}})()"
+          style="padding:7px 14px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;cursor:pointer;font-family:var(--font-main)">ntfy Test senden</button>
+        <span id="ntfy-test-result" style="font-size:13px"></span>
+      </div>
     </div>
   </div>
 </div>
