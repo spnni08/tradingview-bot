@@ -1847,7 +1847,7 @@ async function processSignal(env, signal) {
       created_at, outcome
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?
     )
   `).bind(
@@ -4224,6 +4224,20 @@ function _renderSettingsNotifications() {
     <div style="display:flex;gap:12px;align-items:center">
       <button onclick="saveNotifSettings()" style="padding:8px 16px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-main)">Speichern</button>
       <span id="notifSaved" style="display:none;color:var(--win);font-size:12px">Gespeichert ✓</span>
+    </div>
+  </div>
+</div>
+<div class="card" style="margin-top:16px">
+  <div class="card-head">${_svgIcon('bell', 16)}<h3>ntfy.sh Push</h3></div>
+  <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+    <div style="font-size:13px;color:var(--text-secondary)">
+      Sendet ein Echtzeit-Push für Signale mit Score ≥ 95 via <b>ntfy.sh</b>.<br>
+      Benötigt das Worker-Secret <code>NTFY_TOPIC</code>.
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <button onclick="adminAction('/admin/test-ntfy','GET','ntfy-test-result',d=>d.success?'ntfy OK ✓':(d.message||'Fehler'),d=>d.success)"
+        style="padding:7px 14px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;cursor:pointer;font-family:var(--font-main)">🔔 Test senden</button>
+      <div id="ntfy-test-result" style="font-size:13px"></div>
     </div>
   </div>
 </div>
