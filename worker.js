@@ -4382,7 +4382,7 @@ function _renderSettingsAdmin({ users = [], sessions = [], systemStatus = {} }) 
 
   const serviceRows = [
     ['Datenbank (D1)', st.db], ['Telegram Bot', st.telegram],
-    ['Anthropic AI', st.anthropic], ['Webhook Secret', st.webhook],
+    ['ntfy.sh', st.ntfy], ['Anthropic AI', st.anthropic], ['Webhook Secret', st.webhook],
   ].map(([label, ok]) => `<div style="display:flex;justify-content:space-between;align-items:center">
     <span style="font-size:13px;color:var(--text-secondary)">${label}</span>
     <div style="display:flex;align-items:center;gap:8px">
@@ -4493,6 +4493,26 @@ function _renderSettingsAdmin({ users = [], sessions = [], systemStatus = {} }) 
           <button onclick="sendTgCustom()" style="padding:7px 14px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;cursor:pointer;font-family:var(--font-main)">📤 Senden</button>
         </div>
         <div id="tg-send-result" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">${_svgIcon('bell', 16)}<h3>ntfy.sh Integration</h3>
+      <div class="actions">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:8px;height:8px;border-radius:50%;background:${dotColor(st.ntfy)}${dotGlow(st.ntfy)}"></div>
+          <span style="font-size:12px;color:${dotColor(st.ntfy)};font-weight:600">${st.ntfy ? 'OK' : 'Nicht konfiguriert'}</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+      <div style="font-size:13px;color:var(--text-secondary)">Sendet Push-Benachrichtigungen für Signale mit Score ≥ 95 via <b>ntfy.sh</b>.<br>Setzt das Worker-Secret <code>NTFY_TOPIC</code> voraus.</div>
+      <div>
+        <div style="font-size:11px;color:var(--text-tertiary);font-weight:700;letter-spacing:.08em;margin-bottom:10px">SCHNELLTEST</div>
+        <button onclick="adminAction('/admin/test-ntfy','GET','ntfy-result',d=>d.success?'ntfy OK ✓':(d.message||'Fehler'),d=>d.success)"
+          style="padding:7px 14px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;cursor:pointer;font-family:var(--font-main)">🔔 ntfy Test senden</button>
+        <div id="ntfy-result" style="margin-top:8px"></div>
       </div>
     </div>
   </div>
@@ -5016,6 +5036,7 @@ export default {
               systemStatus: {
                 db: dbOk,
                 telegram: !!(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID),
+                ntfy: !!env.NTFY_TOPIC,
                 anthropic: !!env.ANTHROPIC_API_KEY,
                 webhook: !!env.WEBHOOK_SECRET,
                 tables: tblCounts,
@@ -5460,6 +5481,14 @@ export default {
         return jsonResponse({ success, message: success ? 'Telegram-Nachricht gesendet!' : 'Fehler beim Senden' });
       }
 
+      if (request.method === "GET" && url.pathname === "/admin/test-ntfy") {
+        const session = await validateSession(env, request);
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        if (!env.NTFY_TOPIC) return jsonResponse({ success: false, message: 'NTFY_TOPIC nicht konfiguriert' });
+        const success = await sendNtfyAlert(env, 'BTCUSDT', '15', 97);
+        return jsonResponse({ success, message: success ? 'ntfy-Nachricht gesendet!' : 'Fehler beim Senden' });
+      }
+
       // Send custom Telegram message
       if (request.method === "POST" && url.pathname === "/admin/telegram/send") {
         const session = await validateSession(env, request);
@@ -5490,6 +5519,7 @@ export default {
         return jsonResponse({
           db: dbOk,
           telegram: !!(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID),
+          ntfy: !!env.NTFY_TOPIC,
           anthropic: !!env.ANTHROPIC_API_KEY,
           webhook: !!env.WEBHOOK_SECRET,
           tables: tableCounts,
