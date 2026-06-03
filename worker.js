@@ -4235,7 +4235,7 @@ function _renderSettingsNotifications() {
       Benötigt das Worker-Secret <code>NTFY_TOPIC</code>.
     </div>
     <div style="display:flex;gap:10px;align-items:center">
-      <button onclick="adminAction('/admin/test-ntfy','GET','ntfy-test-result',d=>d.success?'ntfy OK ✓':(d.message||'Fehler'),d=>d.success)"
+      <button id="ntfy-test-btn" onclick="(async()=>{const btn=document.getElementById('ntfy-test-btn');const res=document.getElementById('ntfy-test-result');btn.disabled=true;try{const r=await fetch('/admin/test-ntfy',{credentials:'include'});const d=await r.json();res.textContent=d.success?'ntfy OK ✓':(d.message||'Fehler');res.style.color=d.success?'var(--win)':'var(--loss)';}catch(e){res.textContent=e.message;res.style.color='var(--loss)';}finally{btn.disabled=false;}})()"
         style="padding:7px 14px;border-radius:8px;background:var(--blue-500);border:none;color:#fff;font-size:13px;cursor:pointer;font-family:var(--font-main)">🔔 Test senden</button>
       <div id="ntfy-test-result" style="font-size:13px"></div>
     </div>
