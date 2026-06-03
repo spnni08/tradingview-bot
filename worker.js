@@ -4804,7 +4804,7 @@ export default {
 
       // ── HTML PAGES (HTMX MPA) ─────────────────────────────────
       const isHtmx    = request.headers.get('HX-Request') === 'true';
-      const htmlHdrs  = { 'Content-Type': 'text/html; charset=utf-8', ...securityHeaders };
+      const htmlHdrs  = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...securityHeaders };
       const redirect  = (loc, status = 302) => new Response(null, { status, headers: { Location: loc } });
 
       if (request.method === 'GET' && url.pathname === '/styles.css') {
