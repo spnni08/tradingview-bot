@@ -1250,3 +1250,120 @@ label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
   letter-spacing: 0.08em;
   color: var(--win);
 }
+
+/* ── Mobile top bar (hidden on desktop) ─────────────────────── */
+
+.mobile-topbar {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 52px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+  padding: 0 12px;
+  z-index: 450;
+  gap: 10px;
+}
+
+.mobile-topbar-title {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.07em;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.mobile-hamburger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.mobile-hamburger:hover { background: var(--bg-3); color: var(--text-primary); }
+
+/* Overlay behind open mobile sidebar */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 480;
+  animation: fadeIn 0.18s ease;
+}
+
+/* ── Mobile breakpoint (≤768px) ─────────────────────────────── */
+
+@media (max-width: 768px) {
+  /* Hide desktop sidebar by default — slides in from left when .mobile-open */
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform 0.25s ease, width 0.2s ease;
+    z-index: 500;
+    /* Keep the fixed sidebar above the overlay */
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  /* Main content takes full width; top padding reserves space for topbar */
+  .app-main {
+    margin-left: 0 !important;
+    padding-top: 52px;
+  }
+
+  /* Show the mobile topbar */
+  .mobile-topbar {
+    display: flex;
+  }
+
+  /* Show overlay when sidebar is open */
+  .sidebar-overlay {
+    display: block;
+  }
+
+  /* Settings page: collapse two-column to single column */
+  .settings-layout {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Settings sub-nav scrolls horizontally on mobile */
+  .settings-sidenav {
+    flex-direction: row !important;
+    overflow-x: auto;
+    position: static !important;
+    padding-bottom: 4px;
+    gap: 4px !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .settings-sidenav::-webkit-scrollbar { display: none; }
+
+  .settings-sidenav button {
+    flex-shrink: 0;
+    white-space: nowrap;
+    padding: 7px 12px !important;
+  }
+
+  /* Tighten content padding on small screens */
+  .content { padding: 16px 12px; }
+
+  /* Admin sub-tab nav wraps better */
+  .admin-sub-nav { gap: 4px !important; }
+  .admin-sub-nav button { padding: 5px 10px !important; font-size: 11px !important; }
+
+  /* Input grids collapse on mobile */
+  .input-grid-2 { grid-template-columns: 1fr !important; }
+}

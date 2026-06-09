@@ -5498,6 +5498,28 @@ export default {
         return jsonResponse({ success, message: success ? 'ntfy-Nachricht gesendet!' : 'Fehler beim Senden' });
       }
 
+      // Test signal — sends through real notification pipeline without DB entry
+      if (request.method === "POST" && url.pathname === "/admin/test-signal") {
+        const session = await validateSession(env, request);
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        const body = await request.json().catch(() => ({}));
+        const score     = Math.max(1, Math.min(100, parseInt(body.score) || 97));
+        const symbol    = ((body.symbol || 'BTCUSDT') + '').toUpperCase();
+        const direction = ((body.direction || 'LONG') + '').toUpperCase();
+        const out = { score, symbol, direction, telegram: false, ntfy: false, errors: [] };
+        if (score >= 80) {
+          const arrow = direction === 'LONG' ? '📈' : '📉';
+          const msg = `🧪 <b>TEST-SIGNAL (Admin)</b>\n\n${arrow} <b>${symbol}</b> ${direction}\nScore: <b>${score}/100</b>\n\n<i>Manuell aus dem Admin-Panel gesendet.</i>`;
+          try { out.telegram = await withTimeout(sendTelegramMessage(env, msg), TELEGRAM_TIMEOUT_MS, false); }
+          catch (e) { out.errors.push('Telegram: ' + e.message); }
+        }
+        if (score >= 95) {
+          try { out.ntfy = await withTimeout(sendNtfyAlert(env, symbol, '', score), 5000, false); }
+          catch (e) { out.errors.push('ntfy: ' + e.message); }
+        }
+        return jsonResponse({ success: true, ...out });
+      }
+
       // Send custom Telegram message
       if (request.method === "POST" && url.pathname === "/admin/telegram/send") {
         const session = await validateSession(env, request);
