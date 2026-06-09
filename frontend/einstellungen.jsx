@@ -279,154 +279,17 @@ function AdminWebhookTester() {
   );
 }
 
-// ─── Admin: Test Signal Panel ─────────────────────────────────
-
-function AdminTestSignalPanel() {
-  const [score,     setScore]     = useState(97);
-  const [symbol,    setSymbol]    = useState('BTCUSDT');
-  const [direction, setDirection] = useState('LONG');
-  const [loading,   setLoading]   = useState(false);
-  const [result,    setResult]    = useState(null);
-
-  const send = async () => {
-    setLoading(true); setResult(null);
-    try {
-      const res = await fetch(`${API_URL}/admin/test-signal`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ score, symbol, direction }),
-      });
-      setResult(await res.json());
-    } catch (e) { setResult({ success: false, error: e.message }); }
-    setLoading(false);
-  };
-
-  const willTelegram = score >= 80;
-  const willNtfy     = score >= 95;
-
-  return (
-    <div className="card">
-      <div className="card-head"><Icon name="bolt" className="ico"/><h3>Test-Signal senden</h3></div>
-      <div className="card-body">
-        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.6 }}>
-          Sendet ein simuliertes Signal durch die Benachrichtigungs-Pipeline.
-          Kein Datenbankeintrag wird erstellt.
-        </p>
-
-        <div style={{ marginBottom: 20 }}>
-          <label style={{ display: 'block', marginBottom: 8, fontSize: 13, fontWeight: 500 }}>
-            Score: <span style={{ color: 'var(--blue-500)', fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 700 }}>{score}</span><span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>/100</span>
-          </label>
-          <input type="range" min={1} max={100} value={score}
-            onChange={e => setScore(parseInt(e.target.value))}
-            style={{ width: '100%', maxWidth: 360, marginBottom: 8 }}/>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {[70, 80, 90, 95, 97, 100].map(v => (
-              <button key={v}
-                className={`btn btn-sm${score === v ? ' btn-primary' : ' btn-ghost'}`}
-                onClick={() => setScore(v)}
-                style={{ padding: '3px 10px', fontSize: 12 }}>
-                {v}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16, maxWidth: 360 }}>
-          <div>
-            <label style={{ display: 'block', marginBottom: 6, fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '.08em' }}>SYMBOL</label>
-            <select value={symbol} onChange={e => setSymbol(e.target.value)} className="input" style={{ width: '100%' }}>
-              {['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'].map(s => <option key={s}>{s}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={{ display: 'block', marginBottom: 6, fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '.08em' }}>RICHTUNG</label>
-            <select value={direction} onChange={e => setDirection(e.target.value)} className="input" style={{ width: '100%' }}>
-              <option>LONG</option>
-              <option>SHORT</option>
-            </select>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-          {[
-            ['Telegram', willTelegram, '≥80'],
-            ['ntfy.sh',  willNtfy,    '≥95'],
-          ].map(([label, active, threshold]) => (
-            <span key={label} style={{
-              fontSize: 12, padding: '4px 12px', borderRadius: 20,
-              background: active ? 'rgba(16,185,129,0.1)' : 'var(--bg-2)',
-              border: `1px solid ${active ? 'rgba(16,185,129,0.35)' : 'var(--border)'}`,
-              color: active ? 'var(--win)' : 'var(--text-tertiary)',
-              fontWeight: active ? 600 : 400,
-            }}>
-              {active ? '✓' : '✗'} {label} ({threshold})
-            </span>
-          ))}
-        </div>
-
-        <button className="btn btn-primary" onClick={send} disabled={loading}>
-          {loading ? <div className="spinner-sm"/> : <Icon name="bolt" size={14}/>}
-          {loading ? 'Sende…' : 'Test-Signal senden'}
-        </button>
-
-        {result && (
-          <div style={{ marginTop: 14, padding: '12px 16px', background: result.success ? 'var(--bg-success)' : 'var(--bg-error)', borderRadius: 10, border: `1px solid ${result.success ? 'rgba(16,185,129,.3)' : 'rgba(240,68,68,.3)'}` }}>
-            {result.error ? (
-              <div style={{ fontSize: 13, color: 'var(--loss)' }}>Fehler: {result.error}</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ fontWeight: 600, color: 'var(--win)', fontSize: 13 }}>Signal gesendet — Score {result.score} · {result.symbol} {result.direction}</div>
-                <div style={{ fontSize: 13 }}>Telegram: <span style={{ color: result.telegram ? 'var(--win)' : result.score >= 80 ? 'var(--loss)' : 'var(--text-tertiary)', fontWeight: 600 }}>{result.telegram ? '✓ gesendet' : result.score >= 80 ? '✗ Fehler' : '– (Score < 80)'}</span></div>
-                <div style={{ fontSize: 13 }}>ntfy.sh: <span style={{ color: result.ntfy ? 'var(--win)' : result.score >= 95 ? 'var(--loss)' : 'var(--text-tertiary)', fontWeight: 600 }}>{result.ntfy ? '✓ gesendet' : result.score >= 95 ? '✗ Fehler' : '– (Score < 95)'}</span></div>
-                {result.errors?.length > 0 && (
-                  <div style={{ fontSize: 12, color: 'var(--wait)', marginTop: 4, padding: '6px 10px', background: 'rgba(245,158,11,0.08)', borderRadius: 6, border: '1px solid rgba(245,158,11,0.2)' }}>
-                    ⚠ {result.errors.join(' · ')}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Admin: Users Panel ───────────────────────────────────────
-
-function AdminUsersPanel({ user }) {
-  return <AdminPage user={user}/>;
-}
-
-// ─── Admin: Generic placeholder card ─────────────────────────
-
-function AdminPlaceholder({ icon, title, description }) {
-  return (
-    <div className="card">
-      <div className="card-head"><Icon name={icon} className="ico"/><h3>{title}</h3></div>
-      <div className="card-body">
-        <p style={{ fontSize: 13, color: 'var(--text-tertiary)', margin: 0, lineHeight: 1.6 }}>{description}</p>
-      </div>
-    </div>
-  );
-}
-
 // ─── Admin Section (internal sub-nav) ────────────────────────
 
 const ADMIN_SUBS = [
-  { id: 'tradecheck',  label: 'Trade Check',    icon: 'target'  },
-  { id: 'testsignal',  label: 'Test-Signal',    icon: 'bolt'    },
-  { id: 'users',       label: 'User & Rollen',  icon: 'users'   },
-  { id: 'webhook',     label: 'Webhook Tester', icon: 'signal'  },
-  { id: 'health',      label: 'System Health',  icon: 'chart'   },
-  { id: 'logs',        label: 'Logs / Debug',   icon: 'book'    },
-  { id: 'secrets',     label: 'Broker Secrets', icon: 'key'     },
+  { id: 'testsignal', label: 'Test-Signal',    icon: 'bolt'    },
+  { id: 'tradecheck', label: 'Trade Check',    icon: 'target'  },
+  { id: 'webhook',    label: 'Webhook Tester', icon: 'signal'  },
+  { id: 'system',     label: 'System',         icon: 'settings'},
 ];
 
 function AdminSection({ user }) {
-  const [sub, setSub] = useState('tradecheck');
+  const [sub, setSub] = useState('testsignal');
 
   return (
     <div>
@@ -449,13 +312,10 @@ function AdminSection({ user }) {
           </button>
         ))}
       </div>
-      {sub === 'tradecheck'  && <AdminTradeCheckPanel/>}
-      {sub === 'testsignal'  && <AdminTestSignalPanel/>}
-      {sub === 'users'       && <AdminUsersPanel user={user}/>}
-      {sub === 'webhook'     && <AdminWebhookTester/>}
-      {sub === 'health'      && <AdminPlaceholder icon="chart"  title="System Health"  description="Datenbankstatus, Worker-Metriken und Systeminfo — in Entwicklung."/>}
-      {sub === 'logs'        && <AdminPlaceholder icon="book"   title="Logs / Debug"   description="Worker-Logs und Debug-Ausgaben — im Cloudflare Dashboard unter Workers → Logs einsehbar."/>}
-      {sub === 'secrets'     && <AdminPlaceholder icon="key"    title="Broker Secrets" description="API-Keys werden sicher im Browser-LocalStorage gespeichert. Server-seitige Secret-Verwaltung in Entwicklung."/>}
+      {sub === 'testsignal' && <AdminTestSignalPanel/>}
+      {sub === 'tradecheck' && <AdminTradeCheckPanel/>}
+      {sub === 'webhook'    && <AdminWebhookTester/>}
+      {sub === 'system'     && <SystemSection/>}
     </div>
   );
 }
@@ -579,6 +439,8 @@ function TradingSection({ settings, setSettings, onSave, saved }) {
 function NotificationsSection({ settings, setSettings, onSave, saved }) {
   const [ntfyLoading, setNtfyLoading] = useState(false);
   const [ntfyResult,  setNtfyResult]  = useState(null);
+  const [pushTestLoading, setPushTestLoading] = useState(false);
+  const [pushTestResult,  setPushTestResult]  = useState(null);
   const [pushState,   setPushState]   = useState('checking'); // checking | unavailable | unsubscribed | subscribing | subscribed | error
   const [pushMsg,     setPushMsg]     = useState('');
   const [vapidKey,    setVapidKey]    = useState(null);
@@ -651,6 +513,18 @@ function NotificationsSection({ settings, setSettings, onSave, saved }) {
       setNtfyResult({ ok: false, msg: e.message });
     }
     setNtfyLoading(false);
+  };
+
+  const testWebPush = async () => {
+    setPushTestLoading(true); setPushTestResult(null);
+    try {
+      const res = await fetch(`${API_URL}/admin/test-push`, { method: 'POST', credentials: 'include' });
+      const d = await res.json();
+      setPushTestResult({ ok: d.success, msg: d.success ? `Push gesendet (${d.sent || 0} Geräte)` : (d.error || 'Fehler') });
+    } catch (e) {
+      setPushTestResult({ ok: false, msg: e.message });
+    }
+    setPushTestLoading(false);
   };
 
   const pushDot = pushState === 'subscribed' ? 'var(--win)' : pushState === 'unavailable' || pushState === 'error' ? 'var(--loss)' : 'var(--text-quaternary)';
@@ -734,6 +608,22 @@ function NotificationsSection({ settings, setSettings, onSave, saved }) {
               {ntfyResult && (
                 <span style={{ fontSize: 13, color: ntfyResult.ok ? 'var(--win)' : 'var(--loss)' }}>
                   {ntfyResult.msg}
+                </span>
+              )}
+            </div>
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 16 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 10 }}>BROWSER PUSH TEST</div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>
+              Sendet eine Test-Benachrichtigung an alle aktiven Browser-Push-Subscriptions.
+            </div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <button className="btn btn-primary btn-sm" onClick={testWebPush} disabled={pushTestLoading}>
+                {pushTestLoading ? 'Sende...' : <><Icon name="bell" size={13}/> Push Test senden</>}
+              </button>
+              {pushTestResult && (
+                <span style={{ fontSize: 13, color: pushTestResult.ok ? 'var(--win)' : 'var(--loss)' }}>
+                  {pushTestResult.msg}
                 </span>
               )}
             </div>
@@ -1059,7 +949,7 @@ const EinstellungenPage = ({ user }) => {
 
   useEffect(() => {
     const valid = ['account','design','trading','notifications','broker'];
-    if (isAdmin) valid.push('admin', 'system');
+    if (isAdmin) valid.push('admin');
     const h = (e) => { if (valid.includes(e.detail)) setActiveSection(e.detail); };
     window.addEventListener('wavescout-settings-section', h);
     return () => window.removeEventListener('wavescout-settings-section', h);
@@ -1078,8 +968,7 @@ const EinstellungenPage = ({ user }) => {
     { id: 'notifications', label: 'Benachrichtigungen', icon: 'bell'     },
     { id: 'broker',        label: 'Broker / API',       icon: 'key'      },
     ...(isAdmin ? [
-      { id: 'admin',  label: 'Admin',  icon: 'shield',   adminOnly: true },
-      { id: 'system', label: 'System', icon: 'settings', adminOnly: true },
+      { id: 'admin', label: 'Admin', icon: 'shield', adminOnly: true },
     ] : []),
   ];
 
@@ -1091,7 +980,6 @@ const EinstellungenPage = ({ user }) => {
       case 'notifications': return <NotificationsSection settings={settings} setSettings={setSettings} onSave={handleSave} saved={saved}/>;
       case 'broker':        return <BrokerSection settings={settings} setSettings={setSettings} onSave={handleSave} saved={saved} showBrokerModal={showBrokerModal} setShowBrokerModal={setShowBrokerModal}/>;
       case 'admin':         return isAdmin ? <AdminSection user={user}/> : null;
-      case 'system':        return isAdmin ? <SystemSection/> : null;
       default:              return <AccountSection user={user}/>;
     }
   };
@@ -1103,10 +991,10 @@ const EinstellungenPage = ({ user }) => {
         <p className="subtitle">Konfiguration &amp; Verwaltung</p>
       </div>
 
-      <div className="settings-layout" style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 20, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 20, alignItems: 'start' }}>
 
         {/* Left sidebar nav */}
-        <div className="settings-sidenav" style={{ display: 'flex', flexDirection: 'column', gap: 2, position: 'sticky', top: 20 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, position: 'sticky', top: 20 }}>
           {SECTIONS.map((sec, i) => {
             const showDivider = sec.adminOnly && (i === 0 || !SECTIONS[i - 1].adminOnly);
             return (
