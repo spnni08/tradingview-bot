@@ -22,8 +22,3 @@ crons = [
   "0 */3 * * *", # 3h profit-close: close open trades that are in profit after 3h
   "0 */4 * * *"  # TP/SL evaluation every 4 hours
 ]
-
-# Route configuration
-routes = [
-  { pattern = "tradingview-bot.spnn08.workers.dev", zone_name = "spnn08.workers.dev" }
-]
