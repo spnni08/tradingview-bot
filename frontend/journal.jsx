@@ -75,44 +75,47 @@ function CoinSidebar({ symbols, selected, statuses, onSelect, onRemove, newSymbo
             </div>
           )}
 
-          {symbols.map(s => (
-            <div
-              key={s}
-              onMouseEnter={() => setHovered(s)}
-              onMouseLeave={() => setHovered(null)}
-              onClick={() => onSelect(s)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px',
-                borderRadius: 7, cursor: 'pointer', marginBottom: 2,
-                background: selected === s ? 'rgba(59,130,246,.12)' : hovered === s ? 'var(--bg-2)' : 'transparent',
-                transition: 'background .1s',
-              }}
-            >
-              <span style={{
-                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                background: statuses[s] ? 'var(--win)' : 'rgba(240,68,68,.6)',
-              }}/>
-              <span style={{
-                flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600,
-                color: selected === s ? 'var(--blue-500)' : 'var(--text-primary)',
-              }}>
-                {s}
-              </span>
-              {hovered === s && (
-                <button
-                  onClick={e => { e.stopPropagation(); onRemove(s); }}
-                  style={{
-                    background: 'none', border: 'none', cursor: 'pointer',
-                    padding: '1px 5px', color: 'var(--text-tertiary)', fontSize: 14, lineHeight: 1,
-                    borderRadius: 4,
-                  }}
-                  title="Entfernen"
-                >
-                  ×
-                </button>
-              )}
-            </div>
-          ))}
+          <div className="journal-coin-list" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {symbols.map(s => (
+              <div
+                key={s}
+                className={`journal-coin-item${selected === s ? ' active' : ''}`}
+                onMouseEnter={() => setHovered(s)}
+                onMouseLeave={() => setHovered(null)}
+                onClick={() => onSelect(s)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px',
+                  borderRadius: 7, cursor: 'pointer',
+                  background: selected === s ? 'rgba(59,130,246,.12)' : hovered === s ? 'var(--bg-2)' : 'transparent',
+                  transition: 'background .1s',
+                }}
+              >
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                  background: statuses[s] ? 'var(--win)' : 'rgba(240,68,68,.6)',
+                }}/>
+                <span style={{
+                  flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600,
+                  color: selected === s ? 'var(--blue-500)' : 'var(--text-primary)',
+                }}>
+                  {s}
+                </span>
+                {hovered === s && (
+                  <button
+                    onClick={e => { e.stopPropagation(); onRemove(s); }}
+                    style={{
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      padding: '1px 5px', color: 'var(--text-tertiary)', fontSize: 14, lineHeight: 1,
+                      borderRadius: 4,
+                    }}
+                    title="Entfernen"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
 
           <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
             <div style={{ display: 'flex', gap: 6 }}>
@@ -984,10 +987,10 @@ const JournalPage = ({ user }) => {
         <p className="subtitle">Morgenroutine · Pre-Trade Checkliste · After-Trade Review</p>
       </div>
 
-      <div style={{ display: 'flex', gap: 'var(--gap)', alignItems: 'flex-start' }}>
+      <div className="journal-layout" style={{ display: 'flex', gap: 'var(--gap)', alignItems: 'flex-start' }}>
 
         {/* ── Coin Sidebar ──────────────────────────────────── */}
-        <div style={{ width: 200, flexShrink: 0 }}>
+        <div className="journal-sidebar" style={{ width: 200, flexShrink: 0 }}>
           <CoinSidebar
             symbols={symbols}
             selected={symbol}
