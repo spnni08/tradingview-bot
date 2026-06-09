@@ -1,0 +1,33 @@
+{
+  "name": "wavescout",
+  "version": "1.0.0",
+  "description": "WAVESCOUT – Crypto Signal Dashboard",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist":  "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron":         "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId":       "dev.wavescout.app",
+    "productName": "WAVESCOUT",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "icon.png"],
+    "mac": {
+      "category": "public.app-category.finance",
+      "identity": null,
+      "icon":     "icon.png",
+      "target": [
+        { "target": "dmg", "arch": ["universal"] }
+      ]
+    },
+    "dmg": {
+      "title":           "WAVESCOUT",
+      "backgroundColor": "#111827"
+    }
+  }
+}
