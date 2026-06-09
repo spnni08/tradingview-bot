@@ -362,7 +362,7 @@ const DashboardPage = ({ user, navigate }) => {
       </div>
 
       {/* Best signal + Market bias */}
-      <div className="grid grid-2" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
+      <div className="dash-top-grid">
         <BestSignalCard
           signal={bestSignal}
           onExecuteTrade={handleExecuteTrade}
@@ -376,7 +376,7 @@ const DashboardPage = ({ user, navigate }) => {
       <CryptoMarketRadar radar={radar}/>
 
       {/* KPI strip */}
-      <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+      <div className="dash-stats-grid">
         <StatCard
           label="Trades gesamt"
           value={(stats.totalTrades || 0).toString()}
@@ -663,7 +663,8 @@ const LatestTradesCard = ({ signals, onViewAll }) => {
           <button className="btn btn-sm btn-ghost" onClick={onViewAll}>Alle anzeigen →</button>
         </div>
       </div>
-      <div style={{ overflowX: 'auto' }}>
+      {/* Desktop table */}
+      <div className="signal-table-wrap" style={{ overflowX: 'auto' }}>
         <table className="tbl">
           <thead>
             <tr>
@@ -691,6 +692,31 @@ const LatestTradesCard = ({ signals, onViewAll }) => {
             ))}
           </tbody>
         </table>
+      </div>
+      {/* Mobile card list */}
+      <div className="signal-mobile-list">
+        {signals.map((s, i) => {
+          const sc = s.ai_score || 0;
+          const scoreColor = sc >= 90 ? 'var(--win)' : sc >= 75 ? 'var(--wait)' : 'var(--blue-400)';
+          const outcomeCls = s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait';
+          return (
+            <div key={i} className="signal-mobile-row">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <AssetChip symbol={s.symbol}/>
+                <span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: scoreColor, fontSize: 13, marginLeft: 4 }}>{sc}</span>
+                <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 2 }}>pts</span>
+                <span className={`badge ${outcomeCls}`} style={{ marginLeft: 'auto', fontSize: 10 }}>{s.outcome || 'OPEN'}</span>
+              </div>
+              <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>E&nbsp;${(s.ai_entry || s.price || 0).toFixed(2)}</span>
+                {s.ai_tp && <span style={{ color: 'var(--win)', fontFamily: 'var(--font-mono)' }}>TP&nbsp;${s.ai_tp.toFixed(2)}</span>}
+                {s.ai_sl && <span style={{ color: 'var(--loss)', fontFamily: 'var(--font-mono)' }}>SL&nbsp;${s.ai_sl.toFixed(2)}</span>}
+                <span style={{ marginLeft: 'auto' }}>{getTimeAgo(s.created_at)}</span>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
