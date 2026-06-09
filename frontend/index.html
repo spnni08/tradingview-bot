@@ -4,10 +4,21 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>WAVESCOUT</title>
+
+<!-- PWA -->
+<link rel="manifest" href="/manifest.json"/>
+<meta name="theme-color" content="#111827"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="WaveScout"/>
+<link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"/>
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="shared.css?v=398"/>
+<link rel="stylesheet" href="shared.css?v=399"/>
 </head>
 <body>
 
@@ -29,6 +40,12 @@
     }
     return _orig.call(this,resource,init);
   };
+  // Register service worker
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function() {
+      navigator.serviceWorker.register('/sw.js').catch(function() {});
+    });
+  }
 })();
 </script>
 <div id="root"></div>
@@ -38,19 +55,19 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
 <!-- Shell must load first (declares React hooks + shared components) -->
-<script type="text/babel" src="shell.jsx?v=398"></script>
+<script type="text/babel" src="shell.jsx?v=399"></script>
 
 <!-- Page components (no ReactDOM.createRoot — app.jsx handles that) -->
-<script type="text/babel" src="dashboard.jsx?v=398"></script>
-<script type="text/babel" src="journal.jsx?v=398"></script>
-<script type="text/babel" src="backtest.jsx?v=398"></script>
-<script type="text/babel" src="statistiken.jsx?v=398"></script>
-<script type="text/babel" src="einstellungen.jsx?v=398"></script>
-<script type="text/babel" src="news.jsx?v=398"></script>
-<script type="text/babel" src="admin.jsx?v=398"></script>
+<script type="text/babel" src="dashboard.jsx?v=399"></script>
+<script type="text/babel" src="journal.jsx?v=399"></script>
+<script type="text/babel" src="backtest.jsx?v=399"></script>
+<script type="text/babel" src="statistiken.jsx?v=399"></script>
+<script type="text/babel" src="einstellungen.jsx?v=399"></script>
+<script type="text/babel" src="news.jsx?v=399"></script>
+<script type="text/babel" src="admin.jsx?v=399"></script>
 
 <!-- Router — must load last -->
-<script type="text/babel" src="app.jsx?v=398"></script>
+<script type="text/babel" src="app.jsx?v=399"></script>
 
 </body>
 </html>
