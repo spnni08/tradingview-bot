@@ -1303,6 +1303,35 @@ label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
   animation: fadeIn 0.18s ease;
 }
 
+/* ── Dashboard grid classes (override inline styles for media queries) ── */
+
+.dash-top-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: var(--gap);
+  margin-bottom: var(--gap);
+}
+
+.dash-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--gap);
+  margin-bottom: var(--gap);
+}
+
+/* Desktop: signal table visible, mobile cards hidden */
+.signal-table-wrap  { display: block; }
+.signal-mobile-list { display: none; flex-direction: column; }
+
+.signal-mobile-row {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.signal-mobile-row:last-child { border-bottom: none; }
+
 /* ── Mobile breakpoint (≤768px) ─────────────────────────────── */
 
 @media (max-width: 768px) {
@@ -1311,7 +1340,6 @@ label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
     transform: translateX(-100%);
     transition: transform 0.25s ease, width 0.2s ease;
     z-index: 500;
-    /* Keep the fixed sidebar above the overlay */
   }
 
   .sidebar.mobile-open {
@@ -1333,6 +1361,14 @@ label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
   .sidebar-overlay {
     display: block;
   }
+
+  /* Dashboard: stack top cards, 2-col stats */
+  .dash-top-grid   { grid-template-columns: 1fr; }
+  .dash-stats-grid { grid-template-columns: 1fr 1fr; }
+
+  /* Signal table → hide on mobile, show cards instead */
+  .signal-table-wrap  { display: none; }
+  .signal-mobile-list { display: flex; }
 
   /* Settings page: collapse two-column to single column */
   .settings-layout {
@@ -1366,4 +1402,12 @@ label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
 
   /* Input grids collapse on mobile */
   .input-grid-2 { grid-template-columns: 1fr !important; }
+
+  /* Portfolio card: wrap stats on small screens */
+  .portfolio-card .card-body > div:first-child {
+    gap: 16px;
+  }
+
+  /* Page header: hide some detail text on mobile */
+  .page-header .subtitle { font-size: 11px; }
 }
