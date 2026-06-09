@@ -5510,12 +5510,28 @@ export default {
         if (score >= 80) {
           const arrow = direction === 'LONG' ? '📈' : '📉';
           const msg = `🧪 <b>TEST-SIGNAL (Admin)</b>\n\n${arrow} <b>${symbol}</b> ${direction}\nScore: <b>${score}/100</b>\n\n<i>Manuell aus dem Admin-Panel gesendet.</i>`;
-          try { out.telegram = await withTimeout(sendTelegramMessage(env, msg), TELEGRAM_TIMEOUT_MS, false); }
+          try { out.telegram = await sendTelegramMessage(env, msg); }
           catch (e) { out.errors.push('Telegram: ' + e.message); }
         }
         if (score >= 95) {
-          try { out.ntfy = await withTimeout(sendNtfyAlert(env, symbol, '', score), 5000, false); }
-          catch (e) { out.errors.push('ntfy: ' + e.message); }
+          if (!env.NTFY_TOPIC) {
+            out.errors.push('NTFY_TOPIC nicht konfiguriert');
+          } else {
+            try {
+              const ntfyRes = await fetch(`https://ntfy.sh/${env.NTFY_TOPIC}`, {
+                method: 'POST',
+                headers: {
+                  'Title': `🧪 TEST ${score}/100`,
+                  'Priority': 'default',
+                  'Tags': 'test_tube,chart_with_upwards_trend',
+                  'Content-Type': 'text/plain',
+                },
+                body: `TEST: ${symbol} ${direction} | Score: ${score}`,
+              });
+              out.ntfy = ntfyRes.ok;
+              if (!ntfyRes.ok) out.errors.push(`ntfy: HTTP ${ntfyRes.status}`);
+            } catch (e) { out.errors.push('ntfy: ' + e.message); }
+          }
         }
         return jsonResponse({ success: true, ...out });
       }
