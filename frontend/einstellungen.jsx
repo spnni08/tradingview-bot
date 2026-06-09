@@ -460,6 +460,21 @@ function TradingSection({ settings, setSettings, onSave, saved }) {
 // ─── Notifications Section ────────────────────────────────────
 
 function NotificationsSection({ settings, setSettings, onSave, saved }) {
+  const [ntfyLoading, setNtfyLoading] = useState(false);
+  const [ntfyResult,  setNtfyResult]  = useState(null);
+
+  const testNtfy = async () => {
+    setNtfyLoading(true); setNtfyResult(null);
+    try {
+      const res = await fetch(`${API_URL}/admin/test-ntfy`, { credentials: 'include' });
+      const d = await res.json();
+      setNtfyResult({ ok: d.success, msg: d.success ? 'ntfy OK ✓' : (d.message || 'Fehler') });
+    } catch (e) {
+      setNtfyResult({ ok: false, msg: e.message });
+    }
+    setNtfyLoading(false);
+  };
+
   return (
     <div className="card">
       <div className="card-head"><Icon name="bell" className="ico"/><h3>Benachrichtigungen</h3></div>
@@ -475,7 +490,7 @@ function NotificationsSection({ settings, setSettings, onSave, saved }) {
             </label>
           ))}
         </div>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 20 }}>
           <button className="btn btn-primary btn-sm" onClick={onSave}>
             <Icon name="check" size={13}/> Speichern
           </button>
@@ -484,6 +499,22 @@ function NotificationsSection({ settings, setSettings, onSave, saved }) {
               <Icon name="check" size={12}/> Gespeichert
             </span>
           )}
+        </div>
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 10 }}>NTFY.SH TEST</div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>
+            Sendet einen Test-Push via ntfy.sh (Score&nbsp;97, BTCUSDT). Benötigt das Secret <code>NTFY_TOPIC</code>.
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button className="btn btn-primary btn-sm" onClick={testNtfy} disabled={ntfyLoading}>
+              {ntfyLoading ? 'Sende...' : 'ntfy Test senden'}
+            </button>
+            {ntfyResult && (
+              <span style={{ fontSize: 13, color: ntfyResult.ok ? 'var(--win)' : 'var(--loss)' }}>
+                {ntfyResult.msg}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </div>
