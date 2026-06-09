@@ -643,6 +643,10 @@ const MarketBiasCard = ({ marketBias }) => {
 };
 
 const LatestTradesCard = ({ signals, onViewAll }) => {
+  const [dirFilter,    setDirFilter]    = useState('all');
+  const [scoreFilter,  setScoreFilter]  = useState(0);
+  const [statusFilter, setStatusFilter] = useState('all');
+
   if (!signals || signals.length === 0) return (
     <div className="card">
       <div className="card-head"><Icon name="signal" className="ico"/><h3>Letzte Signale</h3></div>
@@ -654,70 +658,124 @@ const LatestTradesCard = ({ signals, onViewAll }) => {
     </div>
   );
 
+  const filtered = signals.filter(s => {
+    if (dirFilter !== 'all' && s.direction !== dirFilter) return false;
+    if (scoreFilter > 0 && (s.ai_score || 0) < scoreFilter) return false;
+    if (statusFilter !== 'all') {
+      const outcome = s.outcome || 'OPEN';
+      if (statusFilter === 'OPEN' && outcome !== 'OPEN') return false;
+      if (statusFilter !== 'OPEN' && outcome !== statusFilter) return false;
+    }
+    return true;
+  });
+
+  const isFiltered = dirFilter !== 'all' || scoreFilter > 0 || statusFilter !== 'all';
+
+  const FilterPill = ({ active, onClick, children }) => (
+    <button onClick={onClick} style={{
+      padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+      border: `1px solid ${active ? 'var(--blue-500)' : 'var(--border)'}`,
+      background: active ? 'rgba(59,130,246,.15)' : 'transparent',
+      color: active ? 'var(--blue-400)' : 'var(--text-tertiary)',
+      transition: 'all .15s', whiteSpace: 'nowrap',
+    }}>{children}</button>
+  );
+
   return (
     <div className="card">
       <div className="card-head">
         <Icon name="signal" className="ico"/>
-        <h3>Letzte Signale · {signals.length}</h3>
+        <h3>Letzte Signale · {filtered.length}{isFiltered ? `/${signals.length}` : ''}</h3>
         <div className="actions">
+          {isFiltered && (
+            <button className="btn btn-sm btn-ghost" onClick={() => { setDirFilter('all'); setScoreFilter(0); setStatusFilter('all'); }}
+              style={{ fontSize: 11, padding: '3px 8px' }}>
+              Filter ✕
+            </button>
+          )}
           <button className="btn btn-sm btn-ghost" onClick={onViewAll}>Alle anzeigen →</button>
         </div>
       </div>
-      {/* Desktop table */}
-      <div className="signal-table-wrap" style={{ overflowX: 'auto' }}>
-        <table className="tbl">
-          <thead>
-            <tr>
-              <th>Zeit</th><th>Asset</th><th>Richtung</th>
-              <th>Entry</th><th>TP</th><th>SL</th><th>R:R</th><th>Score</th><th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {signals.map((s, i) => (
-              <tr key={i}>
-                <td className="mono muted" style={{ fontSize: 11 }}>{getTimeAgo(s.created_at)}</td>
-                <td><AssetChip symbol={s.symbol}/></td>
-                <td><span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span></td>
-                <td className="mono">${(s.ai_entry || s.price || 0).toFixed(2)}</td>
-                <td className="mono win">{s.ai_tp ? `$${s.ai_tp.toFixed(2)}` : '–'}</td>
-                <td className="mono loss">{s.ai_sl ? `$${s.ai_sl.toFixed(2)}` : '–'}</td>
-                <td className="mono">{s.risk_reward != null ? `1:${s.risk_reward.toFixed(1)}` : '–'}</td>
-                <td className="mono">{s.ai_score || 0}</td>
-                <td>
-                  <span className={`badge ${s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`}>
-                    {s.outcome || 'OPEN'}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+
+      {/* Filter bar */}
+      <div style={{ padding: '8px 16px 0', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontSize: 10, color: 'var(--text-quaternary)', fontWeight: 700, letterSpacing: '.06em', marginRight: 2 }}>FILTER</span>
+        <FilterPill active={dirFilter === 'all'} onClick={() => setDirFilter('all')}>Alle</FilterPill>
+        <FilterPill active={dirFilter === 'LONG'} onClick={() => setDirFilter(dirFilter === 'LONG' ? 'all' : 'LONG')}>LONG</FilterPill>
+        <FilterPill active={dirFilter === 'SHORT'} onClick={() => setDirFilter(dirFilter === 'SHORT' ? 'all' : 'SHORT')}>SHORT</FilterPill>
+        <span style={{ width: 1, height: 14, background: 'var(--border)', margin: '0 2px' }}/>
+        <FilterPill active={scoreFilter === 70} onClick={() => setScoreFilter(scoreFilter === 70 ? 0 : 70)}>70+</FilterPill>
+        <FilterPill active={scoreFilter === 80} onClick={() => setScoreFilter(scoreFilter === 80 ? 0 : 80)}>80+</FilterPill>
+        <FilterPill active={scoreFilter === 90} onClick={() => setScoreFilter(scoreFilter === 90 ? 0 : 90)}>90+</FilterPill>
+        <span style={{ width: 1, height: 14, background: 'var(--border)', margin: '0 2px' }}/>
+        <FilterPill active={statusFilter === 'OPEN'} onClick={() => setStatusFilter(statusFilter === 'OPEN' ? 'all' : 'OPEN')}>OPEN</FilterPill>
+        <FilterPill active={statusFilter === 'WIN'} onClick={() => setStatusFilter(statusFilter === 'WIN' ? 'all' : 'WIN')}>WIN</FilterPill>
+        <FilterPill active={statusFilter === 'LOSS'} onClick={() => setStatusFilter(statusFilter === 'LOSS' ? 'all' : 'LOSS')}>LOSS</FilterPill>
       </div>
-      {/* Mobile card list */}
-      <div className="signal-mobile-list">
-        {signals.map((s, i) => {
-          const sc = s.ai_score || 0;
-          const scoreColor = sc >= 90 ? 'var(--win)' : sc >= 75 ? 'var(--wait)' : 'var(--blue-400)';
-          const outcomeCls = s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait';
-          return (
-            <div key={i} className="signal-mobile-row">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <AssetChip symbol={s.symbol}/>
-                <span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span>
-                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: scoreColor, fontSize: 13, marginLeft: 4 }}>{sc}</span>
-                <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 2 }}>pts</span>
-                <span className={`badge ${outcomeCls}`} style={{ marginLeft: 'auto', fontSize: 10 }}>{s.outcome || 'OPEN'}</span>
-              </div>
-              <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
-                <span style={{ fontFamily: 'var(--font-mono)' }}>E&nbsp;${(s.ai_entry || s.price || 0).toFixed(2)}</span>
-                {s.ai_tp && <span style={{ color: 'var(--win)', fontFamily: 'var(--font-mono)' }}>TP&nbsp;${s.ai_tp.toFixed(2)}</span>}
-                {s.ai_sl && <span style={{ color: 'var(--loss)', fontFamily: 'var(--font-mono)' }}>SL&nbsp;${s.ai_sl.toFixed(2)}</span>}
-                <span style={{ marginLeft: 'auto' }}>{getTimeAgo(s.created_at)}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+
+      {filtered.length === 0 ? (
+        <div className="card-body" style={{ padding: '32px 20px', textAlign: 'center' }}>
+          <p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>Keine Signale mit diesen Filtern</p>
+        </div>
+      ) : (
+        <>
+          {/* Desktop table */}
+          <div className="signal-table-wrap" style={{ overflowX: 'auto' }}>
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Zeit</th><th>Asset</th><th>Richtung</th>
+                  <th>Entry</th><th>TP</th><th>SL</th><th>R:R</th><th>Score</th><th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((s, i) => (
+                  <tr key={i}>
+                    <td className="mono muted" style={{ fontSize: 11 }}>{getTimeAgo(s.created_at)}</td>
+                    <td><AssetChip symbol={s.symbol}/></td>
+                    <td><span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span></td>
+                    <td className="mono">${(s.ai_entry || s.price || 0).toFixed(2)}</td>
+                    <td className="mono win">{s.ai_tp ? `$${s.ai_tp.toFixed(2)}` : '–'}</td>
+                    <td className="mono loss">{s.ai_sl ? `$${s.ai_sl.toFixed(2)}` : '–'}</td>
+                    <td className="mono">{s.risk_reward != null ? `1:${s.risk_reward.toFixed(1)}` : '–'}</td>
+                    <td className="mono">{s.ai_score || 0}</td>
+                    <td>
+                      <span className={`badge ${s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`}>
+                        {s.outcome || 'OPEN'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {/* Mobile card list */}
+          <div className="signal-mobile-list">
+            {filtered.map((s, i) => {
+              const sc = s.ai_score || 0;
+              const scoreColor = sc >= 90 ? 'var(--win)' : sc >= 75 ? 'var(--wait)' : 'var(--blue-400)';
+              const outcomeCls = s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait';
+              return (
+                <div key={i} className="signal-mobile-row">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <AssetChip symbol={s.symbol}/>
+                    <span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: scoreColor, fontSize: 13, marginLeft: 4 }}>{sc}</span>
+                    <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 2 }}>pts</span>
+                    <span className={`badge ${outcomeCls}`} style={{ marginLeft: 'auto', fontSize: 10 }}>{s.outcome || 'OPEN'}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                    <span style={{ fontFamily: 'var(--font-mono)' }}>E&nbsp;${(s.ai_entry || s.price || 0).toFixed(2)}</span>
+                    {s.ai_tp && <span style={{ color: 'var(--win)', fontFamily: 'var(--font-mono)' }}>TP&nbsp;${s.ai_tp.toFixed(2)}</span>}
+                    {s.ai_sl && <span style={{ color: 'var(--loss)', fontFamily: 'var(--font-mono)' }}>SL&nbsp;${s.ai_sl.toFixed(2)}</span>}
+                    <span style={{ marginLeft: 'auto' }}>{getTimeAgo(s.created_at)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 };
