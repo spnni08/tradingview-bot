@@ -1410,4 +1410,39 @@ label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
 
   /* Page header: hide some detail text on mobile */
   .page-header .subtitle { font-size: 11px; }
+
+  /* Journal: stack sidebar above content */
+  .journal-layout {
+    flex-direction: column !important;
+  }
+  .journal-sidebar {
+    width: 100% !important;
+  }
+  /* Journal coin list: horizontal scroll row on mobile */
+  .journal-coin-list {
+    flex-direction: row !important;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 6px !important;
+    padding-bottom: 4px;
+  }
+  .journal-coin-list::-webkit-scrollbar { display: none; }
+  .journal-coin-item {
+    flex-shrink: 0;
+    padding: 5px 10px !important;
+    border-radius: 20px !important;
+    border: 1px solid var(--border);
+    background: var(--bg-2);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .journal-coin-item.active {
+    background: rgba(59,130,246,.15) !important;
+    border-color: rgba(59,130,246,.4) !important;
+  }
 }
