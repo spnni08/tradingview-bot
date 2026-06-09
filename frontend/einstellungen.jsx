@@ -380,7 +380,11 @@ function AdminTestSignalPanel() {
                 <div style={{ fontWeight: 600, color: 'var(--win)', fontSize: 13 }}>Signal gesendet — Score {result.score} · {result.symbol} {result.direction}</div>
                 <div style={{ fontSize: 13 }}>Telegram: <span style={{ color: result.telegram ? 'var(--win)' : result.score >= 80 ? 'var(--loss)' : 'var(--text-tertiary)', fontWeight: 600 }}>{result.telegram ? '✓ gesendet' : result.score >= 80 ? '✗ Fehler' : '– (Score < 80)'}</span></div>
                 <div style={{ fontSize: 13 }}>ntfy.sh: <span style={{ color: result.ntfy ? 'var(--win)' : result.score >= 95 ? 'var(--loss)' : 'var(--text-tertiary)', fontWeight: 600 }}>{result.ntfy ? '✓ gesendet' : result.score >= 95 ? '✗ Fehler' : '– (Score < 95)'}</span></div>
-                {result.errors?.length > 0 && <div style={{ fontSize: 12, color: 'var(--loss)', marginTop: 2 }}>{result.errors.join(' · ')}</div>}
+                {result.errors?.length > 0 && (
+                  <div style={{ fontSize: 12, color: 'var(--wait)', marginTop: 4, padding: '6px 10px', background: 'rgba(245,158,11,0.08)', borderRadius: 6, border: '1px solid rgba(245,158,11,0.2)' }}>
+                    ⚠ {result.errors.join(' · ')}
+                  </div>
+                )}
               </div>
             )}
           </div>
