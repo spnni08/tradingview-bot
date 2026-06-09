@@ -522,28 +522,52 @@ function PracticeTradesTab() {
             <p style={{ color: 'var(--text-tertiary)' }}>{trades.length === 0 ? 'Noch keine Übungstrades — werden automatisch beim nächsten Signal erstellt' : 'Keine Trades mit diesen Filtern'}</p>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="tbl">
-              <thead><tr><th>#</th><th>Datum</th><th>Symbol</th><th>TF</th><th>Richtung</th><th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>Result</th><th>Status</th></tr></thead>
-              <tbody>
-                {filtered.map((t, i) => (
-                  <tr key={t.id ?? i}>
-                    <td className="mono muted" style={{ fontSize: 11 }}>{t.id}</td>
-                    <td className="mono muted" style={{ fontSize: 11 }}>{fmtDate(t.created_at)}</td>
-                    <td><AssetChip symbol={t.symbol}/></td>
-                    <td className="mono muted">{t.timeframe}</td>
-                    <td><span className={`badge ${t.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{t.direction}</span></td>
-                    <td className="mono">${fmtPrice((t.entry_price || 0), t.symbol)}</td>
-                    <td className="mono" style={{ color: 'var(--win)' }}>${fmtPrice((t.take_profit || 0), t.symbol)}</td>
-                    <td className="mono" style={{ color: 'var(--loss)' }}>${fmtPrice((t.stop_loss || 0), t.symbol)}</td>
-                    <td className="mono">{t.exit_price ? `$${t.exit_price.toFixed(2)}` : '–'}</td>
-                    <td className={`mono ${t.result_pct > 0 ? 'win' : t.result_pct < 0 ? 'loss' : ''}`}>{t.result_pct != null ? fmtPct(t.result_pct) : '–'}</td>
-                    <td><OutcomeSelector tradeId={t.id} current={t.status} onChange={updatePracticeStatus}/></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            {/* Desktop table */}
+            <div className="signal-table-wrap">
+              <table className="tbl">
+                <thead><tr><th>#</th><th>Datum</th><th>Symbol</th><th>TF</th><th>Richtung</th><th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>Result</th><th>Status</th></tr></thead>
+                <tbody>
+                  {filtered.map((t, i) => (
+                    <tr key={t.id ?? i}>
+                      <td className="mono muted" style={{ fontSize: 11 }}>{t.id}</td>
+                      <td className="mono muted" style={{ fontSize: 11 }}>{fmtDate(t.created_at)}</td>
+                      <td><AssetChip symbol={t.symbol}/></td>
+                      <td className="mono muted">{t.timeframe}</td>
+                      <td><span className={`badge ${t.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{t.direction}</span></td>
+                      <td className="mono">${fmtPrice((t.entry_price || 0), t.symbol)}</td>
+                      <td className="mono" style={{ color: 'var(--win)' }}>${fmtPrice((t.take_profit || 0), t.symbol)}</td>
+                      <td className="mono" style={{ color: 'var(--loss)' }}>${fmtPrice((t.stop_loss || 0), t.symbol)}</td>
+                      <td className="mono">{t.exit_price ? `$${t.exit_price.toFixed(2)}` : '–'}</td>
+                      <td className={`mono ${t.result_pct > 0 ? 'win' : t.result_pct < 0 ? 'loss' : ''}`}>{t.result_pct != null ? fmtPct(t.result_pct) : '–'}</td>
+                      <td><OutcomeSelector tradeId={t.id} current={t.status} onChange={updatePracticeStatus}/></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {/* Mobile cards */}
+            <div className="signal-mobile-list">
+              {filtered.map((t, i) => (
+                <div key={t.id ?? i} className="signal-mobile-row">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <AssetChip symbol={t.symbol}/>
+                    <span className={`badge ${t.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{t.direction}</span>
+                    {t.timeframe && <span className="mono muted" style={{ fontSize: 10 }}>{t.timeframe}</span>}
+                    <span style={{ marginLeft: 'auto' }} onClick={e => e.stopPropagation()}>
+                      <OutcomeSelector tradeId={t.id} current={t.status} onChange={updatePracticeStatus}/>
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                    <span style={{ fontFamily: 'var(--font-mono)' }}>E&nbsp;${fmtPrice(t.entry_price || 0, t.symbol)}</span>
+                    <span style={{ color: 'var(--win)', fontFamily: 'var(--font-mono)' }}>TP&nbsp;${fmtPrice(t.take_profit || 0, t.symbol)}</span>
+                    <span style={{ color: 'var(--loss)', fontFamily: 'var(--font-mono)' }}>SL&nbsp;${fmtPrice(t.stop_loss || 0, t.symbol)}</span>
+                    {t.result_pct != null && <span style={{ color: t.result_pct > 0 ? 'var(--win)' : t.result_pct < 0 ? 'var(--loss)' : 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginLeft: 'auto' }}>{fmtPct(t.result_pct)}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -758,45 +782,78 @@ function SignalHistoryTab() {
             <p style={{ color: 'var(--text-tertiary)' }}>{history.length === 0 ? 'Noch keine Signale empfangen' : 'Keine Trades mit diesen Filtern'}</p>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="tbl">
-              <thead><tr><th>#</th><th>Datum</th><th>Symbol</th><th>Richtung</th><th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>PnL</th><th>Score</th><th>R:R</th><th>Auslöser</th><th>Qualität</th><th>Strategie</th><th>Ergebnis</th></tr></thead>
-              <tbody>
-                {filtered.map((trade, i) => {
-                  const pnl = calculatePnL(trade);
-                  const qualColor = trade.signal_quality === 'PREMIUM' ? 'var(--win)' : trade.signal_quality === 'GUT' ? 'var(--blue-400)' : trade.signal_quality === 'OKAY' ? 'var(--wait)' : trade.signal_quality === 'SCHWACH' ? 'var(--loss)' : trade.signal_quality === 'SKIP' ? 'var(--text-quaternary)' : 'var(--text-tertiary)';
-                  return (
-                    <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setSelected(trade)}>
-                      <td className="mono" style={{ fontSize: 10, color: 'var(--text-quaternary)', letterSpacing: '.03em' }}>{trade.id ? trade.id.slice(-8) : '–'}</td>
-                      <td className="mono muted" style={{ fontSize: 11 }}>{fmtDate(trade.created_at)}</td>
-                      <td><AssetChip symbol={trade.symbol}/></td>
-                      <td><span className={`badge ${trade.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{trade.direction}</span></td>
-                      <td className="mono">${(trade.ai_entry || trade.price || 0).toFixed(2)}</td>
-                      <td className="mono" style={{ color: 'var(--win)' }}>{trade.ai_tp  ? `$${fmtPrice(trade.ai_tp, trade.symbol)}`  : '—'}</td>
-                      <td className="mono" style={{ color: 'var(--loss)' }}>{trade.ai_sl ? `$${fmtPrice(trade.ai_sl, trade.symbol)}`  : '—'}</td>
-                      <td className="mono">{trade.exit_price ? `$${fmtPrice(trade.exit_price, trade.symbol)}` : '—'}</td>
-                      <td className={`mono ${pnl > 0 ? 'win' : pnl < 0 ? 'loss' : ''}`}>{pnl !== 0 ? fmtPct(pnl) : '—'}</td>
-                      <td className="mono">{trade.ai_score || 0}</td>
-                      <td className="mono" style={{ fontSize: 11 }}>
-                        {trade.risk_reward ? `1:${parseFloat(trade.risk_reward).toFixed(1)}` : '–'}
-                      </td>
-                      <td style={{ fontSize: 11, color: 'var(--text-tertiary)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={trade.trigger_reason || trade.trigger || trade.action || ''}>
-                        {trade.trigger_reason || trade.trigger || trade.action || '–'}
-                      </td>
-                      <td style={{ fontSize: 11, fontWeight: 600, color: qualColor }}>{trade.signal_quality || '–'}</td>
-                      <td style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{trade.strategy_name || 'Standard'} <span style={{ color: 'var(--text-quaternary)' }}>{trade.strategy_version || ''}</span></td>
-                      <td onClick={e => e.stopPropagation()}>
-                        <OutcomeSelector tradeId={trade.id} current={trade.outcome} onChange={updateOutcome}/>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            <div style={{ padding: '10px 20px', fontSize: 12, color: 'var(--text-tertiary)', borderTop: '1px solid var(--border)' }}>
-              Klicke auf eine Zeile für Details
+          <>
+            {/* Desktop table */}
+            <div className="signal-table-wrap">
+              <table className="tbl">
+                <thead><tr><th>#</th><th>Datum</th><th>Symbol</th><th>Richtung</th><th>Entry</th><th>TP</th><th>SL</th><th>Exit</th><th>PnL</th><th>Score</th><th>R:R</th><th>Auslöser</th><th>Qualität</th><th>Strategie</th><th>Ergebnis</th></tr></thead>
+                <tbody>
+                  {filtered.map((trade, i) => {
+                    const pnl = calculatePnL(trade);
+                    const qualColor = trade.signal_quality === 'PREMIUM' ? 'var(--win)' : trade.signal_quality === 'GUT' ? 'var(--blue-400)' : trade.signal_quality === 'OKAY' ? 'var(--wait)' : trade.signal_quality === 'SCHWACH' ? 'var(--loss)' : trade.signal_quality === 'SKIP' ? 'var(--text-quaternary)' : 'var(--text-tertiary)';
+                    return (
+                      <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setSelected(trade)}>
+                        <td className="mono" style={{ fontSize: 10, color: 'var(--text-quaternary)', letterSpacing: '.03em' }}>{trade.id ? trade.id.slice(-8) : '–'}</td>
+                        <td className="mono muted" style={{ fontSize: 11 }}>{fmtDate(trade.created_at)}</td>
+                        <td><AssetChip symbol={trade.symbol}/></td>
+                        <td><span className={`badge ${trade.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{trade.direction}</span></td>
+                        <td className="mono">${(trade.ai_entry || trade.price || 0).toFixed(2)}</td>
+                        <td className="mono" style={{ color: 'var(--win)' }}>{trade.ai_tp  ? `$${fmtPrice(trade.ai_tp, trade.symbol)}`  : '—'}</td>
+                        <td className="mono" style={{ color: 'var(--loss)' }}>{trade.ai_sl ? `$${fmtPrice(trade.ai_sl, trade.symbol)}`  : '—'}</td>
+                        <td className="mono">{trade.exit_price ? `$${fmtPrice(trade.exit_price, trade.symbol)}` : '—'}</td>
+                        <td className={`mono ${pnl > 0 ? 'win' : pnl < 0 ? 'loss' : ''}`}>{pnl !== 0 ? fmtPct(pnl) : '—'}</td>
+                        <td className="mono">{trade.ai_score || 0}</td>
+                        <td className="mono" style={{ fontSize: 11 }}>
+                          {trade.risk_reward ? `1:${parseFloat(trade.risk_reward).toFixed(1)}` : '–'}
+                        </td>
+                        <td style={{ fontSize: 11, color: 'var(--text-tertiary)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={trade.trigger_reason || trade.trigger || trade.action || ''}>
+                          {trade.trigger_reason || trade.trigger || trade.action || '–'}
+                        </td>
+                        <td style={{ fontSize: 11, fontWeight: 600, color: qualColor }}>{trade.signal_quality || '–'}</td>
+                        <td style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{trade.strategy_name || 'Standard'} <span style={{ color: 'var(--text-quaternary)' }}>{trade.strategy_version || ''}</span></td>
+                        <td onClick={e => e.stopPropagation()}>
+                          <OutcomeSelector tradeId={trade.id} current={trade.outcome} onChange={updateOutcome}/>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div style={{ padding: '10px 20px', fontSize: 12, color: 'var(--text-tertiary)', borderTop: '1px solid var(--border)' }}>
+                Klicke auf eine Zeile für Details
+              </div>
             </div>
-          </div>
+            {/* Mobile cards */}
+            <div className="signal-mobile-list">
+              {filtered.map((trade, i) => {
+                const pnl = calculatePnL(trade);
+                const qualColor = trade.signal_quality === 'PREMIUM' ? 'var(--win)' : trade.signal_quality === 'GUT' ? 'var(--blue-400)' : trade.signal_quality === 'OKAY' ? 'var(--wait)' : trade.signal_quality === 'SCHWACH' ? 'var(--loss)' : trade.signal_quality === 'SKIP' ? 'var(--text-quaternary)' : 'var(--text-tertiary)';
+                return (
+                  <div key={i} className="signal-mobile-row" onClick={() => setSelected(trade)} style={{ cursor: 'pointer' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <AssetChip symbol={trade.symbol}/>
+                      <span className={`badge ${trade.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{trade.direction}</span>
+                      {trade.ai_score && <span className="mono" style={{ fontSize: 11 }}>{trade.ai_score}</span>}
+                      {trade.signal_quality && <span style={{ fontSize: 10, fontWeight: 600, color: qualColor }}>{trade.signal_quality}</span>}
+                      <span style={{ marginLeft: 'auto' }} onClick={e => e.stopPropagation()}>
+                        <OutcomeSelector tradeId={trade.id} current={trade.outcome} onChange={updateOutcome}/>
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4, flexWrap: 'wrap' }}>
+                      <span style={{ fontFamily: 'var(--font-mono)' }}>E&nbsp;${(trade.ai_entry || trade.price || 0).toFixed(2)}</span>
+                      {trade.ai_tp  && <span style={{ color: 'var(--win)',  fontFamily: 'var(--font-mono)' }}>TP&nbsp;${fmtPrice(trade.ai_tp,  trade.symbol)}</span>}
+                      {trade.ai_sl  && <span style={{ color: 'var(--loss)', fontFamily: 'var(--font-mono)' }}>SL&nbsp;${fmtPrice(trade.ai_sl,  trade.symbol)}</span>}
+                      {pnl !== 0    && <span style={{ color: pnl > 0 ? 'var(--win)' : 'var(--loss)', fontFamily: 'var(--font-mono)', marginLeft: 'auto' }}>{fmtPct(pnl)}</span>}
+                    </div>
+                    <div style={{ display: 'flex', gap: 10, fontSize: 10, color: 'var(--text-quaternary)', marginTop: 3 }}>
+                      <span>{fmtDate(trade.created_at)}</span>
+                      {trade.risk_reward && <span>1:{parseFloat(trade.risk_reward).toFixed(1)}</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
     </div>
