@@ -161,7 +161,7 @@ window.updateOutcomeAPI = updateOutcomeAPI;
 // SIDEBAR
 // ═══════════════════════════════════════════════════════════════
 
-const Sidebar = ({ page, setPage, user, onLogout, collapsed, setCollapsed }) => {
+const Sidebar = ({ page, setPage, user, onLogout, collapsed, setCollapsed, mobileOpen = false }) => {
   const [time, setTime] = useState(new Date());
   const [lightMode, setLightMode] = useState(() => localStorage.getItem('theme') === 'light');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -225,7 +225,7 @@ const Sidebar = ({ page, setPage, user, onLogout, collapsed, setCollapsed }) => 
   const timeStr = time.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 
   return (
-    <nav className={`sidebar${collapsed ? ' collapsed' : ''}`}>
+    <nav className={`sidebar${collapsed ? ' collapsed' : ''}${mobileOpen ? ' mobile-open' : ''}`}>
       {/* Brand */}
       <div className="sidebar-brand">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--blue-500)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>

@@ -66,6 +66,7 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   // Track which pages have been visited so we only mount them once (lazy init).
   const [mounted, setMounted] = useState(() => new Set([resolvePage(window.location.pathname)]));
 
@@ -156,21 +157,35 @@ const App = () => {
     einstellungen: <EinstellungenPage {...props}/>,
   };
 
+  const closeMobile = () => setMobileOpen(false);
+
   return (
     <div className="app-with-sidebar">
       <Sidebar
         page={activePage}
-        setPage={navigate}
+        setPage={(p) => { navigate(p); closeMobile(); }}
         user={user}
         onLogout={handleLogout}
         collapsed={sidebarCollapsed}
         setCollapsed={setSidebarCollapsed}
+        mobileOpen={mobileOpen}
       />
+      {mobileOpen && <div className="sidebar-overlay" onClick={closeMobile}/>}
+      <div className="mobile-topbar">
+        <button className="mobile-hamburger" onClick={() => setMobileOpen(o => !o)} aria-label="Menü">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--blue-500)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2 14c2-3 4-3 6 0s4 3 6 0 4-3 6 0"/>
+        </svg>
+        <span className="mobile-topbar-title">WAVESCOUT</span>
+      </div>
       <main className={`app-main${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
         {Object.entries(PAGE_COMPONENTS).map(([p, component]) =>
-          // Only render pages that have been visited at least once (lazy mount).
-          // Once mounted the component stays alive — switching pages just
-          // toggles visibility so state, intervals and cached data are preserved.
           mounted.has(p) && (
             <div key={p} style={{ display: activePage === p ? 'contents' : 'none' }}>
               <PageErrorBoundary>

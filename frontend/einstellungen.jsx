@@ -279,6 +279,117 @@ function AdminWebhookTester() {
   );
 }
 
+// ─── Admin: Test Signal Panel ─────────────────────────────────
+
+function AdminTestSignalPanel() {
+  const [score,     setScore]     = useState(97);
+  const [symbol,    setSymbol]    = useState('BTCUSDT');
+  const [direction, setDirection] = useState('LONG');
+  const [loading,   setLoading]   = useState(false);
+  const [result,    setResult]    = useState(null);
+
+  const send = async () => {
+    setLoading(true); setResult(null);
+    try {
+      const res = await fetch(`${API_URL}/admin/test-signal`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ score, symbol, direction }),
+      });
+      setResult(await res.json());
+    } catch (e) { setResult({ success: false, error: e.message }); }
+    setLoading(false);
+  };
+
+  const willTelegram = score >= 80;
+  const willNtfy     = score >= 95;
+
+  return (
+    <div className="card">
+      <div className="card-head"><Icon name="bolt" className="ico"/><h3>Test-Signal senden</h3></div>
+      <div className="card-body">
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.6 }}>
+          Sendet ein simuliertes Signal durch die Benachrichtigungs-Pipeline.
+          Kein Datenbankeintrag wird erstellt.
+        </p>
+
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ display: 'block', marginBottom: 8, fontSize: 13, fontWeight: 500 }}>
+            Score: <span style={{ color: 'var(--blue-500)', fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 700 }}>{score}</span><span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>/100</span>
+          </label>
+          <input type="range" min={1} max={100} value={score}
+            onChange={e => setScore(parseInt(e.target.value))}
+            style={{ width: '100%', maxWidth: 360, marginBottom: 8 }}/>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {[70, 80, 90, 95, 97, 100].map(v => (
+              <button key={v}
+                className={`btn btn-sm${score === v ? ' btn-primary' : ' btn-ghost'}`}
+                onClick={() => setScore(v)}
+                style={{ padding: '3px 10px', fontSize: 12 }}>
+                {v}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16, maxWidth: 360 }}>
+          <div>
+            <label style={{ display: 'block', marginBottom: 6, fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '.08em' }}>SYMBOL</label>
+            <select value={symbol} onChange={e => setSymbol(e.target.value)} className="input" style={{ width: '100%' }}>
+              {['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'].map(s => <option key={s}>{s}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: 6, fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '.08em' }}>RICHTUNG</label>
+            <select value={direction} onChange={e => setDirection(e.target.value)} className="input" style={{ width: '100%' }}>
+              <option>LONG</option>
+              <option>SHORT</option>
+            </select>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+          {[
+            ['Telegram', willTelegram, '≥80'],
+            ['ntfy.sh',  willNtfy,    '≥95'],
+          ].map(([label, active, threshold]) => (
+            <span key={label} style={{
+              fontSize: 12, padding: '4px 12px', borderRadius: 20,
+              background: active ? 'rgba(16,185,129,0.1)' : 'var(--bg-2)',
+              border: `1px solid ${active ? 'rgba(16,185,129,0.35)' : 'var(--border)'}`,
+              color: active ? 'var(--win)' : 'var(--text-tertiary)',
+              fontWeight: active ? 600 : 400,
+            }}>
+              {active ? '✓' : '✗'} {label} ({threshold})
+            </span>
+          ))}
+        </div>
+
+        <button className="btn btn-primary" onClick={send} disabled={loading}>
+          {loading ? <div className="spinner-sm"/> : <Icon name="bolt" size={14}/>}
+          {loading ? 'Sende…' : 'Test-Signal senden'}
+        </button>
+
+        {result && (
+          <div style={{ marginTop: 14, padding: '12px 16px', background: result.success ? 'var(--bg-success)' : 'var(--bg-error)', borderRadius: 10, border: `1px solid ${result.success ? 'rgba(16,185,129,.3)' : 'rgba(240,68,68,.3)'}` }}>
+            {result.error ? (
+              <div style={{ fontSize: 13, color: 'var(--loss)' }}>Fehler: {result.error}</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontWeight: 600, color: 'var(--win)', fontSize: 13 }}>Signal gesendet — Score {result.score} · {result.symbol} {result.direction}</div>
+                <div style={{ fontSize: 13 }}>Telegram: <span style={{ color: result.telegram ? 'var(--win)' : result.score >= 80 ? 'var(--loss)' : 'var(--text-tertiary)', fontWeight: 600 }}>{result.telegram ? '✓ gesendet' : result.score >= 80 ? '✗ Fehler' : '– (Score < 80)'}</span></div>
+                <div style={{ fontSize: 13 }}>ntfy.sh: <span style={{ color: result.ntfy ? 'var(--win)' : result.score >= 95 ? 'var(--loss)' : 'var(--text-tertiary)', fontWeight: 600 }}>{result.ntfy ? '✓ gesendet' : result.score >= 95 ? '✗ Fehler' : '– (Score < 95)'}</span></div>
+                {result.errors?.length > 0 && <div style={{ fontSize: 12, color: 'var(--loss)', marginTop: 2 }}>{result.errors.join(' · ')}</div>}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Admin: Users Panel ───────────────────────────────────────
 
 function AdminUsersPanel({ user }) {
@@ -301,12 +412,13 @@ function AdminPlaceholder({ icon, title, description }) {
 // ─── Admin Section (internal sub-nav) ────────────────────────
 
 const ADMIN_SUBS = [
-  { id: 'tradecheck', label: 'Trade Check',    icon: 'target'  },
-  { id: 'users',      label: 'User & Rollen',  icon: 'users'   },
-  { id: 'webhook',    label: 'Webhook Tester', icon: 'bolt'    },
-  { id: 'health',     label: 'System Health',  icon: 'signal'  },
-  { id: 'logs',       label: 'Logs / Debug',   icon: 'book'    },
-  { id: 'secrets',    label: 'Broker Secrets', icon: 'key'     },
+  { id: 'tradecheck',  label: 'Trade Check',    icon: 'target'  },
+  { id: 'testsignal',  label: 'Test-Signal',    icon: 'bolt'    },
+  { id: 'users',       label: 'User & Rollen',  icon: 'users'   },
+  { id: 'webhook',     label: 'Webhook Tester', icon: 'signal'  },
+  { id: 'health',      label: 'System Health',  icon: 'chart'   },
+  { id: 'logs',        label: 'Logs / Debug',   icon: 'book'    },
+  { id: 'secrets',     label: 'Broker Secrets', icon: 'key'     },
 ];
 
 function AdminSection({ user }) {
@@ -333,12 +445,13 @@ function AdminSection({ user }) {
           </button>
         ))}
       </div>
-      {sub === 'tradecheck' && <AdminTradeCheckPanel/>}
-      {sub === 'users'      && <AdminUsersPanel user={user}/>}
-      {sub === 'webhook'    && <AdminWebhookTester/>}
-      {sub === 'health'     && <AdminPlaceholder icon="signal"  title="System Health"  description="Datenbankstatus, Worker-Metriken und Systeminfo — in Entwicklung."/>}
-      {sub === 'logs'       && <AdminPlaceholder icon="book"    title="Logs / Debug"   description="Worker-Logs und Debug-Ausgaben — im Cloudflare Dashboard unter Workers → Logs einsehbar."/>}
-      {sub === 'secrets'    && <AdminPlaceholder icon="key"     title="Broker Secrets" description="API-Keys werden sicher im Browser-LocalStorage gespeichert. Server-seitige Secret-Verwaltung in Entwicklung."/>}
+      {sub === 'tradecheck'  && <AdminTradeCheckPanel/>}
+      {sub === 'testsignal'  && <AdminTestSignalPanel/>}
+      {sub === 'users'       && <AdminUsersPanel user={user}/>}
+      {sub === 'webhook'     && <AdminWebhookTester/>}
+      {sub === 'health'      && <AdminPlaceholder icon="chart"  title="System Health"  description="Datenbankstatus, Worker-Metriken und Systeminfo — in Entwicklung."/>}
+      {sub === 'logs'        && <AdminPlaceholder icon="book"   title="Logs / Debug"   description="Worker-Logs und Debug-Ausgaben — im Cloudflare Dashboard unter Workers → Logs einsehbar."/>}
+      {sub === 'secrets'     && <AdminPlaceholder icon="key"    title="Broker Secrets" description="API-Keys werden sicher im Browser-LocalStorage gespeichert. Server-seitige Secret-Verwaltung in Entwicklung."/>}
     </div>
   );
 }
@@ -880,10 +993,10 @@ const EinstellungenPage = ({ user }) => {
         <p className="subtitle">Konfiguration &amp; Verwaltung</p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 20, alignItems: 'start' }}>
+      <div className="settings-layout" style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 20, alignItems: 'start' }}>
 
         {/* Left sidebar nav */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, position: 'sticky', top: 20 }}>
+        <div className="settings-sidenav" style={{ display: 'flex', flexDirection: 'column', gap: 2, position: 'sticky', top: 20 }}>
           {SECTIONS.map((sec, i) => {
             const showDivider = sec.adminOnly && (i === 0 || !SECTIONS[i - 1].adminOnly);
             return (
