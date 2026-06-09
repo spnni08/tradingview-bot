@@ -4,6 +4,42 @@
 
 const { useRef, useCallback } = React;
 
+// ─── Equity Sparkline ─────────────────────────────────────────
+function EquitySparkline({ points }) {
+  if (!points || points.length < 2) {
+    return (
+      <div style={{ flex: 1, height: 28, borderRadius: 4, background: 'rgba(59,130,246,0.06)', border: '1px dashed rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{ fontSize: 10, color: 'var(--text-quaternary)', fontFamily: 'var(--font-mono)' }}>Noch keine geschlossenen Trades</span>
+      </div>
+    );
+  }
+  const W = 300, H = 28, PAD = 2;
+  const vals = points.map(p => p.equity);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const range = max - min || 1;
+  const xs = points.map((_, i) => PAD + (i / (points.length - 1)) * (W - PAD * 2));
+  const ys = vals.map(v => H - PAD - ((v - min) / range) * (H - PAD * 2));
+  const polyline = xs.map((x, i) => `${x},${ys[i]}`).join(' ');
+  const areaPath = `M${xs[0]},${H} ` + xs.map((x, i) => `L${x},${ys[i]}`).join(' ') + ` L${xs[xs.length-1]},${H} Z`;
+  const lastVal = vals[vals.length - 1];
+  const firstVal = vals[0];
+  const up = lastVal >= firstVal;
+  const color = up ? 'var(--win)' : 'var(--loss)';
+  const fillId = `sf-${Math.random().toString(36).slice(2,6)}`;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ flex: 1, height: 28, overflow: 'visible', display: 'block' }} preserveAspectRatio="none">
+      <defs>
+        <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.18"/>
+          <stop offset="100%" stopColor={color} stopOpacity="0.01"/>
+        </linearGradient>
+      </defs>
+      <path d={areaPath} fill={`url(#${fillId})`}/>
+      <polyline points={polyline} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
 // ─── Helpers ──────────────────────────────────────────────────
 function _fmtDate(val) {
   const d = new Date(val);
@@ -342,6 +378,7 @@ const DashboardPage = ({ user, navigate }) => {
   const bestSignal    = data?.bestSignal || null;
   const latestSignals = Array.isArray(data?.latestSignals) ? data.latestSignals : [];
   const marketBias    = data?.marketBias || null;
+  const equityHistory = Array.isArray(data?.equityHistory) ? data.equityHistory : [];
   const todayPnL      = stats.todayPnL  ?? 0;
   const totalPnL      = stats.totalPnL  ?? 0;
   const winRate       = stats.winRate   ?? 0;
@@ -475,10 +512,8 @@ const DashboardPage = ({ user, navigate }) => {
             </div>
           </div>
           <div style={{ borderTop: '1px solid var(--border)', padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 10, color: 'var(--text-quaternary)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '.06em' }}>Equity-Verlauf</span>
-            <div style={{ flex: 1, height: 28, borderRadius: 4, background: 'rgba(59,130,246,0.06)', border: '1px dashed rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ fontSize: 10, color: 'var(--text-quaternary)', fontFamily: 'var(--font-mono)' }}>— Sparkline folgt —</span>
-            </div>
+            <span style={{ fontSize: 10, color: 'var(--text-quaternary)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '.06em', flexShrink: 0 }}>Equity-Verlauf</span>
+            <EquitySparkline points={equityHistory}/>
           </div>
         </div>
       </div>

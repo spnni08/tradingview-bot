@@ -2564,6 +2564,25 @@ async function getTotalPnL(env) {
   } catch (_) { return 0; }
 }
 
+async function getEquityHistory(env) {
+  try {
+    const startCap = parseFloat(env.STARTING_CAPITAL || '10000');
+    const trades = await env.DB.prepare(`
+      SELECT ai_entry, exit_price, direction, created_at FROM signals
+      WHERE outcome IN ('WIN', 'LOSS') AND exit_price IS NOT NULL AND ai_entry IS NOT NULL
+      ORDER BY created_at ASC LIMIT 200
+    `).all();
+    let equity = startCap;
+    const points = [{ equity: startCap }];
+    for (const t of (trades.results || [])) {
+      const diff = t.exit_price - t.ai_entry;
+      equity += t.direction === 'LONG' ? diff : -diff;
+      points.push({ date: t.created_at, equity: parseFloat(equity.toFixed(2)) });
+    }
+    return points;
+  } catch (_) { return []; }
+}
+
 async function getBestSignal(env) {
   try {
     return await env.DB.prepare(
@@ -5246,8 +5265,8 @@ export default {
         const session = await validateSession(env, request);
         if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
 
-        const [stats, latestSignals, bestSignal, marketBias, todayPnL] = await Promise.all([
-          getStats(env), getHistory(env, 10), getBestSignal(env), getMarketBias(env), getTodayPnL(env)
+        const [stats, latestSignals, bestSignal, marketBias, todayPnL, equityHistory] = await Promise.all([
+          getStats(env), getHistory(env, 10), getBestSignal(env), getMarketBias(env), getTodayPnL(env), getEquityHistory(env)
         ]);
 
         const startingCapital = parseFloat(env.STARTING_CAPITAL || '10000');
@@ -5269,6 +5288,7 @@ export default {
           bestSignal: bestSignal || null,
           latestSignals,
           marketBias,
+          equityHistory,
           user: { username: session.username, role: session.role }
         });
       }
@@ -5630,6 +5650,13 @@ export default {
         if (!env.NTFY_TOPIC) return jsonResponse({ success: false, message: 'NTFY_TOPIC nicht konfiguriert' });
         const success = await sendNtfyAlert(env, 'BTCUSDT', '15', 97);
         return jsonResponse({ success, message: success ? 'ntfy-Nachricht gesendet!' : 'Fehler beim Senden' });
+      }
+
+      if (request.method === "POST" && url.pathname === "/admin/test-push") {
+        const session = await validateSession(env, request);
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        await sendWebPushToAll(env, 'WAVESCOUT Test', 'Push-Benachrichtigungen funktionieren ✓', '/');
+        return jsonResponse({ success: true, message: 'Test-Push gesendet!' });
       }
 
       // Web Push subscription management
