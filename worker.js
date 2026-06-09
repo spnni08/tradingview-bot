@@ -5646,10 +5646,11 @@ export default {
           )
         `).run();
         const id = `ps_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        // Delete existing subscription for this endpoint first (handles re-subscribe after key rotation)
+        await env.DB.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').bind(body.endpoint).run();
         await env.DB.prepare(`
           INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at)
           VALUES (?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO NOTHING
         `).bind(id, session.userId || session.id || '', body.endpoint, body.keys.p256dh, body.keys.auth, Date.now()).run();
         return jsonResponse({ success: true });
       }

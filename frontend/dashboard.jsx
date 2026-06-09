@@ -4,6 +4,128 @@
 
 const { useRef, useCallback } = React;
 
+// ─── Helpers ──────────────────────────────────────────────────
+function _fmtDate(val) {
+  const d = new Date(val);
+  if (isNaN(d)) return '–';
+  return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' })
+    + ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+}
+function _fmtPct(n) {
+  if (n == null || isNaN(n)) return '–';
+  return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
+}
+function _calcPnL(s) {
+  if (!s.exit_price || !s.ai_entry || s.ai_entry === 0) return 0;
+  const pct = ((s.exit_price - s.ai_entry) / s.ai_entry) * 100;
+  return s.direction === 'LONG' ? pct : -pct;
+}
+
+// ─── Signal Detail Modal ──────────────────────────────────────
+function DashSignalModal({ signal, onClose, onExecuteTrade, onSaveToJournal, onIgnoreSignal }) {
+  if (!signal) return null;
+  const pnl        = _calcPnL(signal);
+  const sc         = signal.ai_score || 0;
+  const scoreColor = sc >= 80 ? 'var(--win)' : sc >= 65 ? 'var(--wait)' : 'var(--loss)';
+  const fmt        = v => { const n = Number(v); return Number.isFinite(n) ? '$' + n.toFixed(2) : '–'; };
+  const rr         = signal.risk_reward;
+  const safeParse  = (s, def) => { try { return JSON.parse(s) ?? def; } catch { return def; } };
+  const matched    = safeParse(signal.matched_rules, []);
+  const failed     = safeParse(signal.failed_rules, []);
+
+  const MAX_AGE_MS = 2 * 60 * 60 * 1000;
+  const tooOld = Date.now() - new Date(signal.created_at).getTime() > MAX_AGE_MS;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" style={{ maxWidth: 580, maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+        <div className="modal-head" style={{ position: 'sticky', top: 0, background: 'var(--bg-1)', zIndex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className={`badge ${signal.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{signal.direction}</span>
+            <h3 style={{ margin: 0 }}>{signal.symbol}</h3>
+            {signal.timeframe && <span className="badge badge-tag" style={{ fontSize: 11 }}>{signal.timeframe}m</span>}
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+
+        <div style={{ padding: '0 20px 20px' }}>
+          {/* Score */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '16px 0 12px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ textAlign: 'center', flexShrink: 0 }}>
+              <div style={{ fontSize: 32, fontWeight: 800, fontFamily: 'var(--font-mono)', color: scoreColor, lineHeight: 1 }}>{sc}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.08em', marginTop: 2 }}>Score</div>
+            </div>
+            <div style={{ width: 1, height: 40, background: 'var(--border)', flexShrink: 0 }}/>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: scoreColor }}>{signal.signal_quality || '–'}</div>
+              {signal.ai_risk && <span className={`badge ${signal.ai_risk === 'LOW' ? 'badge-win' : signal.ai_risk === 'HIGH' ? 'badge-loss' : 'badge-wait'}`} style={{ marginTop: 4 }}>{signal.ai_risk} RISK</span>}
+            </div>
+            <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Status</div>
+              <span className={`badge ${signal.outcome === 'WIN' ? 'badge-win' : signal.outcome === 'LOSS' ? 'badge-loss' : signal.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`} style={{ marginTop: 4 }}>
+                {signal.outcome || 'OPEN'}
+              </span>
+            </div>
+          </div>
+
+          {/* Prices */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, padding: '14px 0', borderBottom: '1px solid var(--border)' }}>
+            {[
+              ['Entry',      fmt(signal.ai_entry ?? signal.price), 'var(--text-primary)'],
+              ['Take Profit', fmt(signal.ai_tp),                   'var(--win)'],
+              ['Stop Loss',   fmt(signal.ai_sl),                   'var(--loss)'],
+              ['Exit',        fmt(signal.exit_price),              pnl > 0 ? 'var(--win)' : pnl < 0 ? 'var(--loss)' : 'var(--text-primary)'],
+              ['R:R',         rr ? `1:${parseFloat(rr).toFixed(1)}` : '–', rr >= 1.5 ? 'var(--win)' : rr ? 'var(--wait)' : 'var(--text-tertiary)'],
+              ['PnL',         pnl !== 0 ? _fmtPct(pnl) : '–',   pnl > 0 ? 'var(--win)' : pnl < 0 ? 'var(--loss)' : 'var(--text-tertiary)'],
+            ].map(([l, v, c]) => (
+              <div key={l} style={{ background: 'var(--bg-0)', borderRadius: 8, padding: '8px 12px' }}>
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 3 }}>{l}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 13, color: c }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* AI reason */}
+          {signal.ai_reason && (
+            <div style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 6 }}>KI-ANALYSE</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', background: 'var(--bg-0)', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6, borderLeft: '3px solid var(--blue-500)' }}>{signal.ai_reason}</div>
+            </div>
+          )}
+
+          {/* Rules */}
+          {(matched.length > 0 || failed.length > 0) && (
+            <div style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 8 }}>STRATEGIE-CHECK</div>
+              {matched.map((r, i) => <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12, marginBottom: 4 }}><span style={{ color: 'var(--win)' }}>✓</span><span style={{ color: 'var(--text-secondary)' }}>{r}</span></div>)}
+              {failed.map((r,  i) => <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12, marginBottom: 4 }}><span style={{ color: 'var(--loss)' }}>✗</span><span style={{ color: 'var(--text-secondary)' }}>{r}</span></div>)}
+            </div>
+          )}
+
+          {/* Meta */}
+          <div style={{ paddingTop: 12, fontSize: 12, color: 'var(--text-tertiary)' }}>
+            {_fmtDate(signal.created_at)} · {signal.source || 'WEBHOOK'}
+            {signal.telegram_sent ? ' · 📱 Telegram' : ''}
+          </div>
+        </div>
+
+        <div className="modal-foot" style={{ position: 'sticky', bottom: 0, background: 'var(--bg-1)' }}>
+          <button className="btn btn-primary" onClick={() => { onExecuteTrade(signal); onClose(); }} disabled={tooOld}
+            title={tooOld ? 'Signal zu alt (max. 2h)' : ''}>
+            <Icon name="bolt" size={14}/> {tooOld ? 'Zu alt' : 'Demo-Trade'}
+          </button>
+          <button className="btn" onClick={() => { onSaveToJournal(signal); onClose(); }}>
+            <Icon name="book" size={14}/> Journal
+          </button>
+          <button className="btn btn-ghost" style={{ marginLeft: 'auto' }} onClick={() => { onIgnoreSignal(signal); onClose(); }}>
+            Ignorieren
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const LIVE_INTERVAL_MS       = 30 * 1000;
 const RADAR_INTERVAL_MS      = 5  * 60 * 1000;
 const BIAS_INTERVAL_MS       = 60 * 1000;
@@ -404,7 +526,13 @@ const DashboardPage = ({ user, navigate }) => {
       </div>
 
       {/* Latest signals table */}
-      <LatestTradesCard signals={latestSignals} onViewAll={() => navigate('backtest')}/>
+      <LatestTradesCard
+        signals={latestSignals}
+        onViewAll={() => navigate('backtest')}
+        onExecuteTrade={handleExecuteTrade}
+        onSaveToJournal={handleSaveToJournal}
+        onIgnoreSignal={handleIgnoreSignal}
+      />
     </div>
   );
 };
@@ -642,10 +770,11 @@ const MarketBiasCard = ({ marketBias }) => {
   );
 };
 
-const LatestTradesCard = ({ signals, onViewAll }) => {
+const LatestTradesCard = ({ signals, onViewAll, onExecuteTrade, onSaveToJournal, onIgnoreSignal }) => {
   const [dirFilter,    setDirFilter]    = useState('all');
   const [scoreFilter,  setScoreFilter]  = useState(0);
   const [statusFilter, setStatusFilter] = useState('all');
+  const [selected,     setSelected]     = useState(null);
 
   if (!signals || signals.length === 0) return (
     <div className="card">
@@ -719,6 +848,15 @@ const LatestTradesCard = ({ signals, onViewAll }) => {
         </div>
       ) : (
         <>
+          {selected && (
+            <DashSignalModal
+              signal={selected}
+              onClose={() => setSelected(null)}
+              onExecuteTrade={onExecuteTrade || (() => {})}
+              onSaveToJournal={onSaveToJournal || (() => {})}
+              onIgnoreSignal={onIgnoreSignal || (() => {})}
+            />
+          )}
           {/* Desktop table */}
           <div className="signal-table-wrap" style={{ overflowX: 'auto' }}>
             <table className="tbl">
@@ -730,7 +868,7 @@ const LatestTradesCard = ({ signals, onViewAll }) => {
               </thead>
               <tbody>
                 {filtered.map((s, i) => (
-                  <tr key={i}>
+                  <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setSelected(s)}>
                     <td className="mono muted" style={{ fontSize: 11 }}>{getTimeAgo(s.created_at)}</td>
                     <td><AssetChip symbol={s.symbol}/></td>
                     <td><span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span></td>
@@ -756,7 +894,7 @@ const LatestTradesCard = ({ signals, onViewAll }) => {
               const scoreColor = sc >= 90 ? 'var(--win)' : sc >= 75 ? 'var(--wait)' : 'var(--blue-400)';
               const outcomeCls = s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait';
               return (
-                <div key={i} className="signal-mobile-row">
+                <div key={i} className="signal-mobile-row" style={{ cursor: 'pointer' }} onClick={() => setSelected(s)}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <AssetChip symbol={s.symbol}/>
                     <span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span>
