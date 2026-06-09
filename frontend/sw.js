@@ -58,3 +58,29 @@ self.addEventListener('fetch', e => {
     })
   );
 });
+
+self.addEventListener('push', e => {
+  let data = { title: 'WAVESCOUT Signal', body: '', url: '/' };
+  try { data = { ...data, ...e.data.json() }; } catch (_) {}
+  e.waitUntil(
+    self.registration.showNotification(data.title, {
+      body:  data.body,
+      icon:  '/icon-192.png',
+      badge: '/icon-192.png',
+      data:  { url: data.url },
+      vibrate: [200, 100, 200],
+    })
+  );
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = e.notification.data?.url || '/';
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      const existing = list.find(c => c.url.includes(self.location.origin));
+      if (existing) return existing.focus();
+      return clients.openWindow(url);
+    })
+  );
+});

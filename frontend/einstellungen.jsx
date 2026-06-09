@@ -579,6 +579,67 @@ function TradingSection({ settings, setSettings, onSave, saved }) {
 function NotificationsSection({ settings, setSettings, onSave, saved }) {
   const [ntfyLoading, setNtfyLoading] = useState(false);
   const [ntfyResult,  setNtfyResult]  = useState(null);
+  const [pushState,   setPushState]   = useState('checking'); // checking | unavailable | unsubscribed | subscribing | subscribed | error
+  const [pushMsg,     setPushMsg]     = useState('');
+  const [vapidKey,    setVapidKey]    = useState(null);
+
+  useEffect(() => { checkPushState(); }, []);
+
+  const checkPushState = async () => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setPushState('unavailable'); return;
+    }
+    try {
+      const res = await fetch(`${API_URL}/push/vapid-public-key`, { credentials: 'include' });
+      const { key } = await res.json();
+      if (!key) { setPushState('unavailable'); setPushMsg('VAPID_PUBLIC_KEY nicht konfiguriert'); return; }
+      setVapidKey(key);
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      setPushState(sub ? 'subscribed' : 'unsubscribed');
+    } catch (e) {
+      setPushState('error'); setPushMsg(e.message);
+    }
+  };
+
+  const subscribePush = async () => {
+    setPushState('subscribing'); setPushMsg('');
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') { setPushState('unsubscribed'); setPushMsg('Berechtigung verweigert'); return; }
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: vapidKey,
+      });
+      await fetch(`${API_URL}/push/subscribe`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sub.toJSON()),
+      });
+      setPushState('subscribed'); setPushMsg('');
+    } catch (e) {
+      setPushState('unsubscribed'); setPushMsg(e.message);
+    }
+  };
+
+  const unsubscribePush = async () => {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await fetch(`${API_URL}/push/subscribe`, {
+          method: 'DELETE', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: sub.endpoint }),
+        });
+        await sub.unsubscribe();
+      }
+      setPushState('unsubscribed'); setPushMsg('');
+    } catch (e) {
+      setPushMsg(e.message);
+    }
+  };
 
   const testNtfy = async () => {
     setNtfyLoading(true); setNtfyResult(null);
@@ -592,45 +653,90 @@ function NotificationsSection({ settings, setSettings, onSave, saved }) {
     setNtfyLoading(false);
   };
 
+  const pushDot = pushState === 'subscribed' ? 'var(--win)' : pushState === 'unavailable' || pushState === 'error' ? 'var(--loss)' : 'var(--text-quaternary)';
+  const pushLabel = pushState === 'subscribed' ? 'Aktiv' : pushState === 'unavailable' ? 'Nicht verfügbar' : pushState === 'checking' ? 'Wird geprüft…' : pushState === 'subscribing' ? 'Wird aktiviert…' : 'Inaktiv';
+
   return (
-    <div className="card">
-      <div className="card-head"><Icon name="bell" className="ico"/><h3>Benachrichtigungen</h3></div>
-      <div className="card-body">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
-          {[
-            ['notifications',   'Browser-Benachrichtigungen'],
-            ['telegramEnabled', 'Telegram-Benachrichtigungen'],
-          ].map(([key, label]) => (
-            <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-              <input type="checkbox" checked={settings[key]} onChange={e => setSettings({ ...settings, [key]: e.target.checked })}/>
-              {label}
-            </label>
-          ))}
-        </div>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 20 }}>
-          <button className="btn btn-primary btn-sm" onClick={onSave}>
-            <Icon name="check" size={13}/> Speichern
-          </button>
-          {saved && (
-            <span style={{ color: 'var(--win)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Icon name="check" size={12}/> Gespeichert
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
+      {/* Browser Push */}
+      <div className="card">
+        <div className="card-head"><Icon name="bell" className="ico"/><h3>Browser Push</h3>
+          <div className="actions">
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: pushDot, display: 'inline-block' }}/>
+              <span style={{ color: pushDot, fontWeight: 600 }}>{pushLabel}</span>
             </span>
+          </div>
+        </div>
+        <div className="card-body">
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
+            Erhalte Push-Benachrichtigungen direkt im Browser oder auf dem iPhone (PWA) für Signale mit Score&nbsp;≥&nbsp;80 — auch wenn die App im Hintergrund ist.
+          </p>
+          {pushState === 'unavailable' ? (
+            <div style={{ fontSize: 13, color: 'var(--loss)' }}>
+              {pushMsg || 'Push nicht unterstützt (kein Service Worker / kein HTTPS).'}
+            </div>
+          ) : pushState === 'subscribed' ? (
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <span style={{ fontSize: 13, color: 'var(--win)' }}>✓ Dieses Gerät erhält Push-Benachrichtigungen</span>
+              <button className="btn btn-ghost btn-sm" onClick={unsubscribePush}>Deaktivieren</button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button className="btn btn-primary btn-sm" onClick={subscribePush}
+                disabled={pushState === 'checking' || pushState === 'subscribing'}>
+                {pushState === 'subscribing' ? <><div className="spinner-sm"/> Aktiviere…</> : <><Icon name="bell" size={13}/> Push aktivieren</>}
+              </button>
+              {pushMsg && <span style={{ fontSize: 12, color: 'var(--loss)' }}>{pushMsg}</span>}
+            </div>
+          )}
+          {pushState === 'unsubscribed' && (
+            <p style={{ fontSize: 11, color: 'var(--text-quaternary)', marginTop: 10 }}>
+              Auf iPhone: WAVESCOUT muss als PWA zum Home-Bildschirm hinzugefügt sein (iOS 16.4+).
+            </p>
           )}
         </div>
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 10 }}>NTFY.SH TEST</div>
-          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>
-            Sendet einen Test-Push via ntfy.sh (Score&nbsp;97, BTCUSDT). Benötigt das Secret <code>NTFY_TOPIC</code>.
+      </div>
+
+      {/* Settings toggles */}
+      <div className="card">
+        <div className="card-head"><Icon name="bell" className="ico"/><h3>Benachrichtigungseinstellungen</h3></div>
+        <div className="card-body">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+            {[
+              ['telegramEnabled', 'Telegram-Benachrichtigungen'],
+            ].map(([key, label]) => (
+              <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                <input type="checkbox" checked={settings[key]} onChange={e => setSettings({ ...settings, [key]: e.target.checked })}/>
+                {label}
+              </label>
+            ))}
           </div>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <button className="btn btn-primary btn-sm" onClick={testNtfy} disabled={ntfyLoading}>
-              {ntfyLoading ? 'Sende...' : 'ntfy Test senden'}
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 20 }}>
+            <button className="btn btn-primary btn-sm" onClick={onSave}>
+              <Icon name="check" size={13}/> Speichern
             </button>
-            {ntfyResult && (
-              <span style={{ fontSize: 13, color: ntfyResult.ok ? 'var(--win)' : 'var(--loss)' }}>
-                {ntfyResult.msg}
+            {saved && (
+              <span style={{ color: 'var(--win)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Icon name="check" size={12}/> Gespeichert
               </span>
             )}
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 10 }}>NTFY.SH TEST</div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>
+              Sendet einen Test-Push via ntfy.sh (Score&nbsp;97, BTCUSDT). Benötigt das Secret <code>NTFY_TOPIC</code>.
+            </div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <button className="btn btn-primary btn-sm" onClick={testNtfy} disabled={ntfyLoading}>
+                {ntfyLoading ? 'Sende...' : 'ntfy Test senden'}
+              </button>
+              {ntfyResult && (
+                <span style={{ fontSize: 13, color: ntfyResult.ok ? 'var(--win)' : 'var(--loss)' }}>
+                  {ntfyResult.msg}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </div>
