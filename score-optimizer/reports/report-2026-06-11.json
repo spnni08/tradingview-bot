@@ -1,0 +1,278 @@
+{
+  "date": "2026-06-11",
+  "generatedAt": "2026-06-11T20:17:18.885Z",
+  "today": {
+    "trades": 15,
+    "wins": 12,
+    "losses": 3,
+    "winRate": 80,
+    "pnlPct": 10.99
+  },
+  "total": {
+    "trades": 102,
+    "wins": 79,
+    "losses": 23,
+    "winRate": 77.5
+  },
+  "comparison": {
+    "oldFormula": {
+      "description": "v2.0 (statische Gewichte)",
+      "winRateAll": 77.5
+    },
+    "newFormula": {
+      "description": "v3-calibrated (GO ≥ 54)",
+      "winRateAtGo": 88.6,
+      "keptPct": 34.3
+    },
+    "improvement": "77.5% → 88.6% (bei Score ≥ 54, 34.3% der Signale)"
+  },
+  "topProblems": [
+    {
+      "rule": "US-Open Session (13:30–16 UTC)",
+      "winRate": 55.6,
+      "n": 9,
+      "lift": -22.9,
+      "newWeight": -15
+    },
+    {
+      "rule": "EMA bearish Alignment – SHORT",
+      "winRate": 70,
+      "n": 30,
+      "lift": -8.7,
+      "newWeight": -7
+    },
+    {
+      "rule": "RSI neutral-hoch (50–60) bei SHORT",
+      "winRate": 70.4,
+      "n": 27,
+      "lift": -8.5,
+      "newWeight": -7
+    }
+  ],
+  "recommendations": [
+    "EMA200-Ausschluss-Regel invertieren oder streichen: Trades MIT diesem Flag gewinnen 84.2% (Baseline 77.5%). Alternativ Grenzwert von 0,5% auf 0,1% senken. Neues Gewicht: +5.",
+    "RSI 55–65 (Neutralzone) abwerten: Win-Rate 70.4% bei n=27 (Lift -8.5%). Neues Gewicht: -7.",
+    "STRONG: \"HIGH-Impact News aktiv\" — Win-Rate 100% bei n=6 (+10% Lift). Gewicht +8.",
+    "Score-Band 75–85 ist die Schwachstelle (72.4% bei n=76): Signale in diesem Band nur mit Zusatzfilter (London-Session oder EMA-Sweet-Spot) ausführen.",
+    "Neue GO-Schwelle: Score ≥ 54 ⇒ 77.5% → 88.6% (bei Score ≥ 54, 34.3% der Signale)"
+  ],
+  "positions": {
+    "open": 8,
+    "bySymbol": {
+      "SUIUSDT": 1,
+      "VIRTUALUSDT": 3,
+      "XRPUSDT": 1,
+      "XAUTUSDT": 1,
+      "TRXUSDT": 2
+    },
+    "correlations": [
+      {
+        "symbol": "VIRTUALUSDT",
+        "count": 3
+      },
+      {
+        "symbol": "TRXUSDT",
+        "count": 2
+      }
+    ],
+    "exposure": {
+      "current": 8,
+      "max": 6,
+      "riskPerTradePct": 1
+    },
+    "alerts": [
+      {
+        "level": "HIGH",
+        "type": "SYMBOL_CLUSTER",
+        "message": "VIRTUALUSDT: 3 offene Positionen – Korrelations-Risiko! (Limit 2)"
+      },
+      {
+        "level": "HIGH",
+        "type": "STALE_POSITION",
+        "message": "SUIUSDT SHORT (Entry 2026-06-11T00:20:10.018Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!"
+      },
+      {
+        "level": "HIGH",
+        "type": "STALE_POSITION",
+        "message": "VIRTUALUSDT SHORT (Entry 2026-06-11T00:20:08.260Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!"
+      },
+      {
+        "level": "HIGH",
+        "type": "STALE_POSITION",
+        "message": "XRPUSDT LONG (Entry 2026-06-09T08:50:05.229Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!"
+      },
+      {
+        "level": "HIGH",
+        "type": "STALE_POSITION",
+        "message": "XAUTUSDT LONG (Entry 2026-06-09T07:10:07.830Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!"
+      },
+      {
+        "level": "HIGH",
+        "type": "STALE_POSITION",
+        "message": "VIRTUALUSDT LONG (Entry 2026-06-08T22:00:07.247Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!"
+      },
+      {
+        "level": "HIGH",
+        "type": "STALE_POSITION",
+        "message": "VIRTUALUSDT LONG (Entry 2026-06-08T20:15:05.419Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!"
+      },
+      {
+        "level": "HIGH",
+        "type": "STALE_POSITION",
+        "message": "TRXUSDT LONG (Entry 2026-06-07T15:05:10.778Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!"
+      },
+      {
+        "level": "HIGH",
+        "type": "STALE_POSITION",
+        "message": "TRXUSDT LONG (Entry 2026-06-07T12:15:08.218Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!"
+      },
+      {
+        "level": "HIGH",
+        "type": "EXPOSURE",
+        "message": "Gesamt-Exposure 8% (8 Positionen × 1% Risiko) über Limit 6%"
+      },
+      {
+        "level": "MEDIUM",
+        "type": "SIMULTANEOUS_ENTRIES",
+        "message": "VIRTUALUSDT SHORT + SUIUSDT SHORT innerhalb von 5min eröffnet – ein Markt-Move kann alle gleichzeitig ausstoppen"
+      }
+    ]
+  },
+  "todaysTrades": [
+    {
+      "symbol": "VIRTUALUSDT",
+      "direction": "SHORT",
+      "outcome": "LOSS",
+      "score": 90,
+      "rsi": 70.2138704143,
+      "pnl_pct": -1,
+      "time": "2026-06-11 00:20:08"
+    },
+    {
+      "symbol": "SUIUSDT",
+      "direction": "SHORT",
+      "outcome": "LOSS",
+      "score": 81,
+      "rsi": 71.2299836984,
+      "pnl_pct": -1,
+      "time": "2026-06-11 00:20:09"
+    },
+    {
+      "symbol": "RIVERUSDT",
+      "direction": "LONG",
+      "outcome": "LOSS",
+      "score": 79,
+      "rsi": 38.9506064685,
+      "pnl_pct": -1,
+      "time": "2026-06-11 05:05:40"
+    },
+    {
+      "symbol": "XRPUSDT",
+      "direction": "LONG",
+      "outcome": "WIN",
+      "score": 75,
+      "rsi": 39.1694762539,
+      "pnl_pct": 0.76,
+      "time": "2026-06-11 07:40:04"
+    },
+    {
+      "symbol": "SOLUSDT",
+      "direction": "LONG",
+      "outcome": "WIN",
+      "score": 84,
+      "rsi": 36.6686345303,
+      "pnl_pct": 1.5,
+      "time": "2026-06-11 07:40:06"
+    },
+    {
+      "symbol": "SUIUSDT",
+      "direction": "LONG",
+      "outcome": "WIN",
+      "score": 84,
+      "rsi": 37.6696995803,
+      "pnl_pct": 0.91,
+      "time": "2026-06-11 07:40:06"
+    },
+    {
+      "symbol": "SUIUSDT",
+      "direction": "LONG",
+      "outcome": "WIN",
+      "score": 76,
+      "rsi": 43.4236378953,
+      "pnl_pct": 0.27,
+      "time": "2026-06-11 09:10:07"
+    },
+    {
+      "symbol": "VIRTUALUSDT",
+      "direction": "LONG",
+      "outcome": "WIN",
+      "score": 100,
+      "rsi": 40.0666971112,
+      "pnl_pct": 0.09,
+      "time": "2026-06-11 09:15:15"
+    },
+    {
+      "symbol": "SOLUSDT",
+      "direction": "LONG",
+      "outcome": "WIN",
+      "score": 86,
+      "rsi": 44.0220102305,
+      "pnl_pct": 0.31,
+      "time": "2026-06-11 09:20:08"
+    },
+    {
+      "symbol": "XRPUSDT",
+      "direction": "LONG",
+      "outcome": "WIN",
+      "score": 77,
+      "rsi": 44.0330344248,
+      "pnl_pct": 2.1,
+      "time": "2026-06-11 09:25:04"
+    },
+    {
+      "symbol": "RENDERUSDT",
+      "direction": "LONG",
+      "outcome": "WIN",
+      "score": 79,
+      "rsi": 44.0347333154,
+      "pnl_pct": 1.96,
+      "time": "2026-06-11 09:25:10"
+    },
+    {
+      "symbol": "SUIUSDT",
+      "direction": "LONG",
+      "outcome": "WIN",
+      "score": 76,
+      "rsi": 42.8215495763,
+      "pnl_pct": 0.41,
+      "time": "2026-06-11 09:45:06"
+    },
+    {
+      "symbol": "XRPUSDT",
+      "direction": "LONG",
+      "outcome": "WIN",
+      "score": 77,
+      "rsi": 44.6571033907,
+      "pnl_pct": 2.09,
+      "time": "2026-06-11 10:00:13"
+    },
+    {
+      "symbol": "RENDERUSDT",
+      "direction": "LONG",
+      "outcome": "WIN",
+      "score": 79,
+      "rsi": 38.5080436623,
+      "pnl_pct": 2.09,
+      "time": "2026-06-11 11:40:06"
+    },
+    {
+      "symbol": "SOLUSDT",
+      "direction": "LONG",
+      "outcome": "WIN",
+      "score": 77,
+      "rsi": 40.7412279776,
+      "pnl_pct": 1.5,
+      "time": "2026-06-11 14:15:09"
+    }
+  ]
+}

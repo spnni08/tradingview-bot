@@ -1,0 +1,18 @@
+name = "wavescout-score-optimizer"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+workers_dev = true
+
+# Gleiche D1-Datenbank wie der Haupt-Worker (tradingview-bot) —
+# der Optimizer kann damit Trades direkt aus `signals` übernehmen
+# (POST /api/import-from-signals). Eigene Tabellen: optimizer_*.
+[[d1_databases]]
+binding = "DB"
+database_name = "wavescout_db"
+database_id = "550e7c98-5757-451d-b0ea-5c8f374c53b1"
+
+# Optional: KV für gecachte Formel & Evaluierungen.
+# KV-Namespace anlegen: wrangler kv namespace create RULES_KV
+# [[kv_namespaces]]
+# binding = "RULES_KV"
+# id = "<namespace-id>"

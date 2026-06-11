@@ -1,0 +1,24 @@
+{
+  "name": "wavescout-score-optimizer",
+  "version": "1.0.0",
+  "description": "WAVESCOUT Score Optimizer — kalibriert die Score-Formel aus echten Win-Rates, bewertet Live-Signale (GO/NO-GO), überwacht offene Positionen und generiert tägliche Reports.",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node index.js",
+    "start": "node index.js",
+    "calibrate": "node cli.js calibrate data/trades-2026-06-11.csv",
+    "report": "node cli.js report data/trades-2026-06-11.csv data/open-positions.csv",
+    "test": "node --test test/optimizer.test.js",
+    "deploy": "wrangler deploy"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.22.2"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><title>WAVESCOUT Daily Report 2026-06-11</title></head>
+<body style="font-family:system-ui,Segoe UI,sans-serif;background:#0f172a;color:#e2e8f0;padding:24px;max-width:860px;margin:auto">
+  <h1 style="margin:0 0 4px">WAVESCOUT Score Optimizer — Tagesreport</h1>
+  <div style="color:#94a3b8;margin-bottom:24px">2026-06-11 · generiert 2026-06-11T20:17:18.885Z</div>
+
+  <h2>Heutige Performance</h2>
+  <p>Trades: <b>15</b> · Win-Rate: <span style="font-weight:700;color:#10b981">80%</span>
+     · PnL: <span style="font-weight:700;color:#10b981">+10.99%</span></p>
+  <p style="color:#94a3b8">Gesamt: 102 Trades, 77.5% Win-Rate (79W/23L)</p>
+
+  <h2>Alte vs. neue Formel</h2>
+  <p>v2.0 (statische Gewichte): <b>77.5%</b> →
+     v3-calibrated (GO ≥ 54): <b style="color:#10b981">88.6%</b>
+     (behält 34.3% der Signale)</p>
+
+  <h2>Top-Problem-Regeln</h2><ul><li><b>US-Open Session (13:30–16 UTC)</b> — Win-Rate 55.6% (n=9, Lift -22.9%) → neues Gewicht -15</li><li><b>EMA bearish Alignment – SHORT</b> — Win-Rate 70% (n=30, Lift -8.7%) → neues Gewicht -7</li><li><b>RSI neutral-hoch (50–60) bei SHORT</b> — Win-Rate 70.4% (n=27, Lift -8.5%) → neues Gewicht -7</li></ul>
+  <h2>Positions-Alerts</h2><ul><li style="color:#f04f4f"><b>[HIGH] SYMBOL_CLUSTER</b>: VIRTUALUSDT: 3 offene Positionen – Korrelations-Risiko! (Limit 2)</li><li style="color:#f04f4f"><b>[HIGH] STALE_POSITION</b>: SUIUSDT SHORT (Entry 2026-06-11T00:20:10.018Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!</li><li style="color:#f04f4f"><b>[HIGH] STALE_POSITION</b>: VIRTUALUSDT SHORT (Entry 2026-06-11T00:20:08.260Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!</li><li style="color:#f04f4f"><b>[HIGH] STALE_POSITION</b>: XRPUSDT LONG (Entry 2026-06-09T08:50:05.229Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!</li><li style="color:#f04f4f"><b>[HIGH] STALE_POSITION</b>: XAUTUSDT LONG (Entry 2026-06-09T07:10:07.830Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!</li><li style="color:#f04f4f"><b>[HIGH] STALE_POSITION</b>: VIRTUALUSDT LONG (Entry 2026-06-08T22:00:07.247Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!</li><li style="color:#f04f4f"><b>[HIGH] STALE_POSITION</b>: VIRTUALUSDT LONG (Entry 2026-06-08T20:15:05.419Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!</li><li style="color:#f04f4f"><b>[HIGH] STALE_POSITION</b>: TRXUSDT LONG (Entry 2026-06-07T15:05:10.778Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!</li><li style="color:#f04f4f"><b>[HIGH] STALE_POSITION</b>: TRXUSDT LONG (Entry 2026-06-07T12:15:08.218Z) steht noch auf OPEN, aber das zugehörige Signal wurde bereits als LOSS geschlossen (-1%) – Position schließen/synchronisieren!</li><li style="color:#f04f4f"><b>[HIGH] EXPOSURE</b>: Gesamt-Exposure 8% (8 Positionen × 1% Risiko) über Limit 6%</li><li style="color:#f59e0b"><b>[MEDIUM] SIMULTANEOUS_ENTRIES</b>: VIRTUALUSDT SHORT + SUIUSDT SHORT innerhalb von 5min eröffnet – ein Markt-Move kann alle gleichzeitig ausstoppen</li></ul>
+  <h2>Empfehlungen</h2><ul><li>EMA200-Ausschluss-Regel invertieren oder streichen: Trades MIT diesem Flag gewinnen 84.2% (Baseline 77.5%). Alternativ Grenzwert von 0,5% auf 0,1% senken. Neues Gewicht: +5.</li><li>RSI 55–65 (Neutralzone) abwerten: Win-Rate 70.4% bei n=27 (Lift -8.5%). Neues Gewicht: -7.</li><li>STRONG: "HIGH-Impact News aktiv" — Win-Rate 100% bei n=6 (+10% Lift). Gewicht +8.</li><li>Score-Band 75–85 ist die Schwachstelle (72.4% bei n=76): Signale in diesem Band nur mit Zusatzfilter (London-Session oder EMA-Sweet-Spot) ausführen.</li><li>Neue GO-Schwelle: Score ≥ 54 ⇒ 77.5% → 88.6% (bei Score ≥ 54, 34.3% der Signale)</li></ul>
+
+  <h2>Heutige Trades</h2>
+  <table cellpadding="6" style="border-collapse:collapse;width:100%;font-size:14px">
+    <tr style="color:#94a3b8;text-align:left"><th>Zeit</th><th>Symbol</th><th>Richtung</th><th>Outcome</th><th align="right">Score</th><th align="right">PnL</th></tr>
+    
+    <tr>
+      <td>2026-06-11 00:20:08</td><td>VIRTUALUSDT</td><td>SHORT</td>
+      <td style="color:#f04f4f;font-weight:700">LOSS</td>
+      <td align="right">90</td><td align="right">-1%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 00:20:09</td><td>SUIUSDT</td><td>SHORT</td>
+      <td style="color:#f04f4f;font-weight:700">LOSS</td>
+      <td align="right">81</td><td align="right">-1%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 05:05:40</td><td>RIVERUSDT</td><td>LONG</td>
+      <td style="color:#f04f4f;font-weight:700">LOSS</td>
+      <td align="right">79</td><td align="right">-1%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 07:40:04</td><td>XRPUSDT</td><td>LONG</td>
+      <td style="color:#10b981;font-weight:700">WIN</td>
+      <td align="right">75</td><td align="right">+0.76%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 07:40:06</td><td>SOLUSDT</td><td>LONG</td>
+      <td style="color:#10b981;font-weight:700">WIN</td>
+      <td align="right">84</td><td align="right">+1.5%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 07:40:06</td><td>SUIUSDT</td><td>LONG</td>
+      <td style="color:#10b981;font-weight:700">WIN</td>
+      <td align="right">84</td><td align="right">+0.91%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 09:10:07</td><td>SUIUSDT</td><td>LONG</td>
+      <td style="color:#10b981;font-weight:700">WIN</td>
+      <td align="right">76</td><td align="right">+0.27%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 09:15:15</td><td>VIRTUALUSDT</td><td>LONG</td>
+      <td style="color:#10b981;font-weight:700">WIN</td>
+      <td align="right">100</td><td align="right">+0.09%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 09:20:08</td><td>SOLUSDT</td><td>LONG</td>
+      <td style="color:#10b981;font-weight:700">WIN</td>
+      <td align="right">86</td><td align="right">+0.31%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 09:25:04</td><td>XRPUSDT</td><td>LONG</td>
+      <td style="color:#10b981;font-weight:700">WIN</td>
+      <td align="right">77</td><td align="right">+2.1%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 09:25:10</td><td>RENDERUSDT</td><td>LONG</td>
+      <td style="color:#10b981;font-weight:700">WIN</td>
+      <td align="right">79</td><td align="right">+1.96%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 09:45:06</td><td>SUIUSDT</td><td>LONG</td>
+      <td style="color:#10b981;font-weight:700">WIN</td>
+      <td align="right">76</td><td align="right">+0.41%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 10:00:13</td><td>XRPUSDT</td><td>LONG</td>
+      <td style="color:#10b981;font-weight:700">WIN</td>
+      <td align="right">77</td><td align="right">+2.09%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 11:40:06</td><td>RENDERUSDT</td><td>LONG</td>
+      <td style="color:#10b981;font-weight:700">WIN</td>
+      <td align="right">79</td><td align="right">+2.09%</td>
+    </tr>
+    <tr>
+      <td>2026-06-11 14:15:09</td><td>SOLUSDT</td><td>LONG</td>
+      <td style="color:#10b981;font-weight:700">WIN</td>
+      <td align="right">77</td><td align="right">+1.5%</td>
+    </tr>
+  </table>
+</body></html>
