@@ -1,0 +1,64 @@
+{
+  "version": "v3-calibrated",
+  "generatedAt": "2026-06-11T20:17:18.809Z",
+  "baseScore": 50,
+  "weights": {
+    "RSI_EXTREME_SETUP_A": 9,
+    "RSI_REVERSAL_RISK": -18,
+    "RSI_PULLBACK_IDEAL": -4,
+    "RSI_SETUP_A_FIT": 0,
+    "RSI_NEUTRAL_LOW_LONG": 1,
+    "RSI_NEUTRAL_HIGH_SHORT": -7,
+    "RSI_NEUTRAL": 0,
+    "RSI_NO_PULLBACK": -18,
+    "RSI_CAUTION": -6,
+    "RSI_TREND_RANGE_B": 18,
+    "RSI_SETUP_B_PARTIAL": 7,
+    "RSI_OUTSIDE_B": -5,
+    "EMA200_PROXIMITY_EXCLUSION": 5,
+    "EMA_ALIGNED_LONG": -2,
+    "EMA_ALIGNED_SHORT": -7,
+    "EMA_AGAINST": -15,
+    "PRICE_WRONG_SIDE_EMA200": -6,
+    "TREND_MATCH": 10,
+    "TREND_AGAINST": -10,
+    "WAVE_MATCH": 8,
+    "WAVE_AGAINST": -4,
+    "TF_ENTRY": 0,
+    "TF_SHORT_OK": 4,
+    "TF_HIGHER": 2,
+    "TF_UNKNOWN": 0,
+    "SR_SUPPORT_NEAR_LONG": 2,
+    "SR_RESISTANCE_NEAR_SHORT": -6,
+    "SR_TOO_FAR": 0,
+    "SR_NOT_IN_ZONE": 0,
+    "SESSION_LONDON": 2,
+    "SESSION_US": -15,
+    "CONF_HIGH": 7,
+    "CONF_MID": 4,
+    "CONF_LOW": 0,
+    "NEWS_HIGH_IMPACT": 8,
+    "RSI_55_65": -7,
+    "EMA_DIST_SWEET": 3,
+    "EMA_DIST_FAR": 0,
+    "CLUSTERED_ENTRY": 0
+  },
+  "deadRules": [],
+  "invertedRules": [
+    "EMA200_PROXIMITY_EXCLUSION"
+  ],
+  "thresholds": {
+    "go": 54,
+    "caution": 50
+  },
+  "weakBand": {
+    "min": 54,
+    "max": 62,
+    "requireOneOf": [
+      "SESSION_LONDON",
+      "EMA_DIST_SWEET"
+    ]
+  },
+  "minScore": 0,
+  "maxScore": 100
+}

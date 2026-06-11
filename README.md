@@ -37,6 +37,8 @@ WAVESCOUT richtet sich an aktive Trader, die ihre TradingView-Alerts automatisie
 tradingview-bot/
 ├── worker.js               # Haupt-Worker: Webhook, API-Endpunkte, Signal-Verarbeitung
 ├── wrangler.toml           # Cloudflare-Konfiguration (D1, Cron, Routes)
+├── score-optimizer/        # Score-Kalibrierung aus echten Win-Rates, Live-Evaluator
+│                           # (GO/NO-GO), Position-Monitor, Tagesreports → eigenes README
 └── frontend/
     ├── index.html          # SPA-Einstiegspunkt (React via Babel-CDN)
     ├── app.jsx             # Router, Session-Management
