@@ -1,0 +1,17 @@
+{
+  "name": "wavescout-worker",
+  "version": "1.0.0",
+  "description": "WAVESCOUT production Cloudflare Worker — signal processing, scoring, Telegram, backtesting.",
+  "type": "module",
+  "main": "worker.js",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "deploy": "wrangler deploy"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}

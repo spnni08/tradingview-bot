@@ -7013,3 +7013,11 @@ export default {
     ctx.waitUntil(getMarketRadar(env));
   }
 };
+
+// ─────────────────────────────────────────────────────────────────
+// Test-only named exports (behaviour-neutral).
+// The Cloudflare Worker runtime uses the `export default` above; these
+// named exports merely expose the pure scoring helpers so they can be
+// unit-tested with `node --test`. They do not change runtime logic or
+// the default export.
+export { analyzeWithRules, calcRR, safePct, getSignalQuality, DEFAULT_STRATEGY_CONFIG };
