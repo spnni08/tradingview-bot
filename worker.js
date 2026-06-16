@@ -1412,6 +1412,7 @@ async function ensureTables(env) {
       ['vp_zone',              'TEXT'],
       ['vp_score',             'INTEGER DEFAULT 0'],
       ['dashboard_seen',    'INTEGER DEFAULT 0'],
+      ['signal_class',         'TEXT'],
     ];
     for (const [col, type] of signalIndicatorCols) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); }
@@ -1655,6 +1656,76 @@ async function createPracticeTrade(env, signalId, signal, analysis) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// TRADE CLOSE — single writer for trade outcomes
+// ═══════════════════════════════════════════════════════════════
+// signals and practice_trades are two outcome tables for the same logical
+// trade (practice_trades.signal_id -> signals.id). Each used to be closed
+// independently by whichever resolver (price-tick check, cron, TP/SL eval)
+// got there first, so the two tables could disagree on WIN/LOSS for the
+// same trade. closeTrade() is the only place that writes a close to either
+// table for the automated resolvers below — it closes whichever row
+// triggered it AND, if still OPEN, the linked counterpart, in one atomic
+// D1 batch, so they can never drift apart again.
+// Manual admin/trader PATCH endpoints intentionally bypass this (they
+// support OPEN/IGNORED re-opens and explicit overrides that aren't "close"
+// semantics), so they keep their own direct UPDATEs.
+async function closeTrade(env, {
+  signalId = null,
+  practiceTradeId = null,
+  outcome,
+  exitPrice,
+  pnlPct,
+  outcomeSource = 'auto',
+  telegramOutcomeSent = null, // null = leave column untouched
+} = {}) {
+  if (!signalId && !practiceTradeId) return { closedSignal: false, closedPracticeTrade: false };
+
+  let resolvedSignalId = signalId;
+  let resolvedPracticeTradeId = practiceTradeId;
+
+  if (!resolvedSignalId && practiceTradeId) {
+    const pt = await env.DB.prepare(`SELECT signal_id FROM practice_trades WHERE id = ?`).bind(practiceTradeId).first();
+    if (pt?.signal_id) resolvedSignalId = pt.signal_id;
+  }
+  if (!resolvedPracticeTradeId && resolvedSignalId) {
+    const pt = await env.DB.prepare(`SELECT id FROM practice_trades WHERE signal_id = ? AND status = 'OPEN'`).bind(resolvedSignalId).first();
+    if (pt) resolvedPracticeTradeId = pt.id;
+  }
+
+  const nowMs  = Date.now();
+  const nowIso = new Date().toISOString();
+  const stmts  = [];
+  let signalIdx = -1, practiceTradeIdx = -1;
+
+  if (resolvedSignalId) {
+    const sets  = ['outcome = ?', 'exit_price = ?', 'pnl_pct = ?', 'closed_at = ?', 'outcome_source = ?', 'updated_at = ?'];
+    const binds = [outcome, exitPrice, pnlPct, nowMs, outcomeSource, nowMs];
+    if (telegramOutcomeSent !== null) { sets.push('telegram_outcome_sent = ?'); binds.push(telegramOutcomeSent); }
+    binds.push(resolvedSignalId);
+    signalIdx = stmts.length;
+    stmts.push(env.DB.prepare(`UPDATE signals SET ${sets.join(', ')} WHERE id = ? AND outcome = 'OPEN'`).bind(...binds));
+  }
+  if (resolvedPracticeTradeId) {
+    practiceTradeIdx = stmts.length;
+    stmts.push(env.DB.prepare(`
+      UPDATE practice_trades SET status = ?, exit_price = ?, result_pct = ?, closed_at = ?
+      WHERE id = ? AND status = 'OPEN'
+    `).bind(outcome, exitPrice, pnlPct, nowIso, resolvedPracticeTradeId));
+  }
+
+  if (!stmts.length) return { closedSignal: false, closedPracticeTrade: false };
+
+  // .meta.changes (not "was an ID resolved") tells us whether the OPEN-guarded
+  // UPDATE actually won the row — a concurrent closer may have already flipped
+  // it, in which case this call's batch write is a silent no-op.
+  const results = await env.DB.batch(stmts);
+  return {
+    closedSignal:        signalIdx        >= 0 && (results[signalIdx]?.meta?.changes ?? 0) > 0,
+    closedPracticeTrade: practiceTradeIdx >= 0 && (results[practiceTradeIdx]?.meta?.changes ?? 0) > 0,
+  };
+}
+
 async function checkPracticeTrades(env, symbol, currentPrice) {
   try {
     const tableCheck = await env.DB.prepare(
@@ -1682,10 +1753,13 @@ async function checkPracticeTrades(env, symbol, currentPrice) {
           ? ((currentPrice - trade.entry_price) / trade.entry_price) * 100
           : ((trade.entry_price - currentPrice) / trade.entry_price) * 100;
 
-        await env.DB.prepare(`
-          UPDATE practice_trades SET status = ?, exit_price = ?, result_pct = ?, closed_at = ?
-          WHERE id = ?
-        `).bind(newStatus, currentPrice, parseFloat(resultPct.toFixed(2)), new Date().toISOString(), trade.id).run();
+        await closeTrade(env, {
+          practiceTradeId: trade.id,
+          outcome: newStatus,
+          exitPrice: currentPrice,
+          pnlPct: parseFloat(resultPct.toFixed(2)),
+          outcomeSource: 'auto'
+        });
 
         console.log(`📊 Practice trade #${trade.id} closed: ${newStatus} (${resultPct.toFixed(2)}%)`);
       }
@@ -1721,12 +1795,30 @@ async function getPracticeTrades(env, { symbol, timeframe, direction, status, li
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// STATS HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+// winRate = wins / (wins+losses) * 100, OPEN/etc never in denominator.
+function computeWinRate(wins, losses) {
+  const closed = (wins || 0) + (losses || 0);
+  return closed > 0 ? parseFloat(((wins || 0) / closed * 100).toFixed(1)) : 0;
+}
+
+// expectancy = (winRate/100 * avgWinPct) - (lossRate/100 * |avgLossPct|)
+function computeExpectancy(wins, losses, avgWinPct, avgLossPct) {
+  const winRate = computeWinRate(wins, losses);
+  const lossRate = 100 - winRate;
+  const expectancy = (winRate / 100) * (avgWinPct || 0) - (lossRate / 100) * Math.abs(avgLossPct || 0);
+  return parseFloat(expectancy.toFixed(2));
+}
+
 async function getPracticeTradeStats(env) {
   try {
     const tableCheck = await env.DB.prepare(
       `SELECT name FROM sqlite_master WHERE type='table' AND name='practice_trades'`
     ).first();
-    if (!tableCheck) return { total: 0, open: 0, wins: 0, losses: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0 };
+    if (!tableCheck) return { total: 0, open: 0, wins: 0, losses: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, expectancy: 0 };
 
     const total   = await env.DB.prepare(`SELECT COUNT(*) as c FROM practice_trades`).first();
     const open    = await env.DB.prepare(`SELECT COUNT(*) as c FROM practice_trades WHERE status='OPEN'`).first();
@@ -1735,21 +1827,24 @@ async function getPracticeTradeStats(env) {
     const avgWin  = await env.DB.prepare(`SELECT AVG(result_pct) as a FROM practice_trades WHERE status='WIN'`).first();
     const avgLoss = await env.DB.prepare(`SELECT AVG(result_pct) as a FROM practice_trades WHERE status='LOSS'`).first();
 
-    const closed  = (wins.c || 0) + (losses.c || 0);
-    const winRate = closed > 0 ? ((wins.c / closed) * 100) : 0;
+    const winRate    = computeWinRate(wins.c, losses.c);
+    const avgWinPct  = parseFloat((avgWin.a || 0).toFixed(2));
+    const avgLossPct = parseFloat((avgLoss.a || 0).toFixed(2));
+    const expectancy = computeExpectancy(wins.c, losses.c, avgWinPct, avgLossPct);
 
     return {
       total: total.c || 0,
       open: open.c || 0,
       wins: wins.c || 0,
       losses: losses.c || 0,
-      winRate: parseFloat(winRate.toFixed(1)),
-      avgWinPct: parseFloat((avgWin.a || 0).toFixed(2)),
-      avgLossPct: parseFloat((avgLoss.a || 0).toFixed(2))
+      winRate,
+      avgWinPct,
+      avgLossPct,
+      expectancy
     };
   } catch (error) {
     console.error('❌ getPracticeTradeStats error:', error.message);
-    return { total: 0, open: 0, wins: 0, losses: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0 };
+    return { total: 0, open: 0, wins: 0, losses: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, expectancy: 0 };
   }
 }
 
@@ -1819,9 +1914,18 @@ async function processSignal(env, signal) {
   const vpVah   = parseFloat(signal.vah) || null;
   const vpVal   = parseFloat(signal.val) || null;
 
+  // VP-Score ist in Pine rein additiv (0 wenn Zone für die Richtung ungünstig
+  // ist, nie negativ). Ein LONG in der VAH-Zone (Resistance direkt über dem
+  // Preis) bzw. ein SHORT in der VAL-Zone (Support direkt unter dem Preis)
+  // ist aber kein neutraler Fall, sondern ein Gegenwind-Signal — dafür gibt es
+  // hier einen moderaten Abzug (Größenordnung unterhalb des max. Bonus von 25).
+  const vpAdverseZone   = (direction === 'LONG' && vpZone === 'VAH') || (direction === 'SHORT' && vpZone === 'VAL');
+  const vpPenalty       = vpAdverseZone ? -8 : 0;
+  const vpScoreAdjusted = vpScore + vpPenalty;
+
   // Score-Gate: (rule_score + vp_score) entscheidet ob Claude aufgerufen wird.
   // VP-Konfluenz senkt die Schwelle von 55 auf 50 (bessere Signalqualität erwartet).
-  const preAiScore  = ruleAnalysis.score + vpScore;
+  const preAiScore  = ruleAnalysis.score + vpScoreAdjusted;
   const aiThreshold = vpZone !== 'none' ? 50 : 55;
 
   // Use AbortController so the Anthropic fetch is actually cancelled when the
@@ -1862,11 +1966,12 @@ async function processSignal(env, signal) {
     }
   } catch (_) {}
 
-  // VP-Score on top addieren (nach News-Penalty, damit Penalty nicht durch VP überkompensiert wird)
-  if (vpScore > 0) {
+  // VP-Score on top addieren/abziehen (nach News-Penalty, damit Penalty nicht
+  // durch VP überkompensiert wird). Kann jetzt auch negativ sein (vpAdverseZone).
+  if (vpScoreAdjusted !== 0) {
     const before = analysis.score;
-    analysis.score = Math.min(100, analysis.score + vpScore);
-    console.log(`📊 VP boost: ${before} → ${analysis.score} (+${vpScore}, zone: ${vpZone})`);
+    analysis.score = Math.max(0, Math.min(100, analysis.score + vpScoreAdjusted));
+    console.log(`📊 VP adjust: ${before} → ${analysis.score} (${vpScoreAdjusted >= 0 ? '+' : ''}${vpScoreAdjusted}, zone: ${vpZone})`);
   }
 
   const signalId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -1977,12 +2082,12 @@ async function processSignal(env, signal) {
       matched_rules, failed_rules, unknown_rules, score_breakdown,
       signal_quality, risk_reward, planned_profit_pct, planned_risk_pct,
       trigger_reason, disclaimer_shown,
-      poc, vah, val, vp_zone, vp_score,
+      poc, vah, val, vp_zone, vp_score, signal_class,
       created_at, outcome
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?
     )
   `).bind(
     signalId,
@@ -2032,6 +2137,7 @@ async function processSignal(env, signal) {
     vpVal,
     vpZone,
     vpScore,
+    signal.signal_class || null,
     Date.now(),
     analysis.score >= 75 ? 'OPEN' : 'SKIPPED'
   ).run();
@@ -2469,27 +2575,76 @@ async function getStats(env) {
     const tableCheck = await env.DB.prepare(
       `SELECT name FROM sqlite_master WHERE type='table' AND name='signals'`
     ).first();
-    if (!tableCheck) return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0 };
+    if (!tableCheck) return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, expectancy: 0 };
 
-    const total  = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals`).first();
-    const wins   = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'WIN'`).first();
-    const losses = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'LOSS'`).first();
-    const open   = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'OPEN'`).first();
+    const total   = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals`).first();
+    const wins    = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'WIN'`).first();
+    const losses  = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'LOSS'`).first();
+    const open    = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'OPEN'`).first();
+    const avgWin  = await env.DB.prepare(`SELECT AVG(pnl_pct) as a FROM signals WHERE outcome = 'WIN'`).first();
+    const avgLoss = await env.DB.prepare(`SELECT AVG(pnl_pct) as a FROM signals WHERE outcome = 'LOSS'`).first();
 
-    const winRate = (wins.count + losses.count) > 0
-      ? (wins.count / (wins.count + losses.count)) * 100
-      : 0;
+    const winRate    = computeWinRate(wins.count, losses.count);
+    const avgWinPct  = parseFloat((avgWin.a || 0).toFixed(2));
+    const avgLossPct = parseFloat((avgLoss.a || 0).toFixed(2));
+    const expectancy = computeExpectancy(wins.count, losses.count, avgWinPct, avgLossPct);
 
     return {
       total: total.count || 0,
       wins: wins.count || 0,
       losses: losses.count || 0,
       open: open.count || 0,
-      winRate: parseFloat(winRate.toFixed(1))
+      winRate,
+      avgWinPct,
+      avgLossPct,
+      expectancy
     };
   } catch (error) {
     console.error('Error in getStats:', error);
-    return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0 };
+    return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, expectancy: 0 };
+  }
+}
+
+// Per-signal_class breakdown (NORMAL/STRONG/REVERSAL/...). Groups by whatever
+// values are present so future classes (e.g. REVERSAL from Pine v3.7) show up
+// automatically without code changes here.
+async function getStatsBySignalClass(env) {
+  try {
+    const tableCheck = await env.DB.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='signals'`
+    ).first();
+    if (!tableCheck) return [];
+
+    const rows = await env.DB.prepare(`
+      SELECT
+        COALESCE(signal_class, 'UNKNOWN') as signal_class,
+        COUNT(*) as total,
+        SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses,
+        AVG(CASE WHEN outcome='WIN' THEN pnl_pct ELSE NULL END) as avgWinPct,
+        AVG(CASE WHEN outcome='LOSS' THEN pnl_pct ELSE NULL END) as avgLossPct
+      FROM signals
+      GROUP BY COALESCE(signal_class, 'UNKNOWN')
+      ORDER BY total DESC
+    `).all();
+
+    return (rows.results || []).map(r => {
+      const avgWinPct  = parseFloat((r.avgWinPct || 0).toFixed(2));
+      const avgLossPct = parseFloat((r.avgLossPct || 0).toFixed(2));
+      return {
+        signal_class: r.signal_class,
+        total: r.total || 0,
+        wins: r.wins || 0,
+        losses: r.losses || 0,
+        winRate: computeWinRate(r.wins, r.losses),
+        avgWinPct,
+        avgLossPct,
+        expectancy: computeExpectancy(r.wins, r.losses, avgWinPct, avgLossPct)
+      };
+    });
+  } catch (error) {
+    console.error('Error in getStatsBySignalClass:', error);
+    return [];
   }
 }
 
@@ -2700,23 +2855,27 @@ async function check3hProfitClose(env) {
         const now     = Date.now();
         const duration = formatDuration(now - (signal.created_at || now));
 
-        await env.DB.prepare(`
-          UPDATE signals SET
-            outcome = 'WIN', exit_price = ?, pnl_pct = ?,
-            closed_at = ?, updated_at = ?,
-            outcome_source = '3H_PROFIT_CLOSE'
-          WHERE id = ?
-        `).bind(currentPrice, parseFloat(pnlPct.toFixed(2)), now, now, signal.id).run();
+        const closeResult = await closeTrade(env, {
+          signalId: signal.id,
+          outcome: 'WIN',
+          exitPrice: currentPrice,
+          pnlPct: parseFloat(pnlPct.toFixed(2)),
+          outcomeSource: '3H_PROFIT_CLOSE'
+        });
 
-        await sendTelegramMessage(env,
-          `⏱️ <b>3H-PROFIT-CLOSE — ${signal.symbol} ${signal.direction}</b>\n\n` +
-          `✅ Im Profit nach ${duration} geschlossen\n` +
-          `Entry: $${entryPrice.toFixed(2)} · Exit: $${currentPrice.toFixed(2)}\n` +
-          `PnL: <b>+${pnlPct.toFixed(2)}%</b>\n\n` +
-          `<i>Automatisch geschlossen nach 3h-Profit-Check</i>`
-        );
-
-        console.log(`✅ 3h-Profit-Close: ${signal.id} | ${signal.symbol} | +${pnlPct.toFixed(2)}%`);
+        // Skip the notification if a concurrent path already closed this signal —
+        // otherwise we'd report this invocation's (possibly stale) price/PnL
+        // even though different values were the ones actually persisted.
+        if (closeResult.closedSignal) {
+          await sendTelegramMessage(env,
+            `⏱️ <b>3H-PROFIT-CLOSE — ${signal.symbol} ${signal.direction}</b>\n\n` +
+            `✅ Im Profit nach ${duration} geschlossen\n` +
+            `Entry: $${entryPrice.toFixed(2)} · Exit: $${currentPrice.toFixed(2)}\n` +
+            `PnL: <b>+${pnlPct.toFixed(2)}%</b>\n\n` +
+            `<i>Automatisch geschlossen nach 3h-Profit-Check</i>`
+          );
+          console.log(`✅ 3h-Profit-Close: ${signal.id} | ${signal.symbol} | +${pnlPct.toFixed(2)}%`);
+        }
         results.push({ id: signal.id, status: 'closed_profit', pnlPct: pnlPct.toFixed(2), symbol: signal.symbol });
       } else {
         results.push({ id: signal.id, status: 'open_no_profit', symbol: signal.symbol });
@@ -2739,11 +2898,13 @@ async function check3hProfitClose(env) {
         const resultPct = isLong
           ? ((currentPrice - pt.entry_price) / pt.entry_price) * 100
           : ((pt.entry_price - currentPrice) / pt.entry_price) * 100;
-        await env.DB.prepare(`
-          UPDATE practice_trades
-          SET status = 'WIN', exit_price = ?, result_pct = ?, closed_at = ?
-          WHERE id = ?
-        `).bind(currentPrice, parseFloat(resultPct.toFixed(2)), new Date().toISOString(), pt.id).run();
+        await closeTrade(env, {
+          practiceTradeId: pt.id,
+          outcome: 'WIN',
+          exitPrice: currentPrice,
+          pnlPct: parseFloat(resultPct.toFixed(2)),
+          outcomeSource: '3H_PROFIT_CLOSE'
+        });
       }
     }
   } catch (err) {
@@ -2786,32 +2947,35 @@ async function evaluateOpenTrades(env) {
           ? ((exitPrice - entry) / entry) * 100
           : ((entry - exitPrice) / entry) * 100;
         const duration  = formatDuration(Date.now() - (signal.created_at || Date.now()));
-        const now       = Date.now();
 
-        await env.DB.prepare(`
-          UPDATE signals SET
-            outcome = ?, exit_price = ?, pnl_pct = ?,
-            closed_at = ?, outcome_source = 'auto',
-            telegram_outcome_sent = 1, updated_at = ?
-          WHERE id = ?
-        `).bind(outcome, exitPrice, parseFloat(pnlPct.toFixed(2)), now, now, signal.id).run();
+        const closeResult = await closeTrade(env, {
+          signalId: signal.id,
+          outcome,
+          exitPrice,
+          pnlPct: parseFloat(pnlPct.toFixed(2)),
+          outcomeSource: 'auto',
+          telegramOutcomeSent: 1
+        });
 
-        const isWin     = outcome === 'WIN';
-        const hitEmoji  = isWin ? '🎯' : '🛑';
-        const hitLabel  = isWin ? 'TP HIT' : 'SL HIT';
-        const pnlSign   = pnlPct >= 0 ? '+' : '';
-        const tpLine    = isWin
-          ? `TP: $${signal.ai_tp?.toFixed(2)}`
-          : `SL: $${signal.ai_sl?.toFixed(2)}`;
+        // Skip the notification if a concurrent path (e.g. check3hProfitClose
+        // or checkOpenSignals) already closed this signal first.
+        if (closeResult.closedSignal) {
+          const isWin     = outcome === 'WIN';
+          const hitEmoji  = isWin ? '🎯' : '🛑';
+          const hitLabel  = isWin ? 'TP HIT' : 'SL HIT';
+          const pnlSign   = pnlPct >= 0 ? '+' : '';
+          const tpLine    = isWin
+            ? `TP: $${signal.ai_tp?.toFixed(2)}`
+            : `SL: $${signal.ai_sl?.toFixed(2)}`;
 
-        await sendTelegramMessage(env,
-          `${hitEmoji} <b>${hitLabel} — ${signal.symbol} ${signal.direction}</b>\n` +
-          `Ergebnis: <b>${outcome}</b>\n\n` +
-          `Entry: $${entry.toFixed(2)} · ${tpLine} · Exit: $${exitPrice.toFixed(2)}\n` +
-          `PnL: <b>${pnlSign}${pnlPct.toFixed(2)}%</b> · Dauer: ${duration}`
-        );
-
-        console.log(`📊 Signal ${signal.id} closed: ${outcome} | PnL: ${pnlPct.toFixed(2)}% | ${duration}`);
+          await sendTelegramMessage(env,
+            `${hitEmoji} <b>${hitLabel} — ${signal.symbol} ${signal.direction}</b>\n` +
+            `Ergebnis: <b>${outcome}</b>\n\n` +
+            `Entry: $${entry.toFixed(2)} · ${tpLine} · Exit: $${exitPrice.toFixed(2)}\n` +
+            `PnL: <b>${pnlSign}${pnlPct.toFixed(2)}%</b> · Dauer: ${duration}`
+          );
+          console.log(`📊 Signal ${signal.id} closed: ${outcome} | PnL: ${pnlPct.toFixed(2)}% | ${duration}`);
+        }
       }
     }
     console.log('✅ evaluateOpenTrades done');
@@ -2879,12 +3043,13 @@ async function checkOpenSignals(env, onlySignalId = null) {
       const pnlPct = signal.direction === 'LONG'
         ? ((exitPrice - entry) / entry) * 100
         : ((entry - exitPrice) / entry) * 100;
-      const now = Date.now();
-      await env.DB.prepare(`
-        UPDATE signals
-        SET outcome = ?, exit_price = ?, pnl_pct = ?, closed_at = ?, outcome_source = 'auto', updated_at = ?, telegram_outcome_sent = COALESCE(telegram_outcome_sent,0)
-        WHERE id = ?
-      `).bind(outcome, exitPrice, parseFloat(pnlPct.toFixed(2)), now, now, signal.id).run();
+      await closeTrade(env, {
+        signalId: signal.id,
+        outcome,
+        exitPrice,
+        pnlPct: parseFloat(pnlPct.toFixed(2)),
+        outcomeSource: 'auto'
+      });
       item.status  = 'closed';
       item.outcome = outcome;
       item.message = `${outcome} — Preis ${price} hat ${outcome === 'WIN' ? 'TP' : 'SL'} erreicht`;
@@ -3814,7 +3979,7 @@ function _renderBTCompareTab(strategies, history) {
     const sigs = hist.filter(h => h.strategy_id === s.id || (!h.strategy_id && s.is_default));
     const closed = sigs.filter(h => h.outcome === 'WIN' || h.outcome === 'LOSS');
     const wins = sigs.filter(h => h.outcome === 'WIN').length;
-    const wr = closed.length > 0 ? (wins / closed.length * 100).toFixed(1) : '—';
+    const wr = closed.length > 0 ? computeWinRate(wins, closed.length - wins).toFixed(1) : '—';
     const scores = sigs.map(h => h.ai_score).filter(Boolean);
     const avgScore = scores.length ? (scores.reduce((a,b) => a+b, 0) / scores.length).toFixed(1) : '—';
     return { ...s, totalSigs: sigs.length, closedSigs: closed.length, wins, winRate: wr, avgScore };
@@ -3850,7 +4015,7 @@ function _renderBTRegelTab(history) {
     .slice(0, 20)
     .map(r => {
       const total = r.wins + r.losses;
-      const wr = total > 0 ? (r.wins / total * 100) : 0;
+      const wr = computeWinRate(r.wins, r.losses);
       const pct = wr.toFixed(1);
       const barColor = wr >= 60 ? 'var(--win)' : wr >= 40 ? 'var(--wait)' : 'var(--loss)';
       return `<tr>
@@ -4067,7 +4232,7 @@ function _renderPnLChart(history) {
 
 function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
   const totalClosed = stats.wins + stats.losses;
-  const winRate = totalClosed > 0 ? (stats.wins / totalClosed * 100) : 0;
+  const winRate = computeWinRate(stats.wins, stats.losses);
 
   // Score distribution
   const sg = { '90–100': 0, '75–89': 0, '60–74': 0, '<60': 0 };
@@ -4095,7 +4260,7 @@ function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
   // Direction breakdown rows
   const dirRows = (breakdown.directions || []).map(d => {
     const closed = d.wins + d.losses;
-    const pct = closed > 0 ? (d.wins / closed * 100) : 0;
+    const pct = computeWinRate(d.wins, d.losses);
     const cls = d.direction === 'LONG' ? 'badge-long' : 'badge-short';
     return `
 <div style="margin-bottom:20px">
@@ -4149,6 +4314,22 @@ function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
     ? `<table class="tbl"><thead><tr><th>Symbol</th><th>Trades</th><th>W</th><th>L</th><th>Win-%</th></tr></thead><tbody>${symRows}</tbody></table>`
     : `<div class="card-body" style="padding:40px;text-align:center"><p style="color:var(--text-tertiary)">Noch keine Trade-Daten</p></div>`;
 
+  // Signal-class breakdown rows (NORMAL/STRONG/REVERSAL/...)
+  const scRows = (breakdown.signalClasses || []).map(sc =>
+    `<tr>
+      <td class="mono" style="font-weight:600">${_esc(sc.signal_class)}</td>
+      <td class="mono">${sc.total}</td>
+      <td class="mono win">${sc.wins}</td>
+      <td class="mono loss">${sc.losses}</td>
+      <td class="mono" style="color:${sc.winRate >= 50 ? 'var(--win)' : 'var(--loss)'}">${sc.winRate}%</td>
+      <td class="mono" style="color:${sc.expectancy >= 0 ? 'var(--win)' : 'var(--loss)'}">${sc.expectancy.toFixed(2)}%</td>
+    </tr>`
+  ).join('');
+
+  const scSection = scRows
+    ? `<table class="tbl"><thead><tr><th>Klasse</th><th>Trades</th><th>W</th><th>L</th><th>Win-%</th><th>Expectancy</th></tr></thead><tbody>${scRows}</tbody></table>`
+    : `<div class="card-body" style="padding:40px;text-align:center"><p style="color:var(--text-tertiary)">Noch keine Trade-Daten</p></div>`;
+
   // Recent trades table
   const recentRows = history.slice(0, 10).map(t => {
     const oc = t.outcome === 'WIN' ? 'win' : t.outcome === 'LOSS' ? 'loss' : 'muted';
@@ -4176,7 +4357,7 @@ function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
 
   <div class="grid grid-4" style="margin-bottom:var(--gap)">
     <div class="stat"><div class="label">Abgeschlossen</div><div class="value" style="font-size:22px">${totalClosed}</div><div class="sub muted">${stats.total} Total Signale</div></div>
-    <div class="stat"><div class="label">Win-Rate</div><div class="value" style="font-size:22px;color:${winRate >= 50 ? 'var(--win)' : 'var(--loss)'}">${winRate.toFixed(1)}%</div><div class="sub muted">${stats.wins}W / ${stats.losses}L</div></div>
+    <div class="stat"><div class="label">Expectancy <span class="muted" style="font-weight:400">(primär)</span></div><div class="value" style="font-size:22px;color:${(stats.expectancy || 0) >= 0 ? 'var(--win)' : 'var(--loss)'}">${(stats.expectancy || 0).toFixed(2)}%</div><div class="sub muted">Win-Rate ${winRate.toFixed(1)}% (sekundär)</div></div>
     <div class="stat"><div class="label">Gewonnen</div><div class="value" style="font-size:22px;color:var(--win)">${stats.wins}</div><div class="sub win">Profitable Trades</div></div>
     <div class="stat"><div class="label">Verloren</div><div class="value" style="font-size:22px;color:var(--loss)">${stats.losses}</div><div class="sub loss">Unprofitable Trades</div></div>
   </div>
@@ -4205,6 +4386,11 @@ function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
       <div class="card-head">${_svgIcon('chart', 16)}<h3>Score-Verteilung</h3></div>
       <div class="card-body">${scoreBars}</div>
     </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">${_svgIcon('signal', 16)}<h3>Performance nach Signal-Klasse</h3></div>
+    ${scSection}
   </div>
 
   <div class="grid grid-3" style="margin-bottom:var(--gap)">
@@ -5105,7 +5291,7 @@ export default {
               const s = bRows.filter(f);
               const w = s.filter(r => r.outcome === 'WIN').length;
               const l = s.filter(r => r.outcome === 'LOSS').length;
-              return { total: s.length, wins: w, losses: l, winRate: (w + l) > 0 ? parseFloat((w / (w + l) * 100).toFixed(1)) : 0 };
+              return { total: s.length, wins: w, losses: l, winRate: computeWinRate(w, l) };
             };
             data = {
               biasData: {
@@ -5132,7 +5318,7 @@ export default {
               GROUP BY symbol HAVING (wins+losses) >= 3
               ORDER BY (wins*1.0/(wins+losses)) ASC LIMIT 3`).all();
             for (const sym of (symRows.results || [])) {
-              const wr = (sym.wins + sym.losses) > 0 ? (sym.wins / (sym.wins + sym.losses)) * 100 : 0;
+              const wr = computeWinRate(sym.wins, sym.losses);
               if (wr < 35) suggestions.push({ type: 'symbol_filter', priority: 'medium', title: `${sym.symbol} performat schlecht`, message: `${sym.symbol}: ${wr.toFixed(0)}% Win-Rate bei ${sym.wins + sym.losses} Trades`, action: 'Symbol-Filter prüfen' });
             }
             const lrRows = await env.DB.prepare(`SELECT reason, COUNT(*) as cnt FROM signal_loss_reasons GROUP BY reason ORDER BY cnt DESC LIMIT 5`).all();
@@ -5160,13 +5346,15 @@ export default {
                   env.DB.prepare(`SELECT direction, COUNT(*) as total, SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses FROM signals WHERE direction IN ('LONG','SHORT') GROUP BY direction`).all(),
                   env.DB.prepare(`SELECT symbol, COUNT(*) as total, SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses FROM signals GROUP BY symbol ORDER BY total DESC LIMIT 10`).all()
                 ]);
-                const cwr = r => (r.wins + r.losses) > 0 ? parseFloat(((r.wins / (r.wins + r.losses)) * 100).toFixed(1)) : 0;
+                const cwr = r => computeWinRate(r.wins, r.losses);
+                const signalClasses = await getStatsBySignalClass(env);
                 return {
                   timeframes: (tfR.results || []).map(r => ({ ...r, winRate: cwr(r) })),
                   directions: (dirR.results || []).map(r => ({ ...r, winRate: cwr(r) })),
-                  symbols:    (symR.results || []).map(r => ({ ...r, winRate: cwr(r) }))
+                  symbols:    (symR.results || []).map(r => ({ ...r, winRate: cwr(r) })),
+                  signalClasses
                 };
-              } catch (_) { return { timeframes: [], directions: [], symbols: [] }; }
+              } catch (_) { return { timeframes: [], directions: [], symbols: [], signalClasses: [] }; }
             })()
           ]);
           const closedTrades = aHistory.filter(t => t.outcome !== 'OPEN' && t.updated_at);
@@ -5375,7 +5563,9 @@ export default {
             SELECT timeframe,
               COUNT(*) as total,
               SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
-              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses
+              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses,
+              AVG(CASE WHEN outcome='WIN' THEN pnl_pct ELSE NULL END) as avgWinPct,
+              AVG(CASE WHEN outcome='LOSS' THEN pnl_pct ELSE NULL END) as avgLossPct
             FROM signals GROUP BY timeframe ORDER BY total DESC
           `).all();
 
@@ -5383,7 +5573,9 @@ export default {
             SELECT direction,
               COUNT(*) as total,
               SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
-              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses
+              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses,
+              AVG(CASE WHEN outcome='WIN' THEN pnl_pct ELSE NULL END) as avgWinPct,
+              AVG(CASE WHEN outcome='LOSS' THEN pnl_pct ELSE NULL END) as avgLossPct
             FROM signals WHERE direction IN ('LONG','SHORT')
             GROUP BY direction
           `).all();
@@ -5392,19 +5584,24 @@ export default {
             SELECT symbol,
               COUNT(*) as total,
               SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
-              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses
+              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses,
+              AVG(CASE WHEN outcome='WIN' THEN pnl_pct ELSE NULL END) as avgWinPct,
+              AVG(CASE WHEN outcome='LOSS' THEN pnl_pct ELSE NULL END) as avgLossPct
             FROM signals GROUP BY symbol ORDER BY total DESC LIMIT 10
           `).all();
 
-          const calcWR = r => (r.wins + r.losses) > 0 ? parseFloat(((r.wins / (r.wins + r.losses)) * 100).toFixed(1)) : 0;
+          const calcWR = r => computeWinRate(r.wins, r.losses);
+          const calcExp = r => computeExpectancy(r.wins, r.losses, r.avgWinPct, r.avgLossPct);
+          const signalClasses = await getStatsBySignalClass(env);
 
           return jsonResponse({
-            timeframes: (tfRows.results || []).map(r => ({ ...r, winRate: calcWR(r) })),
-            directions: (dirRows.results || []).map(r => ({ ...r, winRate: calcWR(r) })),
-            symbols:    (symbolRows.results || []).map(r => ({ ...r, winRate: calcWR(r) }))
+            timeframes: (tfRows.results || []).map(r => ({ ...r, winRate: calcWR(r), expectancy: calcExp(r) })),
+            directions: (dirRows.results || []).map(r => ({ ...r, winRate: calcWR(r), expectancy: calcExp(r) })),
+            symbols:    (symbolRows.results || []).map(r => ({ ...r, winRate: calcWR(r), expectancy: calcExp(r) })),
+            signalClasses
           });
         } catch (e) {
-          return jsonResponse({ timeframes: [], directions: [], symbols: [] });
+          return jsonResponse({ timeframes: [], directions: [], symbols: [], signalClasses: [] });
         }
       }
 
@@ -6197,7 +6394,7 @@ export default {
           `).all();
           return jsonResponse((rows.results || []).map(r => ({
             ...r,
-            winRate: (r.wins + r.losses) > 0 ? parseFloat(((r.wins / (r.wins + r.losses)) * 100).toFixed(1)) : 0,
+            winRate: computeWinRate(r.wins, r.losses),
             avg_score: r.avg_score ? parseFloat(r.avg_score.toFixed(1)) : 0
           })));
         } catch (e) { return jsonResponse([]); }
@@ -6228,7 +6425,7 @@ export default {
           results.push({
             strategyId: stratId, strategyName: strat.name, strategyVersion: strat.version,
             total, wins, losses, waitCount, skipCount,
-            winRate: closed > 0 ? parseFloat(((wins / closed) * 100).toFixed(1)) : 0,
+            winRate: computeWinRate(wins, losses),
             avgScore: total > 0 ? parseFloat((totalScore / total).toFixed(1)) : 0
           });
         }
@@ -6254,7 +6451,7 @@ export default {
             ORDER BY (wins*1.0/(wins+losses)) ASC LIMIT 3
           `).all();
           for (const sym of (symRows.results || [])) {
-            const wr = (sym.wins + sym.losses) > 0 ? (sym.wins / (sym.wins + sym.losses)) * 100 : 0;
+            const wr = computeWinRate(sym.wins, sym.losses);
             if (wr < 35) suggestions.push({ type: 'symbol_filter', priority: 'medium', title: `${sym.symbol} performat schlecht`, message: `${sym.symbol}: ${wr.toFixed(0)}% Win-Rate bei ${sym.wins + sym.losses} Trades`, action: 'Symbol-Filter prüfen' });
           }
           const lrRows = await env.DB.prepare(`SELECT reason, COUNT(*) as cnt FROM signal_loss_reasons GROUP BY reason ORDER BY cnt DESC LIMIT 5`).all();
@@ -6643,7 +6840,7 @@ export default {
             const s = rows.filter(filter);
             const w = s.filter(r => r.outcome === 'WIN').length;
             const l = s.filter(r => r.outcome === 'LOSS').length;
-            return { total: s.length, wins: w, losses: l, winRate: (w + l) > 0 ? parseFloat(((w / (w + l)) * 100).toFixed(1)) : 0 };
+            return { total: s.length, wins: w, losses: l, winRate: computeWinRate(w, l) };
           };
           return jsonResponse({
             official:   calc(r => r.counts_for_strategy === 1),
