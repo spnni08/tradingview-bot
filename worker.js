@@ -1412,6 +1412,7 @@ async function ensureTables(env) {
       ['vp_zone',              'TEXT'],
       ['vp_score',             'INTEGER DEFAULT 0'],
       ['dashboard_seen',    'INTEGER DEFAULT 0'],
+      ['signal_class',         'TEXT'],
     ];
     for (const [col, type] of signalIndicatorCols) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); }
@@ -1998,12 +1999,12 @@ async function processSignal(env, signal) {
       matched_rules, failed_rules, unknown_rules, score_breakdown,
       signal_quality, risk_reward, planned_profit_pct, planned_risk_pct,
       trigger_reason, disclaimer_shown,
-      poc, vah, val, vp_zone, vp_score,
+      poc, vah, val, vp_zone, vp_score, signal_class,
       created_at, outcome
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?
     )
   `).bind(
     signalId,
@@ -2053,6 +2054,7 @@ async function processSignal(env, signal) {
     vpVal,
     vpZone,
     vpScore,
+    signal.signal_class || null,
     Date.now(),
     analysis.score >= 75 ? 'OPEN' : 'SKIPPED'
   ).run();
@@ -2517,6 +2519,49 @@ async function getStats(env) {
   } catch (error) {
     console.error('Error in getStats:', error);
     return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, expectancy: 0 };
+  }
+}
+
+// Per-signal_class breakdown (NORMAL/STRONG/REVERSAL/...). Groups by whatever
+// values are present so future classes (e.g. REVERSAL from Pine v3.7) show up
+// automatically without code changes here.
+async function getStatsBySignalClass(env) {
+  try {
+    const tableCheck = await env.DB.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='signals'`
+    ).first();
+    if (!tableCheck) return [];
+
+    const rows = await env.DB.prepare(`
+      SELECT
+        COALESCE(signal_class, 'UNKNOWN') as signal_class,
+        COUNT(*) as total,
+        SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
+        SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses,
+        AVG(CASE WHEN outcome='WIN' THEN pnl_pct ELSE NULL END) as avgWinPct,
+        AVG(CASE WHEN outcome='LOSS' THEN pnl_pct ELSE NULL END) as avgLossPct
+      FROM signals
+      GROUP BY COALESCE(signal_class, 'UNKNOWN')
+      ORDER BY total DESC
+    `).all();
+
+    return (rows.results || []).map(r => {
+      const avgWinPct  = parseFloat((r.avgWinPct || 0).toFixed(2));
+      const avgLossPct = parseFloat((r.avgLossPct || 0).toFixed(2));
+      return {
+        signal_class: r.signal_class,
+        total: r.total || 0,
+        wins: r.wins || 0,
+        losses: r.losses || 0,
+        winRate: computeWinRate(r.wins, r.losses),
+        avgWinPct,
+        avgLossPct,
+        expectancy: computeExpectancy(r.wins, r.losses, avgWinPct, avgLossPct)
+      };
+    });
+  } catch (error) {
+    console.error('Error in getStatsBySignalClass:', error);
+    return [];
   }
 }
 
@@ -4176,6 +4221,22 @@ function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
     ? `<table class="tbl"><thead><tr><th>Symbol</th><th>Trades</th><th>W</th><th>L</th><th>Win-%</th></tr></thead><tbody>${symRows}</tbody></table>`
     : `<div class="card-body" style="padding:40px;text-align:center"><p style="color:var(--text-tertiary)">Noch keine Trade-Daten</p></div>`;
 
+  // Signal-class breakdown rows (NORMAL/STRONG/REVERSAL/...)
+  const scRows = (breakdown.signalClasses || []).map(sc =>
+    `<tr>
+      <td class="mono" style="font-weight:600">${_esc(sc.signal_class)}</td>
+      <td class="mono">${sc.total}</td>
+      <td class="mono win">${sc.wins}</td>
+      <td class="mono loss">${sc.losses}</td>
+      <td class="mono" style="color:${sc.winRate >= 50 ? 'var(--win)' : 'var(--loss)'}">${sc.winRate}%</td>
+      <td class="mono" style="color:${sc.expectancy >= 0 ? 'var(--win)' : 'var(--loss)'}">${sc.expectancy.toFixed(2)}%</td>
+    </tr>`
+  ).join('');
+
+  const scSection = scRows
+    ? `<table class="tbl"><thead><tr><th>Klasse</th><th>Trades</th><th>W</th><th>L</th><th>Win-%</th><th>Expectancy</th></tr></thead><tbody>${scRows}</tbody></table>`
+    : `<div class="card-body" style="padding:40px;text-align:center"><p style="color:var(--text-tertiary)">Noch keine Trade-Daten</p></div>`;
+
   // Recent trades table
   const recentRows = history.slice(0, 10).map(t => {
     const oc = t.outcome === 'WIN' ? 'win' : t.outcome === 'LOSS' ? 'loss' : 'muted';
@@ -4232,6 +4293,11 @@ function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
       <div class="card-head">${_svgIcon('chart', 16)}<h3>Score-Verteilung</h3></div>
       <div class="card-body">${scoreBars}</div>
     </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">${_svgIcon('signal', 16)}<h3>Performance nach Signal-Klasse</h3></div>
+    ${scSection}
   </div>
 
   <div class="grid grid-3" style="margin-bottom:var(--gap)">
@@ -5188,12 +5254,14 @@ export default {
                   env.DB.prepare(`SELECT symbol, COUNT(*) as total, SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses FROM signals GROUP BY symbol ORDER BY total DESC LIMIT 10`).all()
                 ]);
                 const cwr = r => computeWinRate(r.wins, r.losses);
+                const signalClasses = await getStatsBySignalClass(env);
                 return {
                   timeframes: (tfR.results || []).map(r => ({ ...r, winRate: cwr(r) })),
                   directions: (dirR.results || []).map(r => ({ ...r, winRate: cwr(r) })),
-                  symbols:    (symR.results || []).map(r => ({ ...r, winRate: cwr(r) }))
+                  symbols:    (symR.results || []).map(r => ({ ...r, winRate: cwr(r) })),
+                  signalClasses
                 };
-              } catch (_) { return { timeframes: [], directions: [], symbols: [] }; }
+              } catch (_) { return { timeframes: [], directions: [], symbols: [], signalClasses: [] }; }
             })()
           ]);
           const closedTrades = aHistory.filter(t => t.outcome !== 'OPEN' && t.updated_at);
@@ -5431,14 +5499,16 @@ export default {
 
           const calcWR = r => computeWinRate(r.wins, r.losses);
           const calcExp = r => computeExpectancy(r.wins, r.losses, r.avgWinPct, r.avgLossPct);
+          const signalClasses = await getStatsBySignalClass(env);
 
           return jsonResponse({
             timeframes: (tfRows.results || []).map(r => ({ ...r, winRate: calcWR(r), expectancy: calcExp(r) })),
             directions: (dirRows.results || []).map(r => ({ ...r, winRate: calcWR(r), expectancy: calcExp(r) })),
-            symbols:    (symbolRows.results || []).map(r => ({ ...r, winRate: calcWR(r), expectancy: calcExp(r) }))
+            symbols:    (symbolRows.results || []).map(r => ({ ...r, winRate: calcWR(r), expectancy: calcExp(r) })),
+            signalClasses
           });
         } catch (e) {
-          return jsonResponse({ timeframes: [], directions: [], symbols: [] });
+          return jsonResponse({ timeframes: [], directions: [], symbols: [], signalClasses: [] });
         }
       }
 
