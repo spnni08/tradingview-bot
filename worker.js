@@ -1744,7 +1744,7 @@ async function getPracticeTradeStats(env) {
     const tableCheck = await env.DB.prepare(
       `SELECT name FROM sqlite_master WHERE type='table' AND name='practice_trades'`
     ).first();
-    if (!tableCheck) return { total: 0, open: 0, wins: 0, losses: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0 };
+    if (!tableCheck) return { total: 0, open: 0, wins: 0, losses: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, expectancy: 0 };
 
     const total   = await env.DB.prepare(`SELECT COUNT(*) as c FROM practice_trades`).first();
     const open    = await env.DB.prepare(`SELECT COUNT(*) as c FROM practice_trades WHERE status='OPEN'`).first();
@@ -1753,7 +1753,10 @@ async function getPracticeTradeStats(env) {
     const avgWin  = await env.DB.prepare(`SELECT AVG(result_pct) as a FROM practice_trades WHERE status='WIN'`).first();
     const avgLoss = await env.DB.prepare(`SELECT AVG(result_pct) as a FROM practice_trades WHERE status='LOSS'`).first();
 
-    const winRate = computeWinRate(wins.c, losses.c);
+    const winRate    = computeWinRate(wins.c, losses.c);
+    const avgWinPct  = parseFloat((avgWin.a || 0).toFixed(2));
+    const avgLossPct = parseFloat((avgLoss.a || 0).toFixed(2));
+    const expectancy = computeExpectancy(wins.c, losses.c, avgWinPct, avgLossPct);
 
     return {
       total: total.c || 0,
@@ -1761,12 +1764,13 @@ async function getPracticeTradeStats(env) {
       wins: wins.c || 0,
       losses: losses.c || 0,
       winRate,
-      avgWinPct: parseFloat((avgWin.a || 0).toFixed(2)),
-      avgLossPct: parseFloat((avgLoss.a || 0).toFixed(2))
+      avgWinPct,
+      avgLossPct,
+      expectancy
     };
   } catch (error) {
     console.error('❌ getPracticeTradeStats error:', error.message);
-    return { total: 0, open: 0, wins: 0, losses: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0 };
+    return { total: 0, open: 0, wins: 0, losses: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, expectancy: 0 };
   }
 }
 
@@ -2486,25 +2490,33 @@ async function getStats(env) {
     const tableCheck = await env.DB.prepare(
       `SELECT name FROM sqlite_master WHERE type='table' AND name='signals'`
     ).first();
-    if (!tableCheck) return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0 };
+    if (!tableCheck) return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, expectancy: 0 };
 
-    const total  = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals`).first();
-    const wins   = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'WIN'`).first();
-    const losses = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'LOSS'`).first();
-    const open   = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'OPEN'`).first();
+    const total   = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals`).first();
+    const wins    = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'WIN'`).first();
+    const losses  = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'LOSS'`).first();
+    const open    = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'OPEN'`).first();
+    const avgWin  = await env.DB.prepare(`SELECT AVG(pnl_pct) as a FROM signals WHERE outcome = 'WIN'`).first();
+    const avgLoss = await env.DB.prepare(`SELECT AVG(pnl_pct) as a FROM signals WHERE outcome = 'LOSS'`).first();
 
-    const winRate = computeWinRate(wins.count, losses.count);
+    const winRate    = computeWinRate(wins.count, losses.count);
+    const avgWinPct  = parseFloat((avgWin.a || 0).toFixed(2));
+    const avgLossPct = parseFloat((avgLoss.a || 0).toFixed(2));
+    const expectancy = computeExpectancy(wins.count, losses.count, avgWinPct, avgLossPct);
 
     return {
       total: total.count || 0,
       wins: wins.count || 0,
       losses: losses.count || 0,
       open: open.count || 0,
-      winRate
+      winRate,
+      avgWinPct,
+      avgLossPct,
+      expectancy
     };
   } catch (error) {
     console.error('Error in getStats:', error);
-    return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0 };
+    return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, expectancy: 0 };
   }
 }
 
@@ -4191,7 +4203,7 @@ function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
 
   <div class="grid grid-4" style="margin-bottom:var(--gap)">
     <div class="stat"><div class="label">Abgeschlossen</div><div class="value" style="font-size:22px">${totalClosed}</div><div class="sub muted">${stats.total} Total Signale</div></div>
-    <div class="stat"><div class="label">Win-Rate</div><div class="value" style="font-size:22px;color:${winRate >= 50 ? 'var(--win)' : 'var(--loss)'}">${winRate.toFixed(1)}%</div><div class="sub muted">${stats.wins}W / ${stats.losses}L</div></div>
+    <div class="stat"><div class="label">Expectancy <span class="muted" style="font-weight:400">(primär)</span></div><div class="value" style="font-size:22px;color:${(stats.expectancy || 0) >= 0 ? 'var(--win)' : 'var(--loss)'}">${(stats.expectancy || 0).toFixed(2)}%</div><div class="sub muted">Win-Rate ${winRate.toFixed(1)}% (sekundär)</div></div>
     <div class="stat"><div class="label">Gewonnen</div><div class="value" style="font-size:22px;color:var(--win)">${stats.wins}</div><div class="sub win">Profitable Trades</div></div>
     <div class="stat"><div class="label">Verloren</div><div class="value" style="font-size:22px;color:var(--loss)">${stats.losses}</div><div class="sub loss">Unprofitable Trades</div></div>
   </div>
@@ -5390,7 +5402,9 @@ export default {
             SELECT timeframe,
               COUNT(*) as total,
               SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
-              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses
+              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses,
+              AVG(CASE WHEN outcome='WIN' THEN pnl_pct ELSE NULL END) as avgWinPct,
+              AVG(CASE WHEN outcome='LOSS' THEN pnl_pct ELSE NULL END) as avgLossPct
             FROM signals GROUP BY timeframe ORDER BY total DESC
           `).all();
 
@@ -5398,7 +5412,9 @@ export default {
             SELECT direction,
               COUNT(*) as total,
               SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
-              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses
+              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses,
+              AVG(CASE WHEN outcome='WIN' THEN pnl_pct ELSE NULL END) as avgWinPct,
+              AVG(CASE WHEN outcome='LOSS' THEN pnl_pct ELSE NULL END) as avgLossPct
             FROM signals WHERE direction IN ('LONG','SHORT')
             GROUP BY direction
           `).all();
@@ -5407,16 +5423,19 @@ export default {
             SELECT symbol,
               COUNT(*) as total,
               SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins,
-              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses
+              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses,
+              AVG(CASE WHEN outcome='WIN' THEN pnl_pct ELSE NULL END) as avgWinPct,
+              AVG(CASE WHEN outcome='LOSS' THEN pnl_pct ELSE NULL END) as avgLossPct
             FROM signals GROUP BY symbol ORDER BY total DESC LIMIT 10
           `).all();
 
           const calcWR = r => computeWinRate(r.wins, r.losses);
+          const calcExp = r => computeExpectancy(r.wins, r.losses, r.avgWinPct, r.avgLossPct);
 
           return jsonResponse({
-            timeframes: (tfRows.results || []).map(r => ({ ...r, winRate: calcWR(r) })),
-            directions: (dirRows.results || []).map(r => ({ ...r, winRate: calcWR(r) })),
-            symbols:    (symbolRows.results || []).map(r => ({ ...r, winRate: calcWR(r) }))
+            timeframes: (tfRows.results || []).map(r => ({ ...r, winRate: calcWR(r), expectancy: calcExp(r) })),
+            directions: (dirRows.results || []).map(r => ({ ...r, winRate: calcWR(r), expectancy: calcExp(r) })),
+            symbols:    (symbolRows.results || []).map(r => ({ ...r, winRate: calcWR(r), expectancy: calcExp(r) }))
           });
         } catch (e) {
           return jsonResponse({ timeframes: [], directions: [], symbols: [] });
