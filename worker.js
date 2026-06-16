@@ -1987,7 +1987,10 @@ async function processSignal(env, signal) {
   const plannedRiskPct     = safePct(analysis.sl, analysis.entry);
   const triggerReason      = signal.trigger || signal.action || 'WEBHOOK';
 
-  // Determine Telegram notification
+  // Determine Telegram notification.
+  // Telegram fires only for score >= 80 (or test signals). Signals scoring
+  // 75–79 are still treated as tradeable elsewhere (practice trade, dashboard
+  // bell ≥70) but deliberately do NOT trigger a Telegram alert.
   const isTest       = signal.test === true || signal.is_test === 1;
   let   shouldNotify = isTest || analysis.score >= 80;
   let telegramSent   = 0;
@@ -2018,8 +2021,8 @@ async function processSignal(env, signal) {
   }
 
   if (shouldNotify) {
-    // Score >= 80 → nur Priority-Alert (kein zusätzliches reguläres Signal).
-    // Score 75–79 → reguläre Nachricht.
+    // Score >= 80 → Priority-Alert. Der else-Zweig ist nur für Test-Signale
+    // erreichbar (echte Signale < 80 setzen shouldNotify gar nicht erst).
     if (!isTest && analysis.score >= 80) {
       telegramReason = 'score_80_priority';
       const alertMsg = formatPriorityAlert({
@@ -2035,8 +2038,9 @@ async function processSignal(env, signal) {
       const sent = await withTimeout(sendAlertMessage(env, alertMsg), TELEGRAM_TIMEOUT_MS, false);
       if (sent) telegramSent = 1;
     } else {
-      telegramReason = isTest ? 'test_signal' : 'score_75';
-      const debugPrefix = isTest ? `🧪 <b>[TEST]</b>\n` : '';
+      // Test-Signal (jeder Score): reguläre Nachricht mit Debug-Präfix.
+      telegramReason = 'test_signal';
+      const debugPrefix = `🧪 <b>[TEST]</b>\n`;
       const telegramMessage = debugPrefix + formatSignalForTelegram({
         ...signal,
         direction,
