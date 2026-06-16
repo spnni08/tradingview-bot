@@ -1656,6 +1656,68 @@ async function createPracticeTrade(env, signalId, signal, analysis) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// TRADE CLOSE — single writer for trade outcomes
+// ═══════════════════════════════════════════════════════════════
+// signals and practice_trades are two outcome tables for the same logical
+// trade (practice_trades.signal_id -> signals.id). Each used to be closed
+// independently by whichever resolver (price-tick check, cron, TP/SL eval)
+// got there first, so the two tables could disagree on WIN/LOSS for the
+// same trade. closeTrade() is the only place that writes a close to either
+// table for the automated resolvers below — it closes whichever row
+// triggered it AND, if still OPEN, the linked counterpart, in one atomic
+// D1 batch, so they can never drift apart again.
+// Manual admin/trader PATCH endpoints intentionally bypass this (they
+// support OPEN/IGNORED re-opens and explicit overrides that aren't "close"
+// semantics), so they keep their own direct UPDATEs.
+async function closeTrade(env, {
+  signalId = null,
+  practiceTradeId = null,
+  outcome,
+  exitPrice,
+  pnlPct,
+  outcomeSource = 'auto',
+  telegramOutcomeSent = null, // null = leave column untouched
+} = {}) {
+  if (!signalId && !practiceTradeId) return { closedSignal: false, closedPracticeTrade: false };
+
+  let resolvedSignalId = signalId;
+  let resolvedPracticeTradeId = practiceTradeId;
+
+  if (!resolvedSignalId && practiceTradeId) {
+    const pt = await env.DB.prepare(`SELECT signal_id FROM practice_trades WHERE id = ?`).bind(practiceTradeId).first();
+    if (pt?.signal_id) resolvedSignalId = pt.signal_id;
+  }
+  if (!resolvedPracticeTradeId && resolvedSignalId) {
+    const pt = await env.DB.prepare(`SELECT id FROM practice_trades WHERE signal_id = ? AND status = 'OPEN'`).bind(resolvedSignalId).first();
+    if (pt) resolvedPracticeTradeId = pt.id;
+  }
+
+  const nowMs  = Date.now();
+  const nowIso = new Date().toISOString();
+  const stmts  = [];
+  let closedSignal = false, closedPracticeTrade = false;
+
+  if (resolvedSignalId) {
+    const sets  = ['outcome = ?', 'exit_price = ?', 'pnl_pct = ?', 'closed_at = ?', 'outcome_source = ?', 'updated_at = ?'];
+    const binds = [outcome, exitPrice, pnlPct, nowMs, outcomeSource, nowMs];
+    if (telegramOutcomeSent !== null) { sets.push('telegram_outcome_sent = ?'); binds.push(telegramOutcomeSent); }
+    binds.push(resolvedSignalId);
+    stmts.push(env.DB.prepare(`UPDATE signals SET ${sets.join(', ')} WHERE id = ? AND outcome = 'OPEN'`).bind(...binds));
+    closedSignal = true;
+  }
+  if (resolvedPracticeTradeId) {
+    stmts.push(env.DB.prepare(`
+      UPDATE practice_trades SET status = ?, exit_price = ?, result_pct = ?, closed_at = ?
+      WHERE id = ? AND status = 'OPEN'
+    `).bind(outcome, exitPrice, pnlPct, nowIso, resolvedPracticeTradeId));
+    closedPracticeTrade = true;
+  }
+
+  if (stmts.length) await env.DB.batch(stmts);
+  return { closedSignal, closedPracticeTrade };
+}
+
 async function checkPracticeTrades(env, symbol, currentPrice) {
   try {
     const tableCheck = await env.DB.prepare(
@@ -1683,10 +1745,13 @@ async function checkPracticeTrades(env, symbol, currentPrice) {
           ? ((currentPrice - trade.entry_price) / trade.entry_price) * 100
           : ((trade.entry_price - currentPrice) / trade.entry_price) * 100;
 
-        await env.DB.prepare(`
-          UPDATE practice_trades SET status = ?, exit_price = ?, result_pct = ?, closed_at = ?
-          WHERE id = ?
-        `).bind(newStatus, currentPrice, parseFloat(resultPct.toFixed(2)), new Date().toISOString(), trade.id).run();
+        await closeTrade(env, {
+          practiceTradeId: trade.id,
+          outcome: newStatus,
+          exitPrice: currentPrice,
+          pnlPct: parseFloat(resultPct.toFixed(2)),
+          outcomeSource: 'auto'
+        });
 
         console.log(`📊 Practice trade #${trade.id} closed: ${newStatus} (${resultPct.toFixed(2)}%)`);
       }
@@ -2772,13 +2837,13 @@ async function check3hProfitClose(env) {
         const now     = Date.now();
         const duration = formatDuration(now - (signal.created_at || now));
 
-        await env.DB.prepare(`
-          UPDATE signals SET
-            outcome = 'WIN', exit_price = ?, pnl_pct = ?,
-            closed_at = ?, updated_at = ?,
-            outcome_source = '3H_PROFIT_CLOSE'
-          WHERE id = ?
-        `).bind(currentPrice, parseFloat(pnlPct.toFixed(2)), now, now, signal.id).run();
+        await closeTrade(env, {
+          signalId: signal.id,
+          outcome: 'WIN',
+          exitPrice: currentPrice,
+          pnlPct: parseFloat(pnlPct.toFixed(2)),
+          outcomeSource: '3H_PROFIT_CLOSE'
+        });
 
         await sendTelegramMessage(env,
           `⏱️ <b>3H-PROFIT-CLOSE — ${signal.symbol} ${signal.direction}</b>\n\n` +
@@ -2811,11 +2876,13 @@ async function check3hProfitClose(env) {
         const resultPct = isLong
           ? ((currentPrice - pt.entry_price) / pt.entry_price) * 100
           : ((pt.entry_price - currentPrice) / pt.entry_price) * 100;
-        await env.DB.prepare(`
-          UPDATE practice_trades
-          SET status = 'WIN', exit_price = ?, result_pct = ?, closed_at = ?
-          WHERE id = ?
-        `).bind(currentPrice, parseFloat(resultPct.toFixed(2)), new Date().toISOString(), pt.id).run();
+        await closeTrade(env, {
+          practiceTradeId: pt.id,
+          outcome: 'WIN',
+          exitPrice: currentPrice,
+          pnlPct: parseFloat(resultPct.toFixed(2)),
+          outcomeSource: '3H_PROFIT_CLOSE'
+        });
       }
     }
   } catch (err) {
@@ -2858,15 +2925,15 @@ async function evaluateOpenTrades(env) {
           ? ((exitPrice - entry) / entry) * 100
           : ((entry - exitPrice) / entry) * 100;
         const duration  = formatDuration(Date.now() - (signal.created_at || Date.now()));
-        const now       = Date.now();
 
-        await env.DB.prepare(`
-          UPDATE signals SET
-            outcome = ?, exit_price = ?, pnl_pct = ?,
-            closed_at = ?, outcome_source = 'auto',
-            telegram_outcome_sent = 1, updated_at = ?
-          WHERE id = ?
-        `).bind(outcome, exitPrice, parseFloat(pnlPct.toFixed(2)), now, now, signal.id).run();
+        await closeTrade(env, {
+          signalId: signal.id,
+          outcome,
+          exitPrice,
+          pnlPct: parseFloat(pnlPct.toFixed(2)),
+          outcomeSource: 'auto',
+          telegramOutcomeSent: 1
+        });
 
         const isWin     = outcome === 'WIN';
         const hitEmoji  = isWin ? '🎯' : '🛑';
@@ -2951,12 +3018,13 @@ async function checkOpenSignals(env, onlySignalId = null) {
       const pnlPct = signal.direction === 'LONG'
         ? ((exitPrice - entry) / entry) * 100
         : ((entry - exitPrice) / entry) * 100;
-      const now = Date.now();
-      await env.DB.prepare(`
-        UPDATE signals
-        SET outcome = ?, exit_price = ?, pnl_pct = ?, closed_at = ?, outcome_source = 'auto', updated_at = ?, telegram_outcome_sent = COALESCE(telegram_outcome_sent,0)
-        WHERE id = ?
-      `).bind(outcome, exitPrice, parseFloat(pnlPct.toFixed(2)), now, now, signal.id).run();
+      await closeTrade(env, {
+        signalId: signal.id,
+        outcome,
+        exitPrice,
+        pnlPct: parseFloat(pnlPct.toFixed(2)),
+        outcomeSource: 'auto'
+      });
       item.status  = 'closed';
       item.outcome = outcome;
       item.message = `${outcome} — Preis ${price} hat ${outcome === 'WIN' ? 'TP' : 'SL'} erreicht`;
