@@ -5744,6 +5744,15 @@ export default {
         return jsonResponse(await getPracticeTradeStats(env));
       }
 
+      if (request.method === "GET" && url.pathname === "/api/stats") {
+        const token = request.headers.get("X-Stats-Token");
+        if (!env.STATS_TOKEN || token !== env.STATS_TOKEN) {
+          return jsonResponse({ error: "Unauthorized" }, 401);
+        }
+        const stats = await getPracticeTradeStats(env);
+        return jsonResponse({ generatedAt: new Date().toISOString(), ...stats });
+      }
+
       // ── CHECKLIST ───────────────────────────────────────────
 
       if (request.method === "POST" && url.pathname === "/checklist") {
