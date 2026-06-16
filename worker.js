@@ -1696,26 +1696,34 @@ async function closeTrade(env, {
   const nowMs  = Date.now();
   const nowIso = new Date().toISOString();
   const stmts  = [];
-  let closedSignal = false, closedPracticeTrade = false;
+  let signalIdx = -1, practiceTradeIdx = -1;
 
   if (resolvedSignalId) {
     const sets  = ['outcome = ?', 'exit_price = ?', 'pnl_pct = ?', 'closed_at = ?', 'outcome_source = ?', 'updated_at = ?'];
     const binds = [outcome, exitPrice, pnlPct, nowMs, outcomeSource, nowMs];
     if (telegramOutcomeSent !== null) { sets.push('telegram_outcome_sent = ?'); binds.push(telegramOutcomeSent); }
     binds.push(resolvedSignalId);
+    signalIdx = stmts.length;
     stmts.push(env.DB.prepare(`UPDATE signals SET ${sets.join(', ')} WHERE id = ? AND outcome = 'OPEN'`).bind(...binds));
-    closedSignal = true;
   }
   if (resolvedPracticeTradeId) {
+    practiceTradeIdx = stmts.length;
     stmts.push(env.DB.prepare(`
       UPDATE practice_trades SET status = ?, exit_price = ?, result_pct = ?, closed_at = ?
       WHERE id = ? AND status = 'OPEN'
     `).bind(outcome, exitPrice, pnlPct, nowIso, resolvedPracticeTradeId));
-    closedPracticeTrade = true;
   }
 
-  if (stmts.length) await env.DB.batch(stmts);
-  return { closedSignal, closedPracticeTrade };
+  if (!stmts.length) return { closedSignal: false, closedPracticeTrade: false };
+
+  // .meta.changes (not "was an ID resolved") tells us whether the OPEN-guarded
+  // UPDATE actually won the row — a concurrent closer may have already flipped
+  // it, in which case this call's batch write is a silent no-op.
+  const results = await env.DB.batch(stmts);
+  return {
+    closedSignal:        signalIdx        >= 0 && (results[signalIdx]?.meta?.changes ?? 0) > 0,
+    closedPracticeTrade: practiceTradeIdx >= 0 && (results[practiceTradeIdx]?.meta?.changes ?? 0) > 0,
+  };
 }
 
 async function checkPracticeTrades(env, symbol, currentPrice) {
@@ -1794,7 +1802,7 @@ async function getPracticeTrades(env, { symbol, timeframe, direction, status, li
 // winRate = wins / (wins+losses) * 100, OPEN/etc never in denominator.
 function computeWinRate(wins, losses) {
   const closed = (wins || 0) + (losses || 0);
-  return closed > 0 ? parseFloat(((wins / closed) * 100).toFixed(1)) : 0;
+  return closed > 0 ? parseFloat(((wins || 0) / closed * 100).toFixed(1)) : 0;
 }
 
 // expectancy = (winRate/100 * avgWinPct) - (lossRate/100 * |avgLossPct|)
@@ -2847,7 +2855,7 @@ async function check3hProfitClose(env) {
         const now     = Date.now();
         const duration = formatDuration(now - (signal.created_at || now));
 
-        await closeTrade(env, {
+        const closeResult = await closeTrade(env, {
           signalId: signal.id,
           outcome: 'WIN',
           exitPrice: currentPrice,
@@ -2855,15 +2863,19 @@ async function check3hProfitClose(env) {
           outcomeSource: '3H_PROFIT_CLOSE'
         });
 
-        await sendTelegramMessage(env,
-          `⏱️ <b>3H-PROFIT-CLOSE — ${signal.symbol} ${signal.direction}</b>\n\n` +
-          `✅ Im Profit nach ${duration} geschlossen\n` +
-          `Entry: $${entryPrice.toFixed(2)} · Exit: $${currentPrice.toFixed(2)}\n` +
-          `PnL: <b>+${pnlPct.toFixed(2)}%</b>\n\n` +
-          `<i>Automatisch geschlossen nach 3h-Profit-Check</i>`
-        );
-
-        console.log(`✅ 3h-Profit-Close: ${signal.id} | ${signal.symbol} | +${pnlPct.toFixed(2)}%`);
+        // Skip the notification if a concurrent path already closed this signal —
+        // otherwise we'd report this invocation's (possibly stale) price/PnL
+        // even though different values were the ones actually persisted.
+        if (closeResult.closedSignal) {
+          await sendTelegramMessage(env,
+            `⏱️ <b>3H-PROFIT-CLOSE — ${signal.symbol} ${signal.direction}</b>\n\n` +
+            `✅ Im Profit nach ${duration} geschlossen\n` +
+            `Entry: $${entryPrice.toFixed(2)} · Exit: $${currentPrice.toFixed(2)}\n` +
+            `PnL: <b>+${pnlPct.toFixed(2)}%</b>\n\n` +
+            `<i>Automatisch geschlossen nach 3h-Profit-Check</i>`
+          );
+          console.log(`✅ 3h-Profit-Close: ${signal.id} | ${signal.symbol} | +${pnlPct.toFixed(2)}%`);
+        }
         results.push({ id: signal.id, status: 'closed_profit', pnlPct: pnlPct.toFixed(2), symbol: signal.symbol });
       } else {
         results.push({ id: signal.id, status: 'open_no_profit', symbol: signal.symbol });
@@ -2936,7 +2948,7 @@ async function evaluateOpenTrades(env) {
           : ((entry - exitPrice) / entry) * 100;
         const duration  = formatDuration(Date.now() - (signal.created_at || Date.now()));
 
-        await closeTrade(env, {
+        const closeResult = await closeTrade(env, {
           signalId: signal.id,
           outcome,
           exitPrice,
@@ -2945,22 +2957,25 @@ async function evaluateOpenTrades(env) {
           telegramOutcomeSent: 1
         });
 
-        const isWin     = outcome === 'WIN';
-        const hitEmoji  = isWin ? '🎯' : '🛑';
-        const hitLabel  = isWin ? 'TP HIT' : 'SL HIT';
-        const pnlSign   = pnlPct >= 0 ? '+' : '';
-        const tpLine    = isWin
-          ? `TP: $${signal.ai_tp?.toFixed(2)}`
-          : `SL: $${signal.ai_sl?.toFixed(2)}`;
+        // Skip the notification if a concurrent path (e.g. check3hProfitClose
+        // or checkOpenSignals) already closed this signal first.
+        if (closeResult.closedSignal) {
+          const isWin     = outcome === 'WIN';
+          const hitEmoji  = isWin ? '🎯' : '🛑';
+          const hitLabel  = isWin ? 'TP HIT' : 'SL HIT';
+          const pnlSign   = pnlPct >= 0 ? '+' : '';
+          const tpLine    = isWin
+            ? `TP: $${signal.ai_tp?.toFixed(2)}`
+            : `SL: $${signal.ai_sl?.toFixed(2)}`;
 
-        await sendTelegramMessage(env,
-          `${hitEmoji} <b>${hitLabel} — ${signal.symbol} ${signal.direction}</b>\n` +
-          `Ergebnis: <b>${outcome}</b>\n\n` +
-          `Entry: $${entry.toFixed(2)} · ${tpLine} · Exit: $${exitPrice.toFixed(2)}\n` +
-          `PnL: <b>${pnlSign}${pnlPct.toFixed(2)}%</b> · Dauer: ${duration}`
-        );
-
-        console.log(`📊 Signal ${signal.id} closed: ${outcome} | PnL: ${pnlPct.toFixed(2)}% | ${duration}`);
+          await sendTelegramMessage(env,
+            `${hitEmoji} <b>${hitLabel} — ${signal.symbol} ${signal.direction}</b>\n` +
+            `Ergebnis: <b>${outcome}</b>\n\n` +
+            `Entry: $${entry.toFixed(2)} · ${tpLine} · Exit: $${exitPrice.toFixed(2)}\n` +
+            `PnL: <b>${pnlSign}${pnlPct.toFixed(2)}%</b> · Dauer: ${duration}`
+          );
+          console.log(`📊 Signal ${signal.id} closed: ${outcome} | PnL: ${pnlPct.toFixed(2)}% | ${duration}`);
+        }
       }
     }
     console.log('✅ evaluateOpenTrades done');
