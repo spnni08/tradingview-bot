@@ -1906,9 +1906,18 @@ async function processSignal(env, signal) {
   const vpVah   = parseFloat(signal.vah) || null;
   const vpVal   = parseFloat(signal.val) || null;
 
+  // VP-Score ist in Pine rein additiv (0 wenn Zone für die Richtung ungünstig
+  // ist, nie negativ). Ein LONG in der VAH-Zone (Resistance direkt über dem
+  // Preis) bzw. ein SHORT in der VAL-Zone (Support direkt unter dem Preis)
+  // ist aber kein neutraler Fall, sondern ein Gegenwind-Signal — dafür gibt es
+  // hier einen moderaten Abzug (Größenordnung unterhalb des max. Bonus von 25).
+  const vpAdverseZone   = (direction === 'LONG' && vpZone === 'VAH') || (direction === 'SHORT' && vpZone === 'VAL');
+  const vpPenalty       = vpAdverseZone ? -8 : 0;
+  const vpScoreAdjusted = vpScore + vpPenalty;
+
   // Score-Gate: (rule_score + vp_score) entscheidet ob Claude aufgerufen wird.
   // VP-Konfluenz senkt die Schwelle von 55 auf 50 (bessere Signalqualität erwartet).
-  const preAiScore  = ruleAnalysis.score + vpScore;
+  const preAiScore  = ruleAnalysis.score + vpScoreAdjusted;
   const aiThreshold = vpZone !== 'none' ? 50 : 55;
 
   // Use AbortController so the Anthropic fetch is actually cancelled when the
@@ -1949,11 +1958,12 @@ async function processSignal(env, signal) {
     }
   } catch (_) {}
 
-  // VP-Score on top addieren (nach News-Penalty, damit Penalty nicht durch VP überkompensiert wird)
-  if (vpScore > 0) {
+  // VP-Score on top addieren/abziehen (nach News-Penalty, damit Penalty nicht
+  // durch VP überkompensiert wird). Kann jetzt auch negativ sein (vpAdverseZone).
+  if (vpScoreAdjusted !== 0) {
     const before = analysis.score;
-    analysis.score = Math.min(100, analysis.score + vpScore);
-    console.log(`📊 VP boost: ${before} → ${analysis.score} (+${vpScore}, zone: ${vpZone})`);
+    analysis.score = Math.max(0, Math.min(100, analysis.score + vpScoreAdjusted));
+    console.log(`📊 VP adjust: ${before} → ${analysis.score} (${vpScoreAdjusted >= 0 ? '+' : ''}${vpScoreAdjusted}, zone: ${vpZone})`);
   }
 
   const signalId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
