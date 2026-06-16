@@ -1721,6 +1721,24 @@ async function getPracticeTrades(env, { symbol, timeframe, direction, status, li
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// STATS HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+// winRate = wins / (wins+losses) * 100, OPEN/etc never in denominator.
+function computeWinRate(wins, losses) {
+  const closed = (wins || 0) + (losses || 0);
+  return closed > 0 ? parseFloat(((wins / closed) * 100).toFixed(1)) : 0;
+}
+
+// expectancy = (winRate/100 * avgWinPct) - (lossRate/100 * |avgLossPct|)
+function computeExpectancy(wins, losses, avgWinPct, avgLossPct) {
+  const winRate = computeWinRate(wins, losses);
+  const lossRate = 100 - winRate;
+  const expectancy = (winRate / 100) * (avgWinPct || 0) - (lossRate / 100) * Math.abs(avgLossPct || 0);
+  return parseFloat(expectancy.toFixed(2));
+}
+
 async function getPracticeTradeStats(env) {
   try {
     const tableCheck = await env.DB.prepare(
@@ -1735,15 +1753,14 @@ async function getPracticeTradeStats(env) {
     const avgWin  = await env.DB.prepare(`SELECT AVG(result_pct) as a FROM practice_trades WHERE status='WIN'`).first();
     const avgLoss = await env.DB.prepare(`SELECT AVG(result_pct) as a FROM practice_trades WHERE status='LOSS'`).first();
 
-    const closed  = (wins.c || 0) + (losses.c || 0);
-    const winRate = closed > 0 ? ((wins.c / closed) * 100) : 0;
+    const winRate = computeWinRate(wins.c, losses.c);
 
     return {
       total: total.c || 0,
       open: open.c || 0,
       wins: wins.c || 0,
       losses: losses.c || 0,
-      winRate: parseFloat(winRate.toFixed(1)),
+      winRate,
       avgWinPct: parseFloat((avgWin.a || 0).toFixed(2)),
       avgLossPct: parseFloat((avgLoss.a || 0).toFixed(2))
     };
@@ -2476,16 +2493,14 @@ async function getStats(env) {
     const losses = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'LOSS'`).first();
     const open   = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'OPEN'`).first();
 
-    const winRate = (wins.count + losses.count) > 0
-      ? (wins.count / (wins.count + losses.count)) * 100
-      : 0;
+    const winRate = computeWinRate(wins.count, losses.count);
 
     return {
       total: total.count || 0,
       wins: wins.count || 0,
       losses: losses.count || 0,
       open: open.count || 0,
-      winRate: parseFloat(winRate.toFixed(1))
+      winRate
     };
   } catch (error) {
     console.error('Error in getStats:', error);
@@ -3814,7 +3829,7 @@ function _renderBTCompareTab(strategies, history) {
     const sigs = hist.filter(h => h.strategy_id === s.id || (!h.strategy_id && s.is_default));
     const closed = sigs.filter(h => h.outcome === 'WIN' || h.outcome === 'LOSS');
     const wins = sigs.filter(h => h.outcome === 'WIN').length;
-    const wr = closed.length > 0 ? (wins / closed.length * 100).toFixed(1) : '—';
+    const wr = closed.length > 0 ? computeWinRate(wins, closed.length - wins).toFixed(1) : '—';
     const scores = sigs.map(h => h.ai_score).filter(Boolean);
     const avgScore = scores.length ? (scores.reduce((a,b) => a+b, 0) / scores.length).toFixed(1) : '—';
     return { ...s, totalSigs: sigs.length, closedSigs: closed.length, wins, winRate: wr, avgScore };
@@ -3850,7 +3865,7 @@ function _renderBTRegelTab(history) {
     .slice(0, 20)
     .map(r => {
       const total = r.wins + r.losses;
-      const wr = total > 0 ? (r.wins / total * 100) : 0;
+      const wr = computeWinRate(r.wins, r.losses);
       const pct = wr.toFixed(1);
       const barColor = wr >= 60 ? 'var(--win)' : wr >= 40 ? 'var(--wait)' : 'var(--loss)';
       return `<tr>
@@ -4067,7 +4082,7 @@ function _renderPnLChart(history) {
 
 function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
   const totalClosed = stats.wins + stats.losses;
-  const winRate = totalClosed > 0 ? (stats.wins / totalClosed * 100) : 0;
+  const winRate = computeWinRate(stats.wins, stats.losses);
 
   // Score distribution
   const sg = { '90–100': 0, '75–89': 0, '60–74': 0, '<60': 0 };
@@ -4095,7 +4110,7 @@ function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
   // Direction breakdown rows
   const dirRows = (breakdown.directions || []).map(d => {
     const closed = d.wins + d.losses;
-    const pct = closed > 0 ? (d.wins / closed * 100) : 0;
+    const pct = computeWinRate(d.wins, d.losses);
     const cls = d.direction === 'LONG' ? 'badge-long' : 'badge-short';
     return `
 <div style="margin-bottom:20px">
@@ -5105,7 +5120,7 @@ export default {
               const s = bRows.filter(f);
               const w = s.filter(r => r.outcome === 'WIN').length;
               const l = s.filter(r => r.outcome === 'LOSS').length;
-              return { total: s.length, wins: w, losses: l, winRate: (w + l) > 0 ? parseFloat((w / (w + l) * 100).toFixed(1)) : 0 };
+              return { total: s.length, wins: w, losses: l, winRate: computeWinRate(w, l) };
             };
             data = {
               biasData: {
@@ -5132,7 +5147,7 @@ export default {
               GROUP BY symbol HAVING (wins+losses) >= 3
               ORDER BY (wins*1.0/(wins+losses)) ASC LIMIT 3`).all();
             for (const sym of (symRows.results || [])) {
-              const wr = (sym.wins + sym.losses) > 0 ? (sym.wins / (sym.wins + sym.losses)) * 100 : 0;
+              const wr = computeWinRate(sym.wins, sym.losses);
               if (wr < 35) suggestions.push({ type: 'symbol_filter', priority: 'medium', title: `${sym.symbol} performat schlecht`, message: `${sym.symbol}: ${wr.toFixed(0)}% Win-Rate bei ${sym.wins + sym.losses} Trades`, action: 'Symbol-Filter prüfen' });
             }
             const lrRows = await env.DB.prepare(`SELECT reason, COUNT(*) as cnt FROM signal_loss_reasons GROUP BY reason ORDER BY cnt DESC LIMIT 5`).all();
@@ -5160,7 +5175,7 @@ export default {
                   env.DB.prepare(`SELECT direction, COUNT(*) as total, SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses FROM signals WHERE direction IN ('LONG','SHORT') GROUP BY direction`).all(),
                   env.DB.prepare(`SELECT symbol, COUNT(*) as total, SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses FROM signals GROUP BY symbol ORDER BY total DESC LIMIT 10`).all()
                 ]);
-                const cwr = r => (r.wins + r.losses) > 0 ? parseFloat(((r.wins / (r.wins + r.losses)) * 100).toFixed(1)) : 0;
+                const cwr = r => computeWinRate(r.wins, r.losses);
                 return {
                   timeframes: (tfR.results || []).map(r => ({ ...r, winRate: cwr(r) })),
                   directions: (dirR.results || []).map(r => ({ ...r, winRate: cwr(r) })),
@@ -5396,7 +5411,7 @@ export default {
             FROM signals GROUP BY symbol ORDER BY total DESC LIMIT 10
           `).all();
 
-          const calcWR = r => (r.wins + r.losses) > 0 ? parseFloat(((r.wins / (r.wins + r.losses)) * 100).toFixed(1)) : 0;
+          const calcWR = r => computeWinRate(r.wins, r.losses);
 
           return jsonResponse({
             timeframes: (tfRows.results || []).map(r => ({ ...r, winRate: calcWR(r) })),
@@ -6197,7 +6212,7 @@ export default {
           `).all();
           return jsonResponse((rows.results || []).map(r => ({
             ...r,
-            winRate: (r.wins + r.losses) > 0 ? parseFloat(((r.wins / (r.wins + r.losses)) * 100).toFixed(1)) : 0,
+            winRate: computeWinRate(r.wins, r.losses),
             avg_score: r.avg_score ? parseFloat(r.avg_score.toFixed(1)) : 0
           })));
         } catch (e) { return jsonResponse([]); }
@@ -6228,7 +6243,7 @@ export default {
           results.push({
             strategyId: stratId, strategyName: strat.name, strategyVersion: strat.version,
             total, wins, losses, waitCount, skipCount,
-            winRate: closed > 0 ? parseFloat(((wins / closed) * 100).toFixed(1)) : 0,
+            winRate: computeWinRate(wins, losses),
             avgScore: total > 0 ? parseFloat((totalScore / total).toFixed(1)) : 0
           });
         }
@@ -6254,7 +6269,7 @@ export default {
             ORDER BY (wins*1.0/(wins+losses)) ASC LIMIT 3
           `).all();
           for (const sym of (symRows.results || [])) {
-            const wr = (sym.wins + sym.losses) > 0 ? (sym.wins / (sym.wins + sym.losses)) * 100 : 0;
+            const wr = computeWinRate(sym.wins, sym.losses);
             if (wr < 35) suggestions.push({ type: 'symbol_filter', priority: 'medium', title: `${sym.symbol} performat schlecht`, message: `${sym.symbol}: ${wr.toFixed(0)}% Win-Rate bei ${sym.wins + sym.losses} Trades`, action: 'Symbol-Filter prüfen' });
           }
           const lrRows = await env.DB.prepare(`SELECT reason, COUNT(*) as cnt FROM signal_loss_reasons GROUP BY reason ORDER BY cnt DESC LIMIT 5`).all();
@@ -6643,7 +6658,7 @@ export default {
             const s = rows.filter(filter);
             const w = s.filter(r => r.outcome === 'WIN').length;
             const l = s.filter(r => r.outcome === 'LOSS').length;
-            return { total: s.length, wins: w, losses: l, winRate: (w + l) > 0 ? parseFloat(((w / (w + l)) * 100).toFixed(1)) : 0 };
+            return { total: s.length, wins: w, losses: l, winRate: computeWinRate(w, l) };
           };
           return jsonResponse({
             official:   calc(r => r.counts_for_strategy === 1),
