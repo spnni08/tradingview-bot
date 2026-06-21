@@ -1,4 +1,4 @@
-name = "tradingview-bot"
+name = "tradingview-dashboard"
 main = "worker.js"
 compatibility_date = "2024-01-01"
 workers_dev = true
