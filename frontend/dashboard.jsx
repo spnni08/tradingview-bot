@@ -148,7 +148,7 @@ function DashSignalModal({ signal, onClose, onExecuteTrade, onSaveToJournal, onI
         <div className="modal-foot" style={{ position: 'sticky', bottom: 0, background: 'var(--bg-1)' }}>
           <button className="btn btn-primary" onClick={() => { onExecuteTrade(signal); onClose(); }} disabled={tooOld}
             title={tooOld ? 'Signal zu alt (max. 2h)' : ''}>
-            <Icon name="bolt" size={14}/> {tooOld ? 'Zu alt' : 'Demo-Trade'}
+            <Icon name="bolt" size={14}/> {tooOld ? 'Zu alt' : 'Live ✓'}
           </button>
           <button className="btn" onClick={() => { onSaveToJournal(signal); onClose(); }}>
             <Icon name="book" size={14}/> Journal
@@ -304,30 +304,10 @@ const DashboardPage = ({ user, navigate }) => {
 
   // ── Signal actions ────────────────────────────────────────────
   const handleExecuteTrade = async (signal) => {
-    const MAX_AGE_MS = 2 * 60 * 60 * 1000;
-    const signalAge = Date.now() - new Date(signal.created_at).getTime();
-    if (signalAge > MAX_AGE_MS) {
-      const ageH = Math.floor(signalAge / 3600000);
-      const ageM = Math.floor((signalAge % 3600000) / 60000);
-      showToast(`Signal ist ${ageH}h ${ageM}m alt — zu alt für Demo-Trade (max. 2h).`, 'warn');
-      return;
-    }
-    try {
-      const res = await fetch(`${API_URL}/practice-trades/manual`, {
-        credentials: 'include',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json'},
-        body: JSON.stringify({ signalId: signal.id })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        showToast(data.error || 'Fehler beim Erstellen des Demo-Trades', 'error');
-      } else {
-        showToast(`Demo-Trade für ${signal.symbol} ${signal.direction} geöffnet!`, 'success');
-      }
-    } catch (_) {
-      showToast('Netzwerkfehler beim Erstellen des Demo-Trades', 'error');
-    }
+    // AUFGABE 3: Kein separater Demo-/Übungstrade-Pfad mehr. Jedes Signal wird
+    // automatisch auf dem Live-Pfad (signals) getrackt — es gibt nichts manuell
+    // zu „eröffnen". Endpoint /practice-trades/manual wurde entfernt.
+    showToast(`${signal.symbol} ${signal.direction} wird bereits automatisch live getrackt.`, 'success');
   };
 
   const handleSaveToJournal = (signal) => {
@@ -709,7 +689,7 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
                     title={tooOld ? 'Signal zu alt — Demo-Trade nur bis 2h nach Signal möglich' : nearLimit ? 'Achtung: Signal bald zu alt' : ''}
                     style={nearLimit && !tooOld ? { backgroundColor: 'var(--wait)', borderColor: 'var(--wait)' } : {}}
                   >
-                    <Icon name="bolt" size={14}/> {tooOld ? 'Zu alt' : 'Demo-Trade'}
+                    <Icon name="bolt" size={14}/> {tooOld ? 'Zu alt' : 'Live ✓'}
                   </button>
                 );
               })()}

@@ -1,0 +1,83 @@
+//@version=5
+// ════════════════════════════════════════════════════════════════════════
+// WAVESCOUT — Strategie 4/4: forex_sr_fib_rsi   (Forex)
+// ════════════════════════════════════════════════════════════════════════
+// Große Zonen über S&R/Swing-Levels + Fibonacci-Retracements (38.2/50/61.8%)
+// für die feinere Entry-Zone INNERHALB der Zone.
+//   Long  : Preis zieht in eine Fib-Zone zurück, die mit einem S&R-Level
+//           zusammenfällt, UND RSI > 50 (Trendbestätigung, KEIN Reversal).
+//   Short : analog mit RSI < 50.
+//   Session-Filter: NUR London-Open (09:00–10:00 MEZ) oder London/NY-Overlap
+//   (14:00–17:00 MEZ). Außerhalb werden KEINE Signale gesendet (= UTC 08–09 / 13–16).
+// Sendet `strategy:"forex_sr_fib_rsi"` an die /webhook-URL. (Der Worker gated
+// die Session zusätzlich hart — doppelte Absicherung.)
+indicator("WAVESCOUT · forex_sr_fib_rsi", overlay=true)
+
+// ── Inputs ──────────────────────────────────────────────────────────────
+swingLen = input.int(20,   "Swing/S&R Lookback")
+fibTolPct= input.float(0.10,"Fib/S&R Zonen-Toleranz %", minval=0.02, maxval=0.5)
+rsiLen   = input.int(14,   "RSI Länge")
+
+// ── Indikatoren ─────────────────────────────────────────────────────────
+rsi    = ta.rsi(close, rsiLen)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+
+// Swing-Hoch/Tief als große S&R-Zone (Basis für das Fib-Retracement).
+swingHigh = ta.highest(high, swingLen)
+swingLow  = ta.lowest(low,   swingLen)
+rangeSize = swingHigh - swingLow
+
+// Fibonacci-Retracements innerhalb der Swing-Range.
+fib382Up = swingHigh - rangeSize * 0.382
+fib500Up = swingHigh - rangeSize * 0.500
+fib618Up = swingHigh - rangeSize * 0.618
+fib382Dn = swingLow  + rangeSize * 0.382
+fib500Dn = swingLow  + rangeSize * 0.500
+fib618Dn = swingLow  + rangeSize * 0.618
+
+f_inZone(_lvl) => rangeSize > 0 and math.abs(close - _lvl) / close * 100 <= fibTolPct
+inFibLong  = f_inZone(fib382Up) or f_inZone(fib500Up) or f_inZone(fib618Up)
+inFibShort = f_inZone(fib382Dn) or f_inZone(fib500Dn) or f_inZone(fib618Dn)
+
+// ── HARTER Session-Filter (UTC 08–09 = London-Open, 13–16 = LDN/NY-Overlap) ─
+h = hour(time, "UTC")
+inSession = (h >= 8 and h < 9) or (h >= 13 and h < 16)
+
+// ── Entry-Logik (Trendbestätigung, kein Reversal) ───────────────────────
+longSig  = inSession and inFibLong  and rsi > 50 and close > ema200
+shortSig = inSession and inFibShort and rsi < 50 and close < ema200
+
+// ── Payload ─────────────────────────────────────────────────────────────
+f_payload(_dir, _trigger) =>
+    a = "{"
+    a := a + "\"strategy\":\"forex_sr_fib_rsi\","
+    a := a + "\"symbol\":\""    + syminfo.ticker          + "\","
+    a := a + "\"direction\":\"" + _dir                    + "\","
+    a := a + "\"action\":\""    + (_dir == "LONG" ? "BUY" : "SELL") + "\","
+    a := a + "\"trigger\":\""   + _trigger                + "\","
+    a := a + "\"timeframe\":\"" + timeframe.period         + "\","
+    a := a + "\"price\":"       + str.tostring(close)      + ","
+    a := a + "\"rsi\":"         + str.tostring(rsi)        + ","
+    a := a + "\"ema50\":"       + str.tostring(ema50)      + ","
+    a := a + "\"ema200\":"      + str.tostring(ema200)     + ","
+    a := a + "\"support\":"     + str.tostring(swingLow)   + ","
+    a := a + "\"resistance\":"  + str.tostring(swingHigh)  + ","
+    a := a + "\"fib_382\":"     + str.tostring(_dir == "LONG" ? fib382Up : fib382Dn) + ","
+    a := a + "\"fib_500\":"     + str.tostring(_dir == "LONG" ? fib500Up : fib500Dn) + ","
+    a := a + "\"fib_618\":"     + str.tostring(_dir == "LONG" ? fib618Up : fib618Dn) + ","
+    a := a + "\"timestamp\":\"" + str.tostring(time)       + "\""
+    a := a + "}"
+    a
+
+if longSig
+    alert(f_payload("LONG",  "FIB_SR_RSI_LONG"),  alert.freq_once_per_bar_close)
+if shortSig
+    alert(f_payload("SHORT", "FIB_SR_RSI_SHORT"), alert.freq_once_per_bar_close)
+
+plot(fib382Up, "Fib 38.2", color=color.new(color.blue, 50))
+plot(fib500Up, "Fib 50.0", color=color.new(color.blue, 30))
+plot(fib618Up, "Fib 61.8", color=color.new(color.blue, 50))
+bgcolor(inSession ? color.new(color.green, 92) : na, title="Forex-Session")
+plotshape(longSig,  style=shape.triangleup,   location=location.belowbar, color=color.green, size=size.small)
+plotshape(shortSig, style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.small)

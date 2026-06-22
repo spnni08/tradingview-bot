@@ -519,7 +519,7 @@ function PracticeTradesTab() {
         </div>
         {filtered.length === 0 ? (
           <div className="card-body" style={{ padding: 60, textAlign: 'center' }}>
-            <p style={{ color: 'var(--text-tertiary)' }}>{trades.length === 0 ? 'Noch keine Übungstrades — werden automatisch beim nächsten Signal erstellt' : 'Keine Trades mit diesen Filtern'}</p>
+            <p style={{ color: 'var(--text-tertiary)' }}>{trades.length === 0 ? 'Archiv — es werden keine neuen Übungstrades mehr erstellt (alle Signale laufen im Live-Pfad)' : 'Keine Trades mit diesen Filtern'}</p>
           </div>
         ) : (
           <>
@@ -1895,7 +1895,7 @@ function BiasStatsTab() {
 const BacktestPage = ({ user }) => {
   const [activeTab, setActiveTab] = useState('practice');
   const tabs = [
-    { id: 'practice',      label: 'Übungstrades'    },
+    { id: 'practice',      label: 'Übungstrades (Archiv)' },
     { id: 'history',       label: 'Signal-Historie' },
     { id: 'regelanalyse',  label: 'Regel-Analyse'   },
     { id: 'loss',          label: 'Loss-Analyse'    },

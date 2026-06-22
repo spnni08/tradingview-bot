@@ -619,6 +619,8 @@ ${stars} Score: <b>${sc}/100</b> · ${getSignalQuality(sc)}
 //   TP2 (finales Ziel) ist das bestehende Take-Profit (analysis.tp, 1.5R).
 //   TP1 liegt bei TP1_DISTANCE_FRAC der Strecke Entry→TP2.
 const EXIT_CONFIG = {
+  SL_DISTANCE_PCT:    1.00, // SL-Distanz in % vom Entry (= 1R-Referenz)
+  TP2_R_MULTIPLE:     1.50, // finales TP2 = TP2_R_MULTIPLE × R
   TP1_DISTANCE_FRAC:  0.60, // TP1-Trigger = Entry + 0.60 × (TP2 − Entry)
   TP1_CLOSE_FRAC:     0.50, // Anteil der Position, der bei TP1 geschlossen wird
   BREAKEVEN_OFFSET_R: 0.10, // nach TP1: SL = Entry + 0.10R (R = |Entry − Original-SL|), leicht im Plus
@@ -702,6 +704,134 @@ function evaluateExit(pos, price, cfg = EXIT_CONFIG) {
   }
 
   return { action: 'NONE' };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ASSET CLASS DETECTION (crypto | forex)
+// ═══════════════════════════════════════════════════════════════
+//
+// Erkennt anhand des Symbol-Strings die Asset-Klasse. Entscheidungsreihenfolge
+// (Krypto-Bezug schlägt Forex; Metalle zählen als Forex):
+//   1. Stablecoin-Quote (USDT/USDC/…) ODER bekannte Krypto-Basis (BTC/ETH/…)
+//      → 'crypto'  (erfasst auch BTCUSD/ETHUSD über die Krypto-Basis)
+//   2. Edelmetall (XAU/XAG/XPT/XPD) gegen Fiat        → 'forex' (Metalle)
+//   3. 6-stelliges Paar aus zwei Fiat-Codes           → 'forex'
+//   4. sonst / unbekannt                              → 'crypto' (Default, Bot ist krypto-primär)
+const FIAT_CODES    = ['USD','EUR','GBP','JPY','CHF','AUD','NZD','CAD','SEK','NOK','SGD','HKD','PLN','ZAR','MXN','TRY','CNH'];
+const METAL_CODES   = ['XAU','XAG','XPT','XPD'];
+const STABLE_QUOTES = ['USDT','USDC','BUSD','DAI','TUSD','FDUSD'];
+const CRYPTO_ASSETS = ['BTC','XBT','ETH','SOL','BNB','XRP','ADA','DOGE','AVAX','MATIC','DOT','LINK','LTC','TRX','SHIB','ATOM'];
+
+// Symbol auf reine A–Z0–9 normalisieren (Trenner wie '/', '-', ':' entfernen).
+function normalizeSymbol(symbol) {
+  return String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+// Liefert 'crypto' | 'forex'. Niemals throw; unbekannt → 'crypto'.
+function detectAssetClass(symbol) {
+  const s = normalizeSymbol(symbol);
+  if (!s) return 'crypto';
+
+  // 1. Edelmetalle gegen Fiat → Forex/Metalle (XAUUSD, XAGUSD, XPTUSD).
+  //    Bewusst VOR der Krypto-Prüfung: 'XPTUSD' = 'XP'+'TUSD' würde sonst
+  //    fälschlich auf den TUSD-Stablecoin-Suffix matchen.
+  for (const m of METAL_CODES) {
+    if (s.startsWith(m) && FIAT_CODES.includes(s.slice(m.length))) return 'forex';
+  }
+
+  // 2. Eindeutiger Krypto-Bezug (Stablecoin-Quote oder Krypto-Basis).
+  if (STABLE_QUOTES.some(q => s.endsWith(q))) return 'crypto';
+  if (CRYPTO_ASSETS.some(a => s.startsWith(a))) return 'crypto';
+
+  // 3. Reines 6-stelliges Fiat-Paar (EURUSD, GBPJPY).
+  if (s.length === 6 && FIAT_CODES.includes(s.slice(0, 3)) && FIAT_CODES.includes(s.slice(3))) {
+    return 'forex';
+  }
+
+  // 4. Default.
+  return 'crypto';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STRATEGY REGISTRY — 4 parallele Strategien (3 Krypto, 1 Forex)
+// ═══════════════════════════════════════════════════════════════
+//
+// Jede Strategie ist ein eigenes Pine-Script, das an dieselbe /webhook-URL
+// postet und sich über das `strategy`-Feld im Payload identifiziert. Die
+// ENTRY-Logik liegt in Pine; der Worker routet, gated (Session/Score), wendet
+// die GEMEINSAME Exit-Logik (TP1→Breakeven→TP2) an und trackt pro Strategie.
+//
+// `exit` überschreibt EXIT_CONFIG je Strategie (TP1/TP2/SL-% pro Strategie
+// konfigurierbar, kein Hardcoding). Fehlt das strategy-Feld im Payload, fällt
+// der Worker rückwärtskompatibel auf 'crypto_baseline' zurück.
+const STRATEGIES = {
+  // 1. Kontrollgruppe: bestehende RSI + EMA200-Logik, Score-Optimizer-Gewichte.
+  crypto_baseline: {
+    label:        'Crypto Baseline (Kontrollgruppe)',
+    assetClass:   'crypto',
+    useScoreGate: true,   // Score ≥ minScore entscheidet über OPEN (wie bisher)
+    minScore:     75,
+    sessionGate:  false,
+    exit:         {},     // EXIT_CONFIG-Defaults (1% SL, 1.5R TP2)
+  },
+  // 2. Level über Volume Profile (VAL/VAH/POC) + EMA200-Trendfilter.
+  crypto_sr_volume: {
+    label:        'Crypto S&R Volume Profile',
+    assetClass:   'crypto',
+    useScoreGate: false,  // Entry kommt aus Pine; Score nur Telemetrie
+    minScore:     0,
+    sessionGate:  false,
+    emaFilter:    true,
+    exit:         {},
+  },
+  // 3. Range-Breakout mit Volumen-Bestätigung (> volMult × Ø-Vol) + EMA-Filter.
+  crypto_orderflow_breakout: {
+    label:        'Crypto Orderflow Breakout',
+    assetClass:   'crypto',
+    useScoreGate: false,
+    minScore:     0,
+    sessionGate:  false,
+    rangeN:       20,     // Range über letzte N Kerzen (in Pine berechnet/gesendet)
+    volMult:      1.5,    // Ausbruchskerze braucht Volumen > volMult × Ø-Volumen
+    emaFilter:    true,   // Ausbrüche gegen EMA200-Trend verwerfen (default an)
+    exit:         {},
+  },
+  // 4. Forex: große S&R/VP-Zonen + Fib-Feinzone + RSI-Trendbestätigung.
+  //    HART session-gated (London-Open / London-NY-Overlap).
+  forex_sr_fib_rsi: {
+    label:        'Forex S&R + Fib + RSI',
+    assetClass:   'forex',
+    useScoreGate: false,
+    minScore:     0,
+    sessionGate:  true,
+    exit:         { SL_DISTANCE_PCT: 0.30 }, // Forex: engere SL-Distanz (konfigurierbar)
+  },
+};
+
+// Forex-Handelsfenster (HART gated). Vorgabe in MEZ (CET = UTC+1), intern UTC:
+//   London-Open 09–10 MEZ → 08–09 UTC · London/NY-Overlap 14–17 MEZ → 13–16 UTC.
+// NB: ohne Sommerzeit gerechnet — bei Bedarf hier anpassen.
+const FOREX_SESSIONS_UTC = [
+  { name: 'London-Open',       startMin:  8 * 60, endMin:  9 * 60 },
+  { name: 'London/NY-Overlap', startMin: 13 * 60, endMin: 16 * 60 },
+];
+
+// True, wenn `date` in einem der Forex-Handelsfenster liegt.
+function isWithinForexSession(date = new Date(), sessions = FOREX_SESSIONS_UTC) {
+  const t = date.getUTCHours() * 60 + date.getUTCMinutes();
+  return sessions.some(s => t >= s.startMin && t < s.endMin);
+}
+
+// Wählt den Strategie-Key für ein Signal (rückwärtskompatibel: default baseline).
+function resolveStrategyKey(signal) {
+  const raw = String(signal?.strategy || signal?.strategy_key || '').trim().toLowerCase();
+  return STRATEGIES[raw] ? raw : 'crypto_baseline';
+}
+
+// Merged Exit-Config für eine Strategie (EXIT_CONFIG + per-Strategie-Overrides).
+function exitConfigForStrategy(strategyKey) {
+  const def = STRATEGIES[strategyKey];
+  return { ...EXIT_CONFIG, ...(def?.exit || {}) };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -854,7 +984,7 @@ Bewerte das Signal nach v2.0 Kriterien. Antworte NUR als JSON:
   return analyzeWithRules(signal, strategyConfig);
 }
 
-function analyzeWithRules(signal, strategyConfig = null) {
+function analyzeWithRules(signal, strategyConfig = null, exitCfg = EXIT_CONFIG) {
   const cfg     = strategyConfig || DEFAULT_STRATEGY_CONFIG;
   const dir     = (signal.direction || signal.side || signal.signal || '').toUpperCase();
   const isLong  = dir === 'LONG';
@@ -1142,13 +1272,14 @@ function analyzeWithRules(signal, strategyConfig = null) {
     risk = 'HIGH';
   }
 
-  // ── TP / SL (v2.0: TP1 = 1.5R, TP2 = 3R) ────────────────────
+  // ── TP / SL (gemeinsame Exit-Logik; SL-% und TP2-R pro Strategie via exitCfg) ──
+  // tp = finales TP2 (= TP2_R_MULTIPLE × R). tp1 wird im Exit aus entry/tp abgeleitet.
   const entry   = price || 0;
-  // SL: 1% distance; TP: 1.5x SL distance (TP1 target)
-  const slDist  = entry * 0.01;
-  const tp      = isLong  ? entry + slDist * 1.5 : entry - slDist * 1.5;
+  const slDist  = entry * ((exitCfg?.SL_DISTANCE_PCT ?? 1.0) / 100); // 1R-Distanz
+  const tpR     = exitCfg?.TP2_R_MULTIPLE ?? 1.5;
+  const tp      = isLong  ? entry + slDist * tpR : entry - slDist * tpR;
   const sl      = isLong  ? entry - slDist       : entry + slDist;
-  const tp2     = isLong  ? entry + slDist * 3   : entry - slDist * 3;
+  const tp2     = isLong  ? entry + slDist * 3   : entry - slDist * 3; // vestigiales 3R-Feld (Telemetrie)
 
   // ── Reason ───────────────────────────────────────────────────
   const reasons = [];
@@ -1515,6 +1646,9 @@ async function ensureTables(env) {
       ['ai_tp1',               'REAL'],               // TP1-Trigger (Teilschließung)
       ['tp1_hit',              'INTEGER DEFAULT 0'],  // wurde TP1 erreicht? (0/1)
       ['sl_current',           'REAL'],               // aktiver SL (nach TP1 = Breakeven)
+      // Multi-Strategie + Asset-Class (AUFGABE 1+2):
+      ['asset_class',          'TEXT'],               // 'crypto' | 'forex'
+      ['strategy_key',         'TEXT'],               // Routing-Strategie (z.B. crypto_sr_volume)
     ];
     for (const [col, type] of signalIndicatorCols) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); }
@@ -1576,6 +1710,18 @@ async function ensureTables(env) {
       catch (_) {}
     }
 
+    // AUFGABE 4: Audit-Log für Startkapital-Resets (wer/wann/alt/neu).
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS capital_reset_log (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        username TEXT,
+        old_value REAL,
+        new_value REAL,
+        created_at INTEGER NOT NULL
+      )
+    `).run();
+
     await env.DB.prepare(`
       CREATE TABLE IF NOT EXISTS alert_dedup (
         dedup_key TEXT PRIMARY KEY,
@@ -1636,6 +1782,56 @@ async function setSetting(env, key, value) {
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).bind(key, String(value), Date.now()).run();
   } catch (_) {}
+}
+
+// ─── AUFGABE 4: Einstiegskapital (Startkapital) ──────────────────────
+// Startkapital wird in der settings-Tabelle gehalten (Key 'starting_capital'),
+// Fallback = env.STARTING_CAPITAL, dann 10000. So ist es zur Laufzeit änderbar
+// (Cloudflare-Env-Vars sind im Worker read-only). Reset ist admin-only + geloggt.
+async function getStartingCapital(env) {
+  try {
+    const fromDb = await getSetting(env, 'starting_capital', null);
+    const val = parseFloat(fromDb ?? env.STARTING_CAPITAL ?? '10000');
+    return Number.isFinite(val) && val >= 0 ? val : 10000;
+  } catch (_) {
+    return parseFloat(env.STARTING_CAPITAL || '10000') || 10000;
+  }
+}
+
+// Reine, testbare Reset-Logik mit Rollen-Guard. `session` = validierte Session
+// ({ role, username, user_id }). Nicht-Admins werden VOR jeglichem DB-Zugriff
+// abgelehnt. Liefert { ok, status, error?, oldValue?, newValue? }.
+async function resetStartingCapital({ env, session, newValue }) {
+  if (!session)                 return { ok: false, status: 401, error: 'Unauthorized' };
+  if (session.role !== 'admin') return { ok: false, status: 403, error: 'Forbidden — admin role required' };
+
+  const value = parseFloat(newValue);
+  if (!Number.isFinite(value) || value < 0) {
+    return { ok: false, status: 400, error: 'newValue muss eine Zahl ≥ 0 sein' };
+  }
+
+  const oldValue = await getStartingCapital(env);
+  await setSetting(env, 'starting_capital', String(value));
+
+  // Audit-Log: wer / wann / alter Wert / neuer Wert.
+  try {
+    await env.DB.prepare(`
+      INSERT INTO capital_reset_log (id, user_id, username, old_value, new_value, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      `capreset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      session.user_id || session.id || null,
+      session.username || null,
+      oldValue,
+      value,
+      Date.now()
+    ).run();
+  } catch (e) {
+    console.error('❌ capital_reset_log insert failed:', e.message);
+  }
+
+  console.log(`💰 Startkapital zurückgesetzt: ${oldValue} → ${value} (by ${session.username || 'admin'})`);
+  return { ok: true, status: 200, oldValue, newValue: value };
 }
 
 // ─── Live price (Binance public API, snapshot fallback) ───────
@@ -1728,7 +1924,7 @@ async function saveSnapshot(env, data) {
   }
 
   if (data.price && data.symbol) {
-    await checkPracticeTrades(env, data.symbol, data.price);
+    await checkOpenSignalsForSymbol(env, data.symbol, data.price);
   }
 
   console.log('✅ Snapshot saved:', symbol);
@@ -1736,49 +1932,14 @@ async function saveSnapshot(env, data) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// PRACTICE TRADES
+// PRACTICE TRADES (ARCHIV — read-only)
 // ═══════════════════════════════════════════════════════════════
-
-async function createPracticeTrade(env, signalId, signal, analysis) {
-  try {
-    const direction = signal.direction;
-    if (!direction || direction === 'NONE') return null;
-
-    const entryPrice = analysis.entry || signal.price || 0;
-    const takeProfit = analysis.tp || 0;   // = TP2 (finales Ziel, 1.5R)
-    const stopLoss   = analysis.sl || 0;   // = Original-SL (1R, R-Referenz)
-
-    if (!entryPrice || !takeProfit || !stopLoss) {
-      console.log('⚠️ Practice trade skipped: missing entry/tp/sl');
-      return null;
-    }
-
-    const tp1Price = deriveTp1(entryPrice, takeProfit); // TP1-Trigger (Teilschließung)
-
-    await env.DB.prepare(`
-      INSERT INTO practice_trades (
-        signal_id, symbol, timeframe, direction,
-        entry_price, take_profit, stop_loss, tp1_price, sl_price, tp1_hit, realized_pct,
-        status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'OPEN', ?)
-    `).bind(
-      signalId,
-      signal.symbol || 'UNKNOWN',
-      String(signal.timeframe || '5'),
-      direction,
-      entryPrice,
-      takeProfit,
-      stopLoss,
-      tp1Price,
-      stopLoss,        // sl_price startet auf dem Original-SL, wandert nach TP1 auf Breakeven
-      new Date().toISOString()
-    ).run();
-
-    console.log('📝 Practice trade created for signal:', signalId);
-  } catch (error) {
-    console.error('❌ createPracticeTrade error:', error.message);
-  }
-}
+// AUFGABE 3: Es werden KEINE neuen practice_trades mehr erzeugt (kein separater
+// Demo-Pfad). Die Tabelle bleibt als read-only Archiv für die Historie erhalten
+// und wird nur noch über getPracticeTrades / getPracticeTradeStats gelesen.
+// createPracticeTrade und der per-Tick-Evaluator checkPracticeTrades wurden
+// entfernt — einziger Live-Pfad ist jetzt `signals`
+// (applySignalExit / checkOpenSignalsForSymbol).
 
 // ═══════════════════════════════════════════════════════════════
 // TRADE CLOSE — single writer for trade outcomes
@@ -1911,65 +2072,6 @@ async function notifyTp1(env, { symbol, direction, entry, tp1, newSl, realizedPc
       `Gesichert: <b>+${Number(realizedPct).toFixed(2)}%</b>`
     );
   } catch (_) {}
-}
-
-async function checkPracticeTrades(env, symbol, currentPrice) {
-  try {
-    const tableCheck = await env.DB.prepare(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name='practice_trades'`
-    ).first();
-    if (!tableCheck) return;
-
-    const openTrades = await env.DB.prepare(
-      `SELECT * FROM practice_trades WHERE symbol = ? AND status = 'OPEN'`
-    ).bind(symbol).all();
-
-    for (const trade of (openTrades.results || [])) {
-      const isLong = trade.direction === 'LONG';
-      if (!isLong && trade.direction !== 'SHORT') continue;
-
-      // Legacy-Trades (vor dem TP1-Feature) haben keine tp1/sl-Spalten → Levels
-      // werden on-the-fly aus dem bestehenden TP/SL abgeleitet, sodass sie ohne
-      // Migration weiterlaufen (und denselben Breakeven-Schutz bekommen).
-      const entry     = trade.entry_price;
-      const tp2       = trade.take_profit;                                              // finales Ziel (1.5R)
-      const slOrig    = trade.stop_loss;                                                // Original-SL (R-Referenz)
-      const tp1       = Number.isFinite(trade.tp1_price) ? trade.tp1_price : deriveTp1(entry, tp2);
-      const currentSl = Number.isFinite(trade.sl_price)  ? trade.sl_price  : slOrig;
-      const tp1Hit    = trade.tp1_hit === 1;
-
-      const decision = evaluateExit(
-        { isLong, entry, tp2, sl: slOrig, tp1, currentSl, tp1Hit }, currentPrice
-      );
-
-      if (decision.action === 'TP1_PARTIAL') {
-        const applied = await applyTp1Partial(env, {
-          practiceTradeId: trade.id,
-          newSl: decision.newSl,
-          realizedPct: parseFloat(decision.realizedPct.toFixed(2)),
-        });
-        // Nur der Aufruf, der den Übergang 0→1 gewonnen hat, benachrichtigt (Exactly-once).
-        if (applied.appliedPracticeTrade || applied.appliedSignal) {
-          console.log(`🎯 TP1 practice #${trade.id} ${trade.symbol}: 50% realisiert, SL→Breakeven ${decision.newSl}`);
-          await notifyTp1(env, {
-            symbol: trade.symbol, direction: trade.direction,
-            entry, tp1: decision.tp1Price, newSl: decision.newSl, realizedPct: decision.realizedPct,
-          });
-        }
-      } else if (decision.action === 'TP2_FINAL' || decision.action === 'SL_FINAL') {
-        await closeTrade(env, {
-          practiceTradeId: trade.id,
-          outcome: decision.outcome,
-          exitPrice: decision.exitPrice,
-          pnlPct: parseFloat(decision.finalPct.toFixed(2)),
-          outcomeSource: 'auto'
-        });
-        console.log(`📊 Practice trade #${trade.id} closed: ${decision.outcome} (${decision.finalPct.toFixed(2)}%) via ${decision.action}`);
-      }
-    }
-  } catch (error) {
-    console.error('❌ checkPracticeTrades error:', error.message);
-  }
 }
 
 async function getPracticeTrades(env, { symbol, timeframe, direction, status, limit = 100 } = {}) {
@@ -2107,7 +2209,21 @@ async function processSignal(env, signal) {
   if (!strategy) strategy = await initDefaultStrategy(env);
   const strategyConfig = strategy?.config || null;
 
-  const ruleAnalysis     = analyzeWithRules(signal, strategyConfig);
+  // ── Multi-Strategie-Routing (AUFGABE 2) ──────────────────────────────
+  // Strategie kommt aus dem `strategy`-Feld im Webhook-Payload (EIN Webhook,
+  // mehrere Pine-Scripts). Fehlt es → 'crypto_baseline' (rückwärtskompatibel).
+  const strategyKey   = resolveStrategyKey(signal);
+  const stratDef      = STRATEGIES[strategyKey];
+  const assetClass    = detectAssetClass(signal.symbol);
+  const exitCfg       = exitConfigForStrategy(strategyKey);
+  // Forex-Strategien HART nur in den Handelsfenstern (London-Open / NY-Overlap):
+  // außerhalb keine handelbaren Signale generieren.
+  const sessionClosed = !!stratDef.sessionGate && assetClass === 'forex' && !isWithinForexSession();
+  if (sessionClosed) {
+    console.log(`⏭️ ${strategyKey} ${signal.symbol}: außerhalb Forex-Session → kein handelbares Signal`);
+  }
+
+  const ruleAnalysis     = analyzeWithRules(signal, strategyConfig, exitCfg);
   const fallbackAnalysis = ruleAnalysis;
 
   // VP-Felder aus Payload parsen (defensiv — Pine sendet diese ab v3.6)
@@ -2277,6 +2393,12 @@ async function processSignal(env, signal) {
     }
   }
 
+  // Per-Strategie-Gate: baseline gated über Score (≥ minScore), die anderen
+  // vertrauen dem Pine-Entry (useScoreGate=false). Forex außerhalb der Session
+  // (sessionClosed) wird nie OPEN.
+  const passesGate = !sessionClosed &&
+    (stratDef.useScoreGate ? analysis.score >= (stratDef.minScore ?? 75) : true);
+
   await env.DB.prepare(`
     INSERT INTO signals (
       id, symbol, timeframe, price, direction, action, trigger,
@@ -2291,11 +2413,12 @@ async function processSignal(env, signal) {
       trigger_reason, disclaimer_shown,
       poc, vah, val, vp_zone, vp_score, signal_class,
       created_at, outcome,
-      ai_tp1, tp1_hit, sl_current
+      ai_tp1, tp1_hit, sl_current,
+      asset_class, strategy_key
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
   `).bind(
     signalId,
@@ -2347,16 +2470,17 @@ async function processSignal(env, signal) {
     vpScore,
     signal.signal_class || null,
     Date.now(),
-    analysis.score >= 75 ? 'OPEN' : 'SKIPPED',
+    passesGate ? 'OPEN' : 'SKIPPED',
     deriveTp1(analysis.entry, analysis.tp), // ai_tp1  (TP1-Trigger)
     0,                                      // tp1_hit (noch nicht erreicht)
-    analysis.sl                             // sl_current (startet auf Original-SL)
+    analysis.sl,                            // sl_current (startet auf Original-SL)
+    assetClass,                             // asset_class ('crypto' | 'forex')
+    strategyKey                             // strategy_key (Routing-Strategie)
   ).run();
 
-  // Only open a practice trade for signals that meet the quality threshold
-  if (analysis.score >= 75) {
-    await createPracticeTrade(env, signalId, { ...signal, direction }, analysis);
-  }
+  // AUFGABE 3: Kein paralleler Übungstrade-Pfad mehr. Die `signals`-Zeile oben
+  // IST der Live-Pfad (Outcome/PnL/Exit). createPracticeTrade entfällt, damit
+  // signals und practice_trades nicht mehr divergieren können.
 
   // Autotrade: place real exchange order if configured and score meets threshold
   try {
@@ -2411,7 +2535,7 @@ async function handlePriceUpdate(env, payload) {
     const price = parseFloat(payload.price ?? payload.close ?? 0);
     if (!symbol || !price) return { success: true, type: 'PRICE_UPDATE', message: 'Price update accepted (no symbol/price)' };
     await ensureTables(env);
-    await checkPracticeTrades(env, symbol, price);
+    await checkOpenSignalsForSymbol(env, symbol, price);
     return { success: true, type: 'PRICE_UPDATE', message: 'Price update processed', symbol, price };
   } catch (error) {
     console.error('❌ PRICE_UPDATE error:', error?.message || error);
@@ -2932,7 +3056,7 @@ async function getTotalPnL(env) {
 
 async function getEquityHistory(env) {
   try {
-    const startCap = parseFloat(env.STARTING_CAPITAL || '10000');
+    const startCap = await getStartingCapital(env);
     const trades = await env.DB.prepare(`
       SELECT ai_entry, exit_price, direction, created_at FROM signals
       WHERE outcome IN ('WIN', 'LOSS') AND exit_price IS NOT NULL AND ai_entry IS NOT NULL
@@ -3029,78 +3153,104 @@ async function getUsers(env) {
 // AUTO-EVALUATION (cron)
 // ═══════════════════════════════════════════════════════════════
 
+// ── Per-Signal-Exit (zentrale Stelle für TP1/Breakeven/TP2 auf `signals`) ──
+// Nutzt die per-Strategie Exit-Config (TP1/TP2/SL-% pro Strategie). Wird vom
+// per-Tick-Pfad (checkOpenSignalsForSymbol) UND vom Cron (evaluateOpenTrades)
+// aufgerufen → einziger Live-Pfad, keine practice_trades-Divergenz mehr.
+async function applySignalExit(env, signal, price) {
+  if (!price || !Number.isFinite(price)) return { status: 'no_price' };
+  const isLong = signal.direction === 'LONG';
+  if (!isLong && signal.direction !== 'SHORT') return { status: 'skip' };
+
+  // Per-Strategie Exit-Config (Legacy/ohne strategy_key → crypto_baseline).
+  const cfg       = exitConfigForStrategy(signal.strategy_key || resolveStrategyKey(signal));
+  const entry     = signal.ai_entry || price;
+  const tp2       = signal.ai_tp;                                                      // finales Ziel
+  const slOrig    = signal.ai_sl;                                                      // Original-SL
+  const tp1       = Number.isFinite(signal.ai_tp1)     ? signal.ai_tp1     : deriveTp1(entry, tp2, cfg);
+  const currentSl = Number.isFinite(signal.sl_current) ? signal.sl_current : slOrig;
+  const tp1Hit    = signal.tp1_hit === 1;
+
+  const decision = evaluateExit({ isLong, entry, tp2, sl: slOrig, tp1, currentSl, tp1Hit }, price, cfg);
+
+  if (decision.action === 'TP1_PARTIAL') {
+    const applied = await applyTp1Partial(env, {
+      signalId: signal.id,
+      newSl: decision.newSl,
+      realizedPct: parseFloat(decision.realizedPct.toFixed(2)),
+    });
+    if (applied.appliedSignal || applied.appliedPracticeTrade) {
+      await notifyTp1(env, {
+        symbol: signal.symbol, direction: signal.direction,
+        entry, tp1: decision.tp1Price, newSl: decision.newSl, realizedPct: decision.realizedPct,
+      });
+    }
+    return { status: 'tp1', signalId: signal.id };
+  }
+
+  if (decision.action === 'TP2_FINAL' || decision.action === 'SL_FINAL') {
+    const exitPrice = decision.exitPrice;
+    const pnlPct    = decision.finalPct;
+    const duration  = formatDuration(Date.now() - (signal.created_at || Date.now()));
+
+    const closeResult = await closeTrade(env, {
+      signalId: signal.id,
+      outcome: decision.outcome,
+      exitPrice,
+      pnlPct: parseFloat(pnlPct.toFixed(2)),
+      outcomeSource: 'auto',
+      telegramOutcomeSent: 1
+    });
+
+    // Skip the notification if a concurrent path already closed this signal first.
+    if (closeResult.closedSignal) {
+      const viaTp2    = decision.action === 'TP2_FINAL';
+      const isWin     = decision.outcome === 'WIN';
+      const hitEmoji  = isWin ? '🎯' : '🛑';
+      const hitLabel  = viaTp2 ? 'TP2 HIT' : (isWin ? 'BREAKEVEN+ (SL nach TP1)' : 'SL HIT');
+      const pnlSign   = pnlPct >= 0 ? '+' : '';
+
+      await sendTelegramMessage(env,
+        `${hitEmoji} <b>${hitLabel} — ${signal.symbol} ${signal.direction}</b>\n` +
+        `Ergebnis: <b>${decision.outcome}</b>\n\n` +
+        `Entry: $${Number(entry).toFixed(2)} · Exit: $${Number(exitPrice).toFixed(2)}\n` +
+        `PnL: <b>${pnlSign}${pnlPct.toFixed(2)}%</b> · Dauer: ${duration}`
+      );
+      console.log(`📊 Signal ${signal.id} closed: ${decision.outcome} | PnL: ${pnlPct.toFixed(2)}% | ${decision.action}`);
+    }
+    return { status: 'closed', outcome: decision.outcome, signalId: signal.id };
+  }
+
+  return { status: 'open', signalId: signal.id };
+}
+
+// Per-Tick-Evaluator (ersetzt das alte checkPracticeTrades): wertet die OPEN
+// `signals` eines Symbols mit dem bereits bekannten Snapshot-Preis aus.
+async function checkOpenSignalsForSymbol(env, symbol, currentPrice) {
+  try {
+    const open = await env.DB.prepare(`
+      SELECT * FROM signals
+      WHERE outcome = 'OPEN' AND symbol = ? AND ai_tp IS NOT NULL AND ai_sl IS NOT NULL
+    `).bind(symbol).all();
+    for (const signal of (open.results || [])) {
+      await applySignalExit(env, signal, currentPrice);
+    }
+  } catch (err) {
+    console.error('❌ checkOpenSignalsForSymbol error:', err.message);
+  }
+}
+
+// Cron-Backstop: alle OPEN `signals` mit Live-Preis re-evaluieren.
 async function evaluateOpenTrades(env) {
   try {
     const open = await env.DB.prepare(`
       SELECT * FROM signals WHERE outcome = 'OPEN' AND ai_tp IS NOT NULL AND ai_sl IS NOT NULL
       ORDER BY created_at ASC
     `).all();
-
     for (const signal of (open.results || [])) {
       const price = await getLivePrice(env, signal.symbol);
       if (!price) continue;
-
-      const isLong = signal.direction === 'LONG';
-      if (!isLong && signal.direction !== 'SHORT') continue;
-
-      // Legacy-Signale (vor dem TP1-Feature) haben ai_tp1/sl_current = NULL →
-      // Levels werden on-the-fly aus ai_tp/ai_sl abgeleitet (kein Bruch).
-      const entry     = signal.ai_entry || price;
-      const tp2       = signal.ai_tp;                                                      // finales Ziel (1.5R)
-      const slOrig    = signal.ai_sl;                                                      // Original-SL
-      const tp1       = Number.isFinite(signal.ai_tp1)     ? signal.ai_tp1     : deriveTp1(entry, tp2);
-      const currentSl = Number.isFinite(signal.sl_current) ? signal.sl_current : slOrig;
-      const tp1Hit    = signal.tp1_hit === 1;
-
-      const decision = evaluateExit({ isLong, entry, tp2, sl: slOrig, tp1, currentSl, tp1Hit }, price);
-
-      if (decision.action === 'TP1_PARTIAL') {
-        const applied = await applyTp1Partial(env, {
-          signalId: signal.id,
-          newSl: decision.newSl,
-          realizedPct: parseFloat(decision.realizedPct.toFixed(2)),
-        });
-        if (applied.appliedSignal || applied.appliedPracticeTrade) {
-          await notifyTp1(env, {
-            symbol: signal.symbol, direction: signal.direction,
-            entry, tp1: decision.tp1Price, newSl: decision.newSl, realizedPct: decision.realizedPct,
-          });
-        }
-        continue;
-      }
-
-      if (decision.action === 'TP2_FINAL' || decision.action === 'SL_FINAL') {
-        const exitPrice = decision.exitPrice;
-        const pnlPct    = decision.finalPct;
-        const duration  = formatDuration(Date.now() - (signal.created_at || Date.now()));
-
-        const closeResult = await closeTrade(env, {
-          signalId: signal.id,
-          outcome: decision.outcome,
-          exitPrice,
-          pnlPct: parseFloat(pnlPct.toFixed(2)),
-          outcomeSource: 'auto',
-          telegramOutcomeSent: 1
-        });
-
-        // Skip the notification if a concurrent path (e.g. the per-tick practice
-        // check) already closed this signal first.
-        if (closeResult.closedSignal) {
-          const viaTp2    = decision.action === 'TP2_FINAL';
-          const isWin     = decision.outcome === 'WIN';
-          const hitEmoji  = isWin ? '🎯' : '🛑';
-          const hitLabel  = viaTp2 ? 'TP2 HIT' : (isWin ? 'BREAKEVEN+ (SL nach TP1)' : 'SL HIT');
-          const pnlSign   = pnlPct >= 0 ? '+' : '';
-
-          await sendTelegramMessage(env,
-            `${hitEmoji} <b>${hitLabel} — ${signal.symbol} ${signal.direction}</b>\n` +
-            `Ergebnis: <b>${decision.outcome}</b>\n\n` +
-            `Entry: $${Number(entry).toFixed(2)} · Exit: $${Number(exitPrice).toFixed(2)}\n` +
-            `PnL: <b>${pnlSign}${pnlPct.toFixed(2)}%</b> · Dauer: ${duration}`
-          );
-          console.log(`📊 Signal ${signal.id} closed: ${decision.outcome} | PnL: ${pnlPct.toFixed(2)}% | ${decision.action}`);
-        }
-      }
+      await applySignalExit(env, signal, price);
     }
     console.log('✅ evaluateOpenTrades done');
   } catch (err) {
@@ -5353,7 +5503,7 @@ export default {
           const [dStats, dSignals, dBest, dBias, dTodayPnL] = await Promise.all([
             getStats(env), getHistory(env, 10), getBestSignal(env), getMarketBias(env), getTodayPnL(env)
           ]);
-          const startingCapital = parseFloat(env.STARTING_CAPITAL || '10000');
+          const startingCapital = await getStartingCapital(env);
           const totalPnL = await getTotalPnL(env);
           const equity   = startingCapital + totalPnL;
           content = _renderDashboardContent({
@@ -5581,7 +5731,7 @@ export default {
           getStats(env), getHistory(env, 10), getBestSignal(env), getMarketBias(env), getTodayPnL(env), getEquityHistory(env)
         ]);
 
-        const startingCapital = parseFloat(env.STARTING_CAPITAL || '10000');
+        const startingCapital = await getStartingCapital(env);
         const totalPnL = await getTotalPnL(env);
         const equity = startingCapital + totalPnL;
 
@@ -5782,72 +5932,10 @@ export default {
         return jsonResponse({ success: true });
       }
 
-      if (request.method === "POST" && url.pathname === "/practice-trades/manual") {
-        const session = await validateSession(env, request);
-        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
-
-        const { signalId } = await request.json();
-        if (!signalId) return jsonResponse({ error: "signalId erforderlich" }, 400);
-
-        const signal = await env.DB.prepare(`SELECT * FROM signals WHERE id = ?`).bind(signalId).first();
-        if (!signal) return jsonResponse({ error: "Signal nicht gefunden" }, 404);
-
-        const MAX_AGE_MS = 2 * 60 * 60 * 1000;
-        const signalAge = Date.now() - new Date(signal.created_at).getTime();
-        if (signalAge > MAX_AGE_MS) {
-          const ageH = Math.floor(signalAge / 3600000);
-          const ageM = Math.floor((signalAge % 3600000) / 60000);
-          return jsonResponse({ error: `Signal ist ${ageH}h ${ageM}m alt — zu alt für Demo-Trade (max. 2h)` }, 400);
-        }
-
-        if (!signal.ai_entry || !signal.ai_tp || !signal.ai_sl) {
-          return jsonResponse({ error: "Signal hat keine Entry/TP/SL Daten" }, 400);
-        }
-
-        const existingTrade = await env.DB.prepare(`SELECT id FROM practice_trades WHERE signal_id = ?`).bind(signalId).first();
-        if (existingTrade) {
-          return jsonResponse({ error: "Demo-Trade für dieses Signal existiert bereits", tradeId: existingTrade.id }, 409);
-        }
-
-        await env.DB.prepare(`
-          INSERT INTO practice_trades (
-            signal_id, symbol, timeframe, direction,
-            entry_price, take_profit, stop_loss, tp1_price, sl_price, tp1_hit, realized_pct,
-            status, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'OPEN', ?)
-        `).bind(
-          signalId,
-          signal.symbol || 'UNKNOWN',
-          String(signal.timeframe || '5'),
-          signal.direction,
-          signal.ai_entry,
-          signal.ai_tp,
-          signal.ai_sl,
-          deriveTp1(signal.ai_entry, signal.ai_tp), // tp1_price
-          signal.ai_sl,                             // sl_price (startet auf Original-SL)
-          new Date().toISOString()
-        ).run();
-
-        return jsonResponse({ success: true, message: `Demo-Trade für ${signal.symbol} ${signal.direction} erstellt` });
-      }
-
-      if (request.method === "PATCH" && url.pathname.startsWith("/practice-trades/")) {
-        const session = await validateSession(env, request);
-        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
-        const tradeId = url.pathname.replace("/practice-trades/", "");
-        const { status, exitPrice } = await request.json();
-        const allowed = ['WIN', 'LOSS', 'BE', 'OPEN', 'IGNORED'];
-        if (!status || !allowed.includes(status)) return jsonResponse({ error: "Ungültiger status" }, 400);
-        const now = new Date().toISOString();
-        await env.DB.prepare(`
-          UPDATE practice_trades
-          SET status = ?, exit_price = COALESCE(?, exit_price), closed_at = CASE WHEN ? IN ('WIN','LOSS','BE','IGNORED') THEN ? ELSE closed_at END
-          WHERE id = ?
-        `).bind(status, exitPrice ?? null, status, now, tradeId).run();
-        return jsonResponse({ success: true, id: tradeId, status });
-      }
-
-      // ── PRACTICE TRADES ─────────────────────────────────────
+      // AUFGABE 3: Demo-Trade-Erzeugung (POST /practice-trades/manual) und
+      // -Mutation (PATCH /practice-trades/:id) wurden entfernt — es gibt keinen
+      // separaten Übungs-/Demo-Pfad mehr. practice_trades ist read-only Archiv;
+      // nur die GET-Endpoints unten bleiben (Historie einsehen).
 
       if (request.method === "GET" && url.pathname === "/practice-trades") {
         const session = await validateSession(env, request);
@@ -6204,6 +6292,22 @@ export default {
         }
       }
 
+      // ── AUFGABE 4: Einstiegskapital zurücksetzen (admin-only, geloggt) ──
+      if (request.method === "POST" && url.pathname === "/admin/reset-capital") {
+        const session = await validateSession(env, request);
+        // Rollen-Guard liegt in resetStartingCapital(); hier nur Body parsen.
+        let body = {};
+        try { body = await request.json(); } catch (_) {}
+        const result = await resetStartingCapital({ env, session, newValue: body.value ?? body.startingCapital });
+        if (!result.ok) return jsonResponse({ error: result.error }, result.status);
+        return jsonResponse({
+          success: true,
+          message: `Startkapital zurückgesetzt: ${result.oldValue} → ${result.newValue}`,
+          oldValue: result.oldValue,
+          newValue: result.newValue,
+        });
+      }
+
       if (request.method === "POST" && url.pathname.startsWith("/admin/check-trade/")) {
         const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
@@ -6340,9 +6444,11 @@ export default {
 
         // TP1/Breakeven/TP2 partial-exit columns (ersetzt die 3h-Regel)
         const signalTp1Cols = [
-          ['ai_tp1',     'REAL'],
-          ['tp1_hit',    'INTEGER DEFAULT 0'],
-          ['sl_current', 'REAL'],
+          ['ai_tp1',       'REAL'],
+          ['tp1_hit',      'INTEGER DEFAULT 0'],
+          ['sl_current',   'REAL'],
+          ['asset_class',  'TEXT'],   // AUFGABE 1: 'crypto' | 'forex'
+          ['strategy_key', 'TEXT'],   // AUFGABE 2: Routing-Strategie
         ];
         for (const [col, type] of signalTp1Cols) {
           try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); results.push(`signals.${col}: added`); }
@@ -7119,22 +7225,17 @@ export default {
       }
     }
 
-    // Re-evaluate open practice trades with latest snapshot prices
+    // Re-evaluate open signals (single live path) with latest snapshot prices
     try {
-      const tableCheck = await env.DB.prepare(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name='practice_trades'`
-      ).first();
-      if (tableCheck) {
-        const openTrades = await env.DB.prepare(
-          `SELECT DISTINCT symbol FROM practice_trades WHERE status='OPEN'`
-        ).all();
-        for (const row of (openTrades.results || [])) {
-          const snap = await getSnapshot(env, row.symbol, '5m');
-          if (snap?.price) await checkPracticeTrades(env, row.symbol, snap.price);
-        }
+      const openSyms = await env.DB.prepare(
+        `SELECT DISTINCT symbol FROM signals WHERE outcome='OPEN'`
+      ).all();
+      for (const row of (openSyms.results || [])) {
+        const snap = await getSnapshot(env, row.symbol, '5m');
+        if (snap?.price) await checkOpenSignalsForSymbol(env, row.symbol, snap.price);
       }
     } catch (err) {
-      console.error('❌ Practice trades cron error:', err.message);
+      console.error('❌ Open-signals cron error:', err.message);
     }
 
     if (event.cron === "0 7 * * *") {
@@ -7160,4 +7261,6 @@ export default {
 export {
   analyzeWithRules, calcRR, safePct, getSignalQuality, DEFAULT_STRATEGY_CONFIG,
   evaluateExit, deriveTp1, EXIT_CONFIG,
+  detectAssetClass, normalizeSymbol, resolveStrategyKey, exitConfigForStrategy,
+  isWithinForexSession, STRATEGIES, FOREX_SESSIONS_UTC, resetStartingCapital,
 };

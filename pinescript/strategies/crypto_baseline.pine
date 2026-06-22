@@ -1,0 +1,54 @@
+//@version=5
+// ════════════════════════════════════════════════════════════════════════
+// WAVESCOUT — Strategie 1/4: crypto_baseline  (Kontrollgruppe)
+// ════════════════════════════════════════════════════════════════════════
+// Bestehende RSI + EMA200-Trendfilter-Logik (unverändert), Score-Optimizer-
+// Gewichtung passiert im Worker. Sendet `strategy:"crypto_baseline"` an
+// dieselbe /webhook-URL wie alle anderen Strategien (ein Webhook, Routing
+// über das strategy-Feld).
+indicator("WAVESCOUT · crypto_baseline", overlay=true)
+
+// ── Inputs ──────────────────────────────────────────────────────────────
+rsiLen   = input.int(14,  "RSI Länge")
+emaTrend = input.int(200, "EMA Trendfilter")
+rsiLong  = input.int(35,  "RSI Long-Schwelle (oversold)")
+rsiShort = input.int(65,  "RSI Short-Schwelle (overbought)")
+
+// ── Indikatoren ─────────────────────────────────────────────────────────
+rsi    = ta.rsi(close, rsiLen)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, emaTrend)
+trendUp   = close > ema200 and ema50 > ema200
+trendDown = close < ema200 and ema50 < ema200
+
+// ── Entry-Logik (Baseline) ──────────────────────────────────────────────
+// Long: Aufwärtstrend (über EMA200) + RSI oversold-Pullback.
+// Short: Abwärtstrend (unter EMA200) + RSI overbought-Pullback.
+longSig  = trendUp   and rsi < rsiLong
+shortSig = trendDown and rsi > rsiShort
+
+// ── Payload (gemeinsames Format, + strategy-Feld) ───────────────────────
+f_payload(_dir, _trigger) =>
+    a = "{"
+    a := a + "\"strategy\":\"crypto_baseline\","
+    a := a + "\"symbol\":\""    + syminfo.ticker          + "\","
+    a := a + "\"direction\":\"" + _dir                    + "\","
+    a := a + "\"action\":\""    + (_dir == "LONG" ? "BUY" : "SELL") + "\","
+    a := a + "\"trigger\":\""   + _trigger                + "\","
+    a := a + "\"timeframe\":\"" + timeframe.period         + "\","
+    a := a + "\"price\":"       + str.tostring(close)      + ","
+    a := a + "\"rsi\":"         + str.tostring(rsi)        + ","
+    a := a + "\"ema50\":"       + str.tostring(ema50)      + ","
+    a := a + "\"ema200\":"      + str.tostring(ema200)     + ","
+    a := a + "\"trend\":\""     + (trendUp ? "BULLISH" : trendDown ? "BEARISH" : "NEUTRAL") + "\","
+    a := a + "\"timestamp\":\"" + str.tostring(time)       + "\""
+    a := a + "}"
+    a
+
+if longSig
+    alert(f_payload("LONG",  "BASELINE_RSI_EMA"), alert.freq_once_per_bar_close)
+if shortSig
+    alert(f_payload("SHORT", "BASELINE_RSI_EMA"), alert.freq_once_per_bar_close)
+
+plotshape(longSig,  title="Long",  style=shape.triangleup,   location=location.belowbar, color=color.green, size=size.tiny)
+plotshape(shortSig, title="Short", style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.tiny)

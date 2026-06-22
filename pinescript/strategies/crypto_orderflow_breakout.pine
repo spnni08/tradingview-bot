@@ -1,0 +1,69 @@
+//@version=5
+// ════════════════════════════════════════════════════════════════════════
+// WAVESCOUT — Strategie 3/4: crypto_orderflow_breakout
+// ════════════════════════════════════════════════════════════════════════
+// Range-Erkennung über die letzten N Kerzen (Konsolidierungszone).
+//   Long  : Schluss über Range-Hoch UND Kerzenvolumen > volMult × Ø-Volumen(N).
+//   Short : Schluss unter Range-Tief UND Kerzenvolumen > volMult × Ø-Volumen(N).
+//   Optionaler EMA200-Trendfilter gegen Ausbrüche entgegen dem Trend (default an).
+// Sendet `strategy:"crypto_orderflow_breakout"` an die /webhook-URL.
+indicator("WAVESCOUT · crypto_orderflow_breakout", overlay=true)
+
+// ── Inputs (alle konfigurierbar) ────────────────────────────────────────
+N         = input.int(20,  "Range-Lookback N (Kerzen)", minval=5,  maxval=200)
+volMult   = input.float(1.5,"Volumen-Multiplikator",    minval=1.0, maxval=5.0)
+useEma    = input.bool(true,"EMA200-Trendfilter aktiv")
+rsiLen    = input.int(14,  "RSI Länge")
+
+// ── Indikatoren ─────────────────────────────────────────────────────────
+rsi    = ta.rsi(close, rsiLen)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+
+// Range über die letzten N ABGESCHLOSSENEN Kerzen (ohne die aktuelle).
+rangeHigh = ta.highest(high[1], N)
+rangeLow  = ta.lowest(low[1],   N)
+avgVol    = ta.sma(volume[1],   N)           // Ø-Volumen der letzten N (ohne aktuelle)
+volOk     = not na(avgVol) and volume > volMult * avgVol
+
+// ── Entry-Logik ─────────────────────────────────────────────────────────
+breakUp   = close > rangeHigh and volOk
+breakDown = close < rangeLow  and volOk
+// EMA-Trendfilter (optional): nur in Trendrichtung ausbrechen.
+trendOkLong  = not useEma or close > ema200
+trendOkShort = not useEma or close < ema200
+
+longSig  = breakUp   and trendOkLong
+shortSig = breakDown and trendOkShort
+
+// ── Payload ─────────────────────────────────────────────────────────────
+f_payload(_dir, _trigger) =>
+    a = "{"
+    a := a + "\"strategy\":\"crypto_orderflow_breakout\","
+    a := a + "\"symbol\":\""      + syminfo.ticker        + "\","
+    a := a + "\"direction\":\""   + _dir                  + "\","
+    a := a + "\"action\":\""      + (_dir == "LONG" ? "BUY" : "SELL") + "\","
+    a := a + "\"trigger\":\""     + _trigger              + "\","
+    a := a + "\"timeframe\":\""   + timeframe.period       + "\","
+    a := a + "\"price\":"         + str.tostring(close)    + ","
+    a := a + "\"rsi\":"           + str.tostring(rsi)      + ","
+    a := a + "\"ema50\":"         + str.tostring(ema50)    + ","
+    a := a + "\"ema200\":"        + str.tostring(ema200)   + ","
+    a := a + "\"range_high\":"    + str.tostring(rangeHigh)+ ","
+    a := a + "\"range_low\":"     + str.tostring(rangeLow) + ","
+    a := a + "\"candle_volume\":" + str.tostring(volume)   + ","
+    a := a + "\"avg_volume\":"    + str.tostring(avgVol)   + ","
+    a := a + "\"range_n\":"       + str.tostring(N)        + ","
+    a := a + "\"timestamp\":\""   + str.tostring(time)     + "\""
+    a := a + "}"
+    a
+
+if longSig
+    alert(f_payload("LONG",  "RANGE_BREAK_UP"),   alert.freq_once_per_bar_close)
+if shortSig
+    alert(f_payload("SHORT", "RANGE_BREAK_DOWN"), alert.freq_once_per_bar_close)
+
+plot(rangeHigh, "Range High", color=color.new(color.red, 40))
+plot(rangeLow,  "Range Low",  color=color.new(color.green, 40))
+plotshape(longSig,  style=shape.triangleup,   location=location.belowbar, color=color.green, size=size.small)
+plotshape(shortSig, style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.small)
