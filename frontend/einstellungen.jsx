@@ -388,14 +388,120 @@ function AdminTestSignalPanel() {
 // ─── Admin Section (internal sub-nav) ────────────────────────
 
 const ADMIN_SUBS = [
+  { id: 'strategien', label: 'Strategien',     icon: 'chart'   },
+  { id: 'verwaltung', label: 'Verwaltung',     icon: 'users'   },
   { id: 'testsignal', label: 'Test-Signal',    icon: 'bolt'    },
   { id: 'tradecheck', label: 'Trade Check',    icon: 'target'  },
   { id: 'webhook',    label: 'Webhook Tester', icon: 'signal'  },
   { id: 'system',     label: 'System',         icon: 'settings'},
 ];
 
-function AdminSection({ user }) {
-  const [sub, setSub] = useState('testsignal');
+// ─── AUFGABE 1: Strategie-Übersicht (Vergleich + Admin-Toggle) ───────
+function StratStat({ label, value, tone }) {
+  const color = tone === 'win' ? 'var(--win)' : tone === 'loss' ? 'var(--loss)' : 'var(--text-primary)';
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color }}>{value}</div>
+    </div>
+  );
+}
+
+function StrategyOverviewPanel({ user, navigate }) {
+  const [rows, setRows] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const isAdmin = user?.role === 'admin';
+
+  const load = async () => {
+    try {
+      const res = await fetch(`${API_URL}/strategies/overview`, { credentials: 'include' });
+      setRows(res.ok ? await res.json() : []);
+    } catch (_) { setRows([]); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const toggle = async (s) => {
+    if (!isAdmin) return;
+    setBusy(s.key);
+    try {
+      const res = await fetch(`${API_URL}/admin/strategy-toggle`, {
+        credentials: 'include', method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ strategy: s.key, paused: s.status === 'active' }),
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setRows(prev => prev.map(r => r.key === s.key ? { ...r, status: d.status } : r));
+      }
+    } catch (_) {} finally { setBusy(null); }
+  };
+
+  // Klick auf Karte → Signal-Historie gefiltert auf diese Strategie.
+  const openTrades = (key) => {
+    try { localStorage.setItem('wavescout_strategy_filter', key); } catch (_) {}
+    window.dispatchEvent(new CustomEvent('wavescout-open-strategy', { detail: key }));
+    if (navigate) navigate('backtest');
+  };
+
+  const fmtTime = (ms) => ms
+    ? new Date(ms).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : '–';
+
+  if (rows === null) return <div style={{ textAlign: 'center', padding: 40 }}><div className="spinner-lg" style={{ margin: '0 auto' }}/></div>;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+        Vergleich aller {rows.length} Strategien nebeneinander. Klick auf eine Karte öffnet die gefilterte Signal-Historie.
+        {isAdmin ? ' Der Toggle pausiert eine Strategie (keine NEUEN Trades; offene Trades bleiben unberührt).' : ''}
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }}>
+        {rows.map(s => (
+          <div key={s.key} className="card" style={{ cursor: 'pointer', opacity: s.status === 'paused' ? 0.68 : 1 }}
+               onClick={() => openTrades(s.key)} title="Zur gefilterten Signal-Historie">
+            <div className="card-head">
+              <h3 style={{ fontSize: 14 }}>{s.label}</h3>
+              <div className="actions">
+                <span className={`badge ${s.assetClass === 'forex' ? 'badge-wait' : 'badge-tag'}`}>
+                  {s.assetClass === 'forex' ? 'Forex' : 'Krypto'}
+                </span>
+              </div>
+            </div>
+            <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span className={`badge ${s.status === 'active' ? 'badge-win' : 'badge-loss'}`}>
+                  {s.status === 'active' ? '● Aktiv' : '⏸ Pausiert'}
+                </span>
+                {isAdmin && (
+                  <button className="btn btn-ghost btn-sm" disabled={busy === s.key}
+                          onClick={(e) => { e.stopPropagation(); toggle(s); }}>
+                    {busy === s.key ? '…' : s.status === 'active' ? 'Pausieren' : 'Aktivieren'}
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                <StratStat label="Offen"       value={s.openTrades}/>
+                <StratStat label="Geschlossen" value={s.closedTrades}/>
+                <StratStat label="Win-Rate"    value={`${s.winRate}%`} tone={s.winRate >= 50 ? 'win' : 'loss'}/>
+                <StratStat label="Ø Win"       value={`${s.avgWinPct}%`} tone="win"/>
+                <StratStat label="Ø Loss"      value={`${s.avgLossPct}%`} tone="loss"/>
+                <StratStat label="Expectancy"  value={s.expectancy} tone={s.expectancy >= 0 ? 'win' : 'loss'}/>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+                Letztes Signal: {fmtTime(s.lastSignalAt)} · <span className="mono">{s.key}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AdminSection({ user, navigate }) {
+  const [sub, setSub] = useState('strategien');
+  // Orphaned Voll-Admin-Panel (admin.jsx) defensiv referenzieren (lädt nach dieser Datei).
+  const AdminFullPanel = (typeof AdminPage !== 'undefined') ? AdminPage : (typeof window !== 'undefined' ? window.AdminPage : null);
 
   return (
     <div>
@@ -418,6 +524,10 @@ function AdminSection({ user }) {
           </button>
         ))}
       </div>
+      {sub === 'strategien' && <StrategyOverviewPanel user={user} navigate={navigate}/>}
+      {sub === 'verwaltung' && (AdminFullPanel
+        ? <AdminFullPanel user={user}/>
+        : <div style={{ padding: 20, color: 'var(--text-tertiary)', fontSize: 13 }}>Admin-Panel konnte nicht geladen werden.</div>)}
       {sub === 'testsignal' && <AdminTestSignalPanel/>}
       {sub === 'tradecheck' && <AdminTradeCheckPanel/>}
       {sub === 'webhook'    && <AdminWebhookTester/>}
@@ -1036,7 +1146,7 @@ function SystemSection() {
 
 // ─── Main Settings Page ───────────────────────────────────────
 
-const EinstellungenPage = ({ user }) => {
+const EinstellungenPage = ({ user, navigate }) => {
   const [settings, setSettings] = useState({
     broker: 'bybit', apiKey: '', apiSecret: '', testnet: true,
     notifications: true, telegramEnabled: true, autoTrade: false,
@@ -1085,7 +1195,7 @@ const EinstellungenPage = ({ user }) => {
       case 'trading':       return <TradingSection settings={settings} setSettings={setSettings} onSave={handleSave} saved={saved}/>;
       case 'notifications': return <NotificationsSection settings={settings} setSettings={setSettings} onSave={handleSave} saved={saved}/>;
       case 'broker':        return <BrokerSection settings={settings} setSettings={setSettings} onSave={handleSave} saved={saved} showBrokerModal={showBrokerModal} setShowBrokerModal={setShowBrokerModal}/>;
-      case 'admin':         return isAdmin ? <AdminSection user={user}/> : null;
+      case 'admin':         return isAdmin ? <AdminSection user={user} navigate={navigate}/> : null;
       default:              return <AccountSection user={user}/>;
     }
   };

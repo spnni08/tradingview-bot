@@ -397,8 +397,8 @@ function WebhookTesterCard() {
 
           <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.6 }}>
             {preview === 'SNAPSHOT'
-              ? 'Speichert in snapshots-Tabelle und evaluiert offene Practice Trades.'
-              : 'Erstellt Signal + Practice Trade, analysiert mit AI, sendet Telegram falls Score ≥ 55.'}
+              ? 'Speichert in snapshots-Tabelle und evaluiert offene Signale (TP1/Breakeven/TP2).'
+              : 'Erstellt ein Signal im Live-Pfad, analysiert mit AI, sendet Telegram falls Score ≥ 55.'}
           </div>
 
           {result && <ResultBox result={result}/>}

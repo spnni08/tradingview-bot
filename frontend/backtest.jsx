@@ -579,18 +579,30 @@ function PracticeTradesTab() {
 const EMPTY_HIST_FILTERS = {
   outcome: 'all', symbol: 'all', direction: 'all',
   quality: 'all', official: 'all', biasMatch: 'all',
-  scoreMin: '', scoreMax: '', ruleSearch: '',
+  scoreMin: '', scoreMax: '', ruleSearch: '', strategy: 'all',
 };
 
 function SignalHistoryTab() {
   const [history,   setHistory]   = useState([]);
   const [stats,     setStats]     = useState(null);
   const [loading,   setLoading]   = useState(true);
-  const [filters,   setFilters]   = useState({ ...EMPTY_HIST_FILTERS });
+  // Strategie-Filter kann per Klick auf eine Strategie-Karte (Admin → Strategien)
+  // vorbelegt werden — wird einmalig aus localStorage übernommen und gelöscht.
+  const [filters,   setFilters]   = useState(() => {
+    const s = (typeof localStorage !== 'undefined') && localStorage.getItem('wavescout_strategy_filter');
+    if (s) localStorage.removeItem('wavescout_strategy_filter');
+    return { ...EMPTY_HIST_FILTERS, strategy: s || 'all' };
+  });
   const [selected,  setSelected]  = useState(null);
   const [lossModal, setLossModal] = useState(null);
 
   useEffect(() => { load(); }, []);
+  // Falls die Historie bereits gemountet ist, Strategie-Filter live übernehmen.
+  useEffect(() => {
+    const h = (e) => { if (e.detail) setFilters(f => ({ ...f, strategy: e.detail })); };
+    window.addEventListener('wavescout-open-strategy', h);
+    return () => window.removeEventListener('wavescout-open-strategy', h);
+  }, []);
   const load = async () => {
     setLoading(true);
     try {
@@ -617,6 +629,7 @@ function SignalHistoryTab() {
   const filtered = history.filter(h => {
     if (filters.outcome   !== 'all' && h.outcome !== filters.outcome) return false;
     if (filters.symbol    !== 'all' && h.symbol  !== filters.symbol)  return false;
+    if (filters.strategy  !== 'all' && (h.strategy_key || 'crypto_baseline') !== filters.strategy) return false;
     if (filters.direction !== 'all' && h.direction !== filters.direction) return false;
     if (filters.quality   !== 'all' && h.signal_quality !== filters.quality) return false;
     if (filters.official  !== 'all') {
@@ -1894,6 +1907,13 @@ function BiasStatsTab() {
 
 const BacktestPage = ({ user }) => {
   const [activeTab, setActiveTab] = useState('practice');
+
+  // Klick auf eine Strategie-Karte (Admin → Strategien) öffnet die Signal-Historie.
+  useEffect(() => {
+    const h = () => setActiveTab('history');
+    window.addEventListener('wavescout-open-strategy', h);
+    return () => window.removeEventListener('wavescout-open-strategy', h);
+  }, []);
   const tabs = [
     { id: 'practice',      label: 'Übungstrades (Archiv)' },
     { id: 'history',       label: 'Signal-Historie' },

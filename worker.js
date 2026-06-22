@@ -1834,6 +1834,45 @@ async function resetStartingCapital({ env, session, newValue }) {
   return { ok: true, status: 200, oldValue, newValue: value };
 }
 
+// ─── AUFGABE 1: Strategie-Status (aktiv/pausiert) ────────────────────
+// Pausierte Strategien (Liste von strategy_keys) liegen in settings
+// ('strategy_paused' → JSON-Array). Pausiert = es werden KEINE neuen Trades
+// mehr eröffnet; bestehende offene Trades bleiben unberührt. Kein Schema-
+// Migration nötig (settings-Tabelle existiert bereits).
+async function getPausedStrategies(env) {
+  try {
+    const arr = JSON.parse(await getSetting(env, 'strategy_paused', '[]'));
+    return Array.isArray(arr) ? arr : [];
+  } catch (_) { return []; }
+}
+
+async function isStrategyPaused(env, key) {
+  return (await getPausedStrategies(env)).includes(key);
+}
+
+// Status-Map { key: 'active' | 'paused' } über alle registrierten Strategien.
+async function getStrategyStatuses(env) {
+  const paused = await getPausedStrategies(env);
+  const out = {};
+  for (const key of Object.keys(STRATEGIES)) out[key] = paused.includes(key) ? 'paused' : 'active';
+  return out;
+}
+
+// Reine, testbare Toggle-Logik mit Rollen-Guard (analog resetStartingCapital).
+// Nicht-Admins werden VOR jeglichem DB-Zugriff abgelehnt.
+async function setStrategyStatus({ env, session, strategy, paused }) {
+  if (!session)                 return { ok: false, status: 401, error: 'Unauthorized' };
+  if (session.role !== 'admin') return { ok: false, status: 403, error: 'Forbidden — admin role required' };
+  if (!STRATEGIES[strategy])    return { ok: false, status: 400, error: `Unbekannte Strategie: ${strategy}` };
+
+  const cur = new Set(await getPausedStrategies(env));
+  if (paused) cur.add(strategy); else cur.delete(strategy);
+  await setSetting(env, 'strategy_paused', JSON.stringify([...cur]));
+
+  console.log(`🔀 Strategie ${strategy} → ${paused ? 'PAUSIERT' : 'AKTIV'} (by ${session.username || 'admin'})`);
+  return { ok: true, status: 200, strategy, paused: !!paused, status_label: paused ? 'paused' : 'active' };
+}
+
 // ─── Live price (Binance public API, snapshot fallback) ───────
 
 async function getLivePrice(env, symbol) {
@@ -2222,6 +2261,11 @@ async function processSignal(env, signal) {
   if (sessionClosed) {
     console.log(`⏭️ ${strategyKey} ${signal.symbol}: außerhalb Forex-Session → kein handelbares Signal`);
   }
+  // AUFGABE 1: Pausierte Strategien verarbeiten keine neuen Trades (offene bleiben).
+  const strategyPaused = await isStrategyPaused(env, strategyKey);
+  if (strategyPaused) {
+    console.log(`⏸️ ${strategyKey} ${signal.symbol}: Strategie pausiert → kein neuer Trade`);
+  }
 
   const ruleAnalysis     = analyzeWithRules(signal, strategyConfig, exitCfg);
   const fallbackAnalysis = ruleAnalysis;
@@ -2396,7 +2440,7 @@ async function processSignal(env, signal) {
   // Per-Strategie-Gate: baseline gated über Score (≥ minScore), die anderen
   // vertrauen dem Pine-Entry (useScoreGate=false). Forex außerhalb der Session
   // (sessionClosed) wird nie OPEN.
-  const passesGate = !sessionClosed &&
+  const passesGate = !sessionClosed && !strategyPaused &&
     (stratDef.useScoreGate ? analysis.score >= (stratDef.minScore ?? 75) : true);
 
   await env.DB.prepare(`
@@ -2487,7 +2531,7 @@ async function processSignal(env, signal) {
     const atCfg = await loadAutotradeConfig(env);
     if (atCfg) {
       const minScore = Math.max(75, atCfg.minScore || 75);
-      if (atCfg.enabled && !isTest && analysis.score >= minScore && analysis.entry) {
+      if (atCfg.enabled && !isTest && !strategyPaused && analysis.score >= minScore && analysis.entry) {
         const amount = parseFloat(atCfg.tradeAmount) || 10;
         const qty    = calcOrderQty(amount, analysis.entry);
         let orderId = null, errMsg = null, status = 'OPEN';
@@ -3302,34 +3346,25 @@ async function checkOpenSignals(env, onlySignalId = null) {
   const checked = [];
   for (const signal of (rows.results || [])) {
     const price = await getLivePrice(env, signal.symbol);
-    const { outcome, hitLevel } = evaluateOutcomeForSignal(signal, price);
     const item = {
       id: signal.id, symbol: signal.symbol, direction: signal.direction,
       entry: signal.ai_entry, tp: signal.ai_tp, sl: signal.ai_sl, price
     };
-    if (!price || !Number.isFinite(price)) {
-      item.status  = 'no_price';
-      item.outcome = null;
+    // AUFGABE 2 Fix: gemeinsame TP1→Breakeven→TP2-Logik statt der alten binären
+    // Bewertung (evaluateOutcomeForSignal). So schließt der manuelle Admin-Check
+    // mit denselben Outcomes wie der automatische Pfad.
+    const res = await applySignalExit(env, signal, price);
+    if (res.status === 'no_price') {
+      item.status = 'no_price'; item.outcome = null;
       item.message = `Kein Preis für ${signal.symbol}`;
-    } else if (outcome === 'WIN' || outcome === 'LOSS') {
-      const entry = signal.ai_entry || price;
-      const exitPrice = hitLevel || price;
-      const pnlPct = signal.direction === 'LONG'
-        ? ((exitPrice - entry) / entry) * 100
-        : ((entry - exitPrice) / entry) * 100;
-      await closeTrade(env, {
-        signalId: signal.id,
-        outcome,
-        exitPrice,
-        pnlPct: parseFloat(pnlPct.toFixed(2)),
-        outcomeSource: 'auto'
-      });
-      item.status  = 'closed';
-      item.outcome = outcome;
-      item.message = `${outcome} — Preis ${price} hat ${outcome === 'WIN' ? 'TP' : 'SL'} erreicht`;
+    } else if (res.status === 'closed') {
+      item.status = 'closed'; item.outcome = res.outcome;
+      item.message = `${res.outcome} — Exit-Logik (TP2 / Breakeven / SL) ausgelöst`;
+    } else if (res.status === 'tp1') {
+      item.status = 'open'; item.outcome = 'OPEN';
+      item.message = 'TP1 erreicht — 50% realisiert, SL auf Breakeven nachgezogen';
     } else {
-      item.status  = 'open';
-      item.outcome = 'OPEN';
+      item.status = 'open'; item.outcome = 'OPEN';
       item.message = 'Weiter offen';
     }
     checked.push(item);
@@ -6648,6 +6683,63 @@ export default {
         } catch (e) { return jsonResponse([]); }
       }
 
+      // ── AUFGABE 1: Per-Strategie-Übersicht (die 4 code-level Strategien) ──
+      // Gruppiert `signals` nach strategy_key (Legacy/NULL → crypto_baseline)
+      // und liefert Trades/Win-Rate/Ø-Win/Ø-Loss/Expectancy/letztes Signal +
+      // Asset-Klasse + Status (aktiv/pausiert) je Strategie aus der Registry.
+      if (request.method === "GET" && url.pathname === "/strategies/overview") {
+        const session = await validateSession(env, request);
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const rows = await env.DB.prepare(`
+            SELECT COALESCE(NULLIF(strategy_key, ''), 'crypto_baseline') as skey,
+              COUNT(*) as total,
+              SUM(CASE WHEN outcome='OPEN' THEN 1 ELSE 0 END) as open_count,
+              SUM(CASE WHEN outcome='WIN'  THEN 1 ELSE 0 END) as wins,
+              SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses,
+              AVG(CASE WHEN outcome='WIN'  THEN pnl_pct END) as avg_win,
+              AVG(CASE WHEN outcome='LOSS' THEN pnl_pct END) as avg_loss,
+              MAX(created_at) as last_signal
+            FROM signals
+            GROUP BY skey
+          `).all();
+          const byKey = {};
+          for (const r of (rows.results || [])) byKey[r.skey] = r;
+          const statuses = await getStrategyStatuses(env);
+          const out = Object.keys(STRATEGIES).map(key => {
+            const def = STRATEGIES[key];
+            const r   = byKey[key] || {};
+            const wins = r.wins || 0, losses = r.losses || 0;
+            const avgWinPct  = r.avg_win  != null ? parseFloat(r.avg_win.toFixed(2))  : 0;
+            const avgLossPct = r.avg_loss != null ? parseFloat(r.avg_loss.toFixed(2)) : 0;
+            return {
+              key, label: def.label, assetClass: def.assetClass, status: statuses[key],
+              openTrades:   r.open_count || 0,
+              closedTrades: wins + losses,
+              wins, losses,
+              winRate:      computeWinRate(wins, losses),
+              avgWinPct, avgLossPct,
+              expectancy:   computeExpectancy(wins, losses, avgWinPct, avgLossPct),
+              lastSignalAt: r.last_signal || null,
+            };
+          });
+          return jsonResponse(out);
+        } catch (e) {
+          console.error('❌ /strategies/overview error:', e.message);
+          return jsonResponse([]);
+        }
+      }
+
+      // Admin-Toggle aktiv/pausiert je Strategie (Rollen-Guard in setStrategyStatus).
+      if (request.method === "POST" && url.pathname === "/admin/strategy-toggle") {
+        const session = await validateSession(env, request);
+        let body = {};
+        try { body = await request.json(); } catch (_) {}
+        const result = await setStrategyStatus({ env, session, strategy: body.strategy, paused: !!body.paused });
+        if (!result.ok) return jsonResponse({ error: result.error }, result.status);
+        return jsonResponse({ success: true, strategy: result.strategy, status: result.status_label });
+      }
+
       if (request.method === "POST" && url.pathname === "/strategies/ab-backtest") {
         const session = await validateSession(env, request);
         if (!session || !isTraderOrAdmin(session)) return jsonResponse({ error: "Unauthorized" }, 401);
@@ -7263,4 +7355,5 @@ export {
   evaluateExit, deriveTp1, EXIT_CONFIG,
   detectAssetClass, normalizeSymbol, resolveStrategyKey, exitConfigForStrategy,
   isWithinForexSession, STRATEGIES, FOREX_SESSIONS_UTC, resetStartingCapital,
+  setStrategyStatus, getStrategyStatuses, computeWinRate, computeExpectancy,
 };
