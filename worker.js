@@ -607,6 +607,104 @@ ${stars} Score: <b>${sc}/100</b> · ${getSignalQuality(sc)}
 }
 
 // ═══════════════════════════════════════════════════════════════
+// EXIT MANAGEMENT — Teil-Take-Profit (TP1) + Breakeven + TP2
+// ═══════════════════════════════════════════════════════════════
+//
+// Ersetzt die alte 3h-Zwangsschließung. Statt einen knapp am TP gescheiterten
+// Trade nach 3h pauschal zu schließen, wird ein Teil der Position früh (TP1)
+// realisiert und der SL der Restposition auf ~Breakeven nachgezogen — so kann
+// ein Trade, der TP1 erreicht hat, nicht mehr in den vollen Verlust drehen.
+//
+// Alle Werte sind hier zentral konfigurierbar (kein Hardcoding in der Logik):
+//   TP2 (finales Ziel) ist das bestehende Take-Profit (analysis.tp, 1.5R).
+//   TP1 liegt bei TP1_DISTANCE_FRAC der Strecke Entry→TP2.
+const EXIT_CONFIG = {
+  TP1_DISTANCE_FRAC:  0.60, // TP1-Trigger = Entry + 0.60 × (TP2 − Entry)
+  TP1_CLOSE_FRAC:     0.50, // Anteil der Position, der bei TP1 geschlossen wird
+  BREAKEVEN_OFFSET_R: 0.10, // nach TP1: SL = Entry + 0.10R (R = |Entry − Original-SL|), leicht im Plus
+};
+
+// Leitet den TP1-Triggerpreis aus Entry und finalem TP2 ab.
+// Funktioniert für LONG und SHORT, da TP2 immer auf der Gewinnseite liegt.
+function deriveTp1(entry, tp2, cfg = EXIT_CONFIG) {
+  if (!Number.isFinite(entry) || !Number.isFinite(tp2)) return null;
+  return entry + cfg.TP1_DISTANCE_FRAC * (tp2 - entry);
+}
+
+// Prozentuale Kursbewegung Entry→exit in Trade-Richtung (LONG positiv bei Anstieg).
+function exitMovePct(entry, exit, isLong) {
+  if (!Number.isFinite(entry) || !Number.isFinite(exit) || entry === 0) return 0;
+  return isLong ? ((exit - entry) / entry) * 100 : ((entry - exit) / entry) * 100;
+}
+
+/**
+ * Reine, seiteneffektfreie Exit-Entscheidung für das TP1/Breakeven/TP2-Modell.
+ * Wird von beiden Evaluatoren benutzt (practice_trades-Tick & signals-Cron) und
+ * ist damit die zentrale, unit-getestete Stelle der Exit-Logik.
+ *
+ * @param {Object}  pos
+ * @param {boolean} pos.isLong       LONG (true) oder SHORT (false)
+ * @param {number}  pos.entry        Einstiegspreis
+ * @param {number}  pos.tp2          finales Take-Profit (= bestehendes tp, 1.5R)
+ * @param {number}  pos.sl           ORIGINAL-Stop-Loss (1R) — dient als R-Referenz
+ * @param {number}  [pos.tp1]        TP1-Trigger (wird aus entry/tp2 abgeleitet, falls nicht gesetzt)
+ * @param {boolean} [pos.tp1Hit]     ob TP1 bereits gefüllt wurde
+ * @param {number}  [pos.currentSl]  aktiver SL (nach TP1 = Breakeven); Default abgeleitet
+ * @param {number}  price            aktueller Marktpreis
+ * @param {Object}  [cfg]            EXIT_CONFIG (injizierbar für Tests)
+ * @returns {{action:'NONE'|'TP1_PARTIAL'|'TP2_FINAL'|'SL_FINAL', ...}}
+ *   TP1_PARTIAL → { newSl, realizedPct, tp1Price }  (Trade bleibt OPEN, SL → Breakeven)
+ *   TP2_FINAL   → { outcome:'WIN', exitPrice, finalPct }
+ *   SL_FINAL    → { outcome:'WIN'|'LOSS', exitPrice, finalPct }
+ */
+function evaluateExit(pos, price, cfg = EXIT_CONFIG) {
+  const { isLong, entry, tp2, sl } = pos || {};
+  if (typeof isLong !== 'boolean' || ![entry, tp2, sl, price].every(Number.isFinite)) {
+    return { action: 'NONE' };
+  }
+  const slDist = Math.abs(entry - sl);
+  if (slDist === 0) return { action: 'NONE' };
+
+  const tp1    = Number.isFinite(pos.tp1) ? pos.tp1 : deriveTp1(entry, tp2, cfg);
+  const tp1Hit = pos.tp1Hit === true;
+  const beSl   = isLong ? entry + cfg.BREAKEVEN_OFFSET_R * slDist
+                        : entry - cfg.BREAKEVEN_OFFSET_R * slDist;
+  // Aktiver SL: expliziter currentSl, sonst nach TP1 Breakeven, davor Original.
+  const activeSl = Number.isFinite(pos.currentSl) ? pos.currentSl : (tp1Hit ? beSl : sl);
+
+  const closeFrac = cfg.TP1_CLOSE_FRAC;
+  const tp1Pct    = exitMovePct(entry, tp1, isLong);
+  // Geblendetes Gesamtergebnis: TP1-Teil (closeFrac) + Restposition (1−closeFrac) bis exit.
+  // Nutzt das feste TP1-Level, daher korrekt auch wenn TP1 im selben Tick mit erreicht wird.
+  const blended = (exit) => closeFrac * tp1Pct + (1 - closeFrac) * exitMovePct(entry, exit, isLong);
+
+  const slHit  = isLong ? price <= activeSl : price >= activeSl;
+  const tp2Hit = isLong ? price >= tp2      : price <= tp2;
+  const tp1Trg = isLong ? price >= tp1      : price <= tp1;
+
+  // Reihenfolge: SL-Schutz zuerst, dann TP2 (final), dann TP1 (Teilschließung).
+  if (slHit) {
+    if (tp1Hit) {
+      // SL nach TP1 = Breakeven(+Offset): Restposition ~neutral, gesamt durch TP1 im Plus.
+      const finalPct = blended(activeSl);
+      return { action: 'SL_FINAL', outcome: finalPct >= 0 ? 'WIN' : 'LOSS', exitPrice: activeSl, finalPct };
+    }
+    // SL vor TP1 = voller Verlust am Original-SL.
+    return { action: 'SL_FINAL', outcome: 'LOSS', exitPrice: activeSl, finalPct: exitMovePct(entry, activeSl, isLong) };
+  }
+
+  if (tp2Hit) {
+    return { action: 'TP2_FINAL', outcome: 'WIN', exitPrice: tp2, finalPct: blended(tp2) };
+  }
+
+  if (!tp1Hit && tp1Trg) {
+    return { action: 'TP1_PARTIAL', newSl: beSl, realizedPct: closeFrac * tp1Pct, tp1Price: tp1 };
+  }
+
+  return { action: 'NONE' };
+}
+
+// ═══════════════════════════════════════════════════════════════
 // STRATEGY SYSTEM
 // ═══════════════════════════════════════════════════════════════
 
@@ -1413,9 +1511,30 @@ async function ensureTables(env) {
       ['vp_score',             'INTEGER DEFAULT 0'],
       ['dashboard_seen',    'INTEGER DEFAULT 0'],
       ['signal_class',         'TEXT'],
+      // TP1 / Breakeven / TP2 partial-exit state (ersetzt die 3h-Regel):
+      ['ai_tp1',               'REAL'],               // TP1-Trigger (Teilschließung)
+      ['tp1_hit',              'INTEGER DEFAULT 0'],  // wurde TP1 erreicht? (0/1)
+      ['sl_current',           'REAL'],               // aktiver SL (nach TP1 = Breakeven)
     ];
     for (const [col, type] of signalIndicatorCols) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); }
+      catch (_) {}
+    }
+
+    // Migrate practice_trades table — TP1/Breakeven/TP2 partial-exit columns.
+    // Diese Tabelle hatte bisher KEINE ALTER-Migrationen (nur CREATE IF NOT
+    // EXISTS); ohne diesen Block bekämen bestehende DBs die Spalten nicht.
+    // Bestehende OPEN-Trades erhalten hier NULL/0 und werden mit on-the-fly
+    // abgeleitetem TP1 evaluiert — laufen also weiter und gewinnen den
+    // Breakeven-Schutz, ohne dass etwas manuell migriert werden muss.
+    const practiceTradeCols = [
+      ['tp1_price',    'REAL'],               // TP1-Trigger
+      ['tp1_hit',      'INTEGER DEFAULT 0'],  // wurde TP1 erreicht? (0/1)
+      ['sl_price',     'REAL'],               // aktiver SL (nach TP1 = Breakeven)
+      ['realized_pct', 'REAL'],               // bei TP1 gesicherter Teilgewinn (Telemetrie)
+    ];
+    for (const [col, type] of practiceTradeCols) {
+      try { await env.DB.prepare(`ALTER TABLE practice_trades ADD COLUMN ${col} ${type}`).run(); }
       catch (_) {}
     }
 
@@ -1626,19 +1745,22 @@ async function createPracticeTrade(env, signalId, signal, analysis) {
     if (!direction || direction === 'NONE') return null;
 
     const entryPrice = analysis.entry || signal.price || 0;
-    const takeProfit = analysis.tp || 0;
-    const stopLoss   = analysis.sl || 0;
+    const takeProfit = analysis.tp || 0;   // = TP2 (finales Ziel, 1.5R)
+    const stopLoss   = analysis.sl || 0;   // = Original-SL (1R, R-Referenz)
 
     if (!entryPrice || !takeProfit || !stopLoss) {
       console.log('⚠️ Practice trade skipped: missing entry/tp/sl');
       return null;
     }
 
+    const tp1Price = deriveTp1(entryPrice, takeProfit); // TP1-Trigger (Teilschließung)
+
     await env.DB.prepare(`
       INSERT INTO practice_trades (
         signal_id, symbol, timeframe, direction,
-        entry_price, take_profit, stop_loss, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'OPEN', ?)
+        entry_price, take_profit, stop_loss, tp1_price, sl_price, tp1_hit, realized_pct,
+        status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'OPEN', ?)
     `).bind(
       signalId,
       signal.symbol || 'UNKNOWN',
@@ -1647,6 +1769,8 @@ async function createPracticeTrade(env, signalId, signal, analysis) {
       entryPrice,
       takeProfit,
       stopLoss,
+      tp1Price,
+      stopLoss,        // sl_price startet auf dem Original-SL, wandert nach TP1 auf Breakeven
       new Date().toISOString()
     ).run();
 
@@ -1726,6 +1850,69 @@ async function closeTrade(env, {
   };
 }
 
+// ── TP1 PARTIAL — single writer for the breakeven transition ──────────
+// Spiegelt das closeTrade-Pattern: markiert tp1_hit und zieht den SL in BEIDEN
+// Outcome-Tabellen (signals + practice_trades) atomar auf Breakeven nach, damit
+// sie nicht auseinanderlaufen. Der COALESCE(tp1_hit,0)=0-Guard macht den Übergang
+// idempotent — nur der erste Aufruf "gewinnt" (→ Exactly-once-Notifikation).
+// Es wird NICHT geschlossen (Trade bleibt OPEN); der Restposition läuft auf TP2.
+async function applyTp1Partial(env, {
+  signalId = null,
+  practiceTradeId = null,
+  newSl,
+  realizedPct,
+} = {}) {
+  if (!signalId && !practiceTradeId) return { appliedSignal: false, appliedPracticeTrade: false };
+
+  let resolvedSignalId = signalId;
+  let resolvedPracticeTradeId = practiceTradeId;
+  if (!resolvedSignalId && practiceTradeId) {
+    const pt = await env.DB.prepare(`SELECT signal_id FROM practice_trades WHERE id = ?`).bind(practiceTradeId).first();
+    if (pt?.signal_id) resolvedSignalId = pt.signal_id;
+  }
+  if (!resolvedPracticeTradeId && resolvedSignalId) {
+    const pt = await env.DB.prepare(`SELECT id FROM practice_trades WHERE signal_id = ? AND status = 'OPEN'`).bind(resolvedSignalId).first();
+    if (pt) resolvedPracticeTradeId = pt.id;
+  }
+
+  const stmts = [];
+  let signalIdx = -1, ptIdx = -1;
+  if (resolvedSignalId) {
+    signalIdx = stmts.length;
+    stmts.push(env.DB.prepare(
+      `UPDATE signals SET tp1_hit = 1, sl_current = ?, updated_at = ?
+       WHERE id = ? AND outcome = 'OPEN' AND COALESCE(tp1_hit, 0) = 0`
+    ).bind(newSl, Date.now(), resolvedSignalId));
+  }
+  if (resolvedPracticeTradeId) {
+    ptIdx = stmts.length;
+    stmts.push(env.DB.prepare(
+      `UPDATE practice_trades SET tp1_hit = 1, sl_price = ?, realized_pct = ?
+       WHERE id = ? AND status = 'OPEN' AND COALESCE(tp1_hit, 0) = 0`
+    ).bind(newSl, realizedPct, resolvedPracticeTradeId));
+  }
+  if (!stmts.length) return { appliedSignal: false, appliedPracticeTrade: false };
+
+  const results = await env.DB.batch(stmts);
+  return {
+    appliedSignal:        signalIdx >= 0 && (results[signalIdx]?.meta?.changes ?? 0) > 0,
+    appliedPracticeTrade: ptIdx     >= 0 && (results[ptIdx]?.meta?.changes ?? 0) > 0,
+  };
+}
+
+// Kurze Telegram-Notiz beim TP1-Treffer (50% realisiert, SL → Breakeven).
+async function notifyTp1(env, { symbol, direction, entry, tp1, newSl, realizedPct }) {
+  try {
+    await sendTelegramMessage(env,
+      `🎯 <b>TP1 HIT — ${symbol} ${direction}</b>\n\n` +
+      `50% der Position realisiert · Rest läuft auf TP2\n` +
+      `Entry: $${Number(entry).toFixed(2)} · TP1: $${Number(tp1).toFixed(2)}\n` +
+      `SL → Breakeven: $${Number(newSl).toFixed(2)}\n` +
+      `Gesichert: <b>+${Number(realizedPct).toFixed(2)}%</b>`
+    );
+  } catch (_) {}
+}
+
 async function checkPracticeTrades(env, symbol, currentPrice) {
   try {
     const tableCheck = await env.DB.prepare(
@@ -1738,30 +1925,46 @@ async function checkPracticeTrades(env, symbol, currentPrice) {
     ).bind(symbol).all();
 
     for (const trade of (openTrades.results || [])) {
-      let newStatus = null;
+      const isLong = trade.direction === 'LONG';
+      if (!isLong && trade.direction !== 'SHORT') continue;
 
-      if (trade.direction === 'LONG') {
-        if (currentPrice >= trade.take_profit) newStatus = 'WIN';
-        else if (currentPrice <= trade.stop_loss) newStatus = 'LOSS';
-      } else if (trade.direction === 'SHORT') {
-        if (currentPrice <= trade.take_profit) newStatus = 'WIN';
-        else if (currentPrice >= trade.stop_loss) newStatus = 'LOSS';
-      }
+      // Legacy-Trades (vor dem TP1-Feature) haben keine tp1/sl-Spalten → Levels
+      // werden on-the-fly aus dem bestehenden TP/SL abgeleitet, sodass sie ohne
+      // Migration weiterlaufen (und denselben Breakeven-Schutz bekommen).
+      const entry     = trade.entry_price;
+      const tp2       = trade.take_profit;                                              // finales Ziel (1.5R)
+      const slOrig    = trade.stop_loss;                                                // Original-SL (R-Referenz)
+      const tp1       = Number.isFinite(trade.tp1_price) ? trade.tp1_price : deriveTp1(entry, tp2);
+      const currentSl = Number.isFinite(trade.sl_price)  ? trade.sl_price  : slOrig;
+      const tp1Hit    = trade.tp1_hit === 1;
 
-      if (newStatus) {
-        const resultPct = trade.direction === 'LONG'
-          ? ((currentPrice - trade.entry_price) / trade.entry_price) * 100
-          : ((trade.entry_price - currentPrice) / trade.entry_price) * 100;
+      const decision = evaluateExit(
+        { isLong, entry, tp2, sl: slOrig, tp1, currentSl, tp1Hit }, currentPrice
+      );
 
+      if (decision.action === 'TP1_PARTIAL') {
+        const applied = await applyTp1Partial(env, {
+          practiceTradeId: trade.id,
+          newSl: decision.newSl,
+          realizedPct: parseFloat(decision.realizedPct.toFixed(2)),
+        });
+        // Nur der Aufruf, der den Übergang 0→1 gewonnen hat, benachrichtigt (Exactly-once).
+        if (applied.appliedPracticeTrade || applied.appliedSignal) {
+          console.log(`🎯 TP1 practice #${trade.id} ${trade.symbol}: 50% realisiert, SL→Breakeven ${decision.newSl}`);
+          await notifyTp1(env, {
+            symbol: trade.symbol, direction: trade.direction,
+            entry, tp1: decision.tp1Price, newSl: decision.newSl, realizedPct: decision.realizedPct,
+          });
+        }
+      } else if (decision.action === 'TP2_FINAL' || decision.action === 'SL_FINAL') {
         await closeTrade(env, {
           practiceTradeId: trade.id,
-          outcome: newStatus,
-          exitPrice: currentPrice,
-          pnlPct: parseFloat(resultPct.toFixed(2)),
+          outcome: decision.outcome,
+          exitPrice: decision.exitPrice,
+          pnlPct: parseFloat(decision.finalPct.toFixed(2)),
           outcomeSource: 'auto'
         });
-
-        console.log(`📊 Practice trade #${trade.id} closed: ${newStatus} (${resultPct.toFixed(2)}%)`);
+        console.log(`📊 Practice trade #${trade.id} closed: ${decision.outcome} (${decision.finalPct.toFixed(2)}%) via ${decision.action}`);
       }
     }
   } catch (error) {
@@ -2087,11 +2290,12 @@ async function processSignal(env, signal) {
       signal_quality, risk_reward, planned_profit_pct, planned_risk_pct,
       trigger_reason, disclaimer_shown,
       poc, vah, val, vp_zone, vp_score, signal_class,
-      created_at, outcome
+      created_at, outcome,
+      ai_tp1, tp1_hit, sl_current
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
   `).bind(
     signalId,
@@ -2143,7 +2347,10 @@ async function processSignal(env, signal) {
     vpScore,
     signal.signal_class || null,
     Date.now(),
-    analysis.score >= 75 ? 'OPEN' : 'SKIPPED'
+    analysis.score >= 75 ? 'OPEN' : 'SKIPPED',
+    deriveTp1(analysis.entry, analysis.tp), // ai_tp1  (TP1-Trigger)
+    0,                                      // tp1_hit (noch nicht erreicht)
+    analysis.sl                             // sl_current (startet auf Original-SL)
   ).run();
 
   // Only open a practice trade for signals that meet the quality threshold
@@ -2819,105 +3026,6 @@ async function getUsers(env) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════
-// 3H PROFIT-CLOSE (cron every 3h)
-// Offene Trades die ≥ 3h alt sind: wenn im Profit → schließen;
-// wenn nicht → offen lassen und beim nächsten 3h-Check erneut prüfen.
-// ═══════════════════════════════════════════════════════════════
-
-async function check3hProfitClose(env) {
-  const THREE_H_MS  = 3 * 60 * 60 * 1000;
-  const cutoff      = Date.now() - THREE_H_MS;
-  const results     = [];
-
-  try {
-    const open = await env.DB.prepare(`
-      SELECT * FROM signals
-      WHERE outcome = 'OPEN' AND created_at <= ?
-      ORDER BY created_at ASC
-    `).bind(cutoff).all();
-
-    console.log(`⏳ 3h profit-check: ${(open.results || []).length} offene Trades ≥ 3h`);
-
-    for (const signal of (open.results || [])) {
-      const currentPrice = await getLivePrice(env, signal.symbol);
-      if (!currentPrice) {
-        results.push({ id: signal.id, status: 'no_price' });
-        continue;
-      }
-
-      const isLong    = signal.direction === 'LONG';
-      const entryPrice = parseFloat(signal.ai_entry || signal.price || 0);
-      if (!entryPrice) { results.push({ id: signal.id, status: 'no_entry' }); continue; }
-
-      const inProfit  = isLong ? currentPrice > entryPrice : currentPrice < entryPrice;
-
-      if (inProfit) {
-        const pnlPct  = isLong
-          ? ((currentPrice - entryPrice) / entryPrice) * 100
-          : ((entryPrice - currentPrice) / entryPrice) * 100;
-        const now     = Date.now();
-        const duration = formatDuration(now - (signal.created_at || now));
-
-        const closeResult = await closeTrade(env, {
-          signalId: signal.id,
-          outcome: 'WIN',
-          exitPrice: currentPrice,
-          pnlPct: parseFloat(pnlPct.toFixed(2)),
-          outcomeSource: '3H_PROFIT_CLOSE'
-        });
-
-        // Skip the notification if a concurrent path already closed this signal —
-        // otherwise we'd report this invocation's (possibly stale) price/PnL
-        // even though different values were the ones actually persisted.
-        if (closeResult.closedSignal) {
-          await sendTelegramMessage(env,
-            `⏱️ <b>3H-PROFIT-CLOSE — ${signal.symbol} ${signal.direction}</b>\n\n` +
-            `✅ Im Profit nach ${duration} geschlossen\n` +
-            `Entry: $${entryPrice.toFixed(2)} · Exit: $${currentPrice.toFixed(2)}\n` +
-            `PnL: <b>+${pnlPct.toFixed(2)}%</b>\n\n` +
-            `<i>Automatisch geschlossen nach 3h-Profit-Check</i>`
-          );
-          console.log(`✅ 3h-Profit-Close: ${signal.id} | ${signal.symbol} | +${pnlPct.toFixed(2)}%`);
-        }
-        results.push({ id: signal.id, status: 'closed_profit', pnlPct: pnlPct.toFixed(2), symbol: signal.symbol });
-      } else {
-        results.push({ id: signal.id, status: 'open_no_profit', symbol: signal.symbol });
-        console.log(`⏳ 3h-Check: ${signal.id} | ${signal.symbol} – noch nicht im Profit, weiter offen`);
-      }
-    }
-
-    // Also check practice trades ≥ 3h
-    const openPT = await env.DB.prepare(`
-      SELECT * FROM practice_trades
-      WHERE status = 'OPEN' AND created_at <= ?
-    `).bind(new Date(cutoff).toISOString()).all();
-
-    for (const pt of (openPT.results || [])) {
-      const currentPrice = await getLivePrice(env, pt.symbol);
-      if (!currentPrice) continue;
-      const isLong   = pt.direction === 'LONG';
-      const inProfit = isLong ? currentPrice > pt.entry_price : currentPrice < pt.entry_price;
-      if (inProfit) {
-        const resultPct = isLong
-          ? ((currentPrice - pt.entry_price) / pt.entry_price) * 100
-          : ((pt.entry_price - currentPrice) / pt.entry_price) * 100;
-        await closeTrade(env, {
-          practiceTradeId: pt.id,
-          outcome: 'WIN',
-          exitPrice: currentPrice,
-          pnlPct: parseFloat(resultPct.toFixed(2)),
-          outcomeSource: '3H_PROFIT_CLOSE'
-        });
-      }
-    }
-  } catch (err) {
-    console.error('❌ check3hProfitClose error:', err.message);
-  }
-  return results;
-}
-
-// ═══════════════════════════════════════════════════════════════
 // AUTO-EVALUATION (cron)
 // ═══════════════════════════════════════════════════════════════
 
@@ -2933,52 +3041,64 @@ async function evaluateOpenTrades(env) {
       if (!price) continue;
 
       const isLong = signal.direction === 'LONG';
-      let outcome = null;
-      let hitLevel = null;
+      if (!isLong && signal.direction !== 'SHORT') continue;
 
-      if (isLong) {
-        if (price >= signal.ai_tp) { outcome = 'WIN';  hitLevel = signal.ai_tp; }
-        else if (price <= signal.ai_sl) { outcome = 'LOSS'; hitLevel = signal.ai_sl; }
-      } else {
-        if (price <= signal.ai_tp) { outcome = 'WIN';  hitLevel = signal.ai_tp; }
-        else if (price >= signal.ai_sl) { outcome = 'LOSS'; hitLevel = signal.ai_sl; }
+      // Legacy-Signale (vor dem TP1-Feature) haben ai_tp1/sl_current = NULL →
+      // Levels werden on-the-fly aus ai_tp/ai_sl abgeleitet (kein Bruch).
+      const entry     = signal.ai_entry || price;
+      const tp2       = signal.ai_tp;                                                      // finales Ziel (1.5R)
+      const slOrig    = signal.ai_sl;                                                      // Original-SL
+      const tp1       = Number.isFinite(signal.ai_tp1)     ? signal.ai_tp1     : deriveTp1(entry, tp2);
+      const currentSl = Number.isFinite(signal.sl_current) ? signal.sl_current : slOrig;
+      const tp1Hit    = signal.tp1_hit === 1;
+
+      const decision = evaluateExit({ isLong, entry, tp2, sl: slOrig, tp1, currentSl, tp1Hit }, price);
+
+      if (decision.action === 'TP1_PARTIAL') {
+        const applied = await applyTp1Partial(env, {
+          signalId: signal.id,
+          newSl: decision.newSl,
+          realizedPct: parseFloat(decision.realizedPct.toFixed(2)),
+        });
+        if (applied.appliedSignal || applied.appliedPracticeTrade) {
+          await notifyTp1(env, {
+            symbol: signal.symbol, direction: signal.direction,
+            entry, tp1: decision.tp1Price, newSl: decision.newSl, realizedPct: decision.realizedPct,
+          });
+        }
+        continue;
       }
 
-      if (outcome) {
-        const exitPrice = hitLevel || price;
-        const entry     = signal.ai_entry || price;
-        const pnlPct    = isLong
-          ? ((exitPrice - entry) / entry) * 100
-          : ((entry - exitPrice) / entry) * 100;
+      if (decision.action === 'TP2_FINAL' || decision.action === 'SL_FINAL') {
+        const exitPrice = decision.exitPrice;
+        const pnlPct    = decision.finalPct;
         const duration  = formatDuration(Date.now() - (signal.created_at || Date.now()));
 
         const closeResult = await closeTrade(env, {
           signalId: signal.id,
-          outcome,
+          outcome: decision.outcome,
           exitPrice,
           pnlPct: parseFloat(pnlPct.toFixed(2)),
           outcomeSource: 'auto',
           telegramOutcomeSent: 1
         });
 
-        // Skip the notification if a concurrent path (e.g. check3hProfitClose
-        // or checkOpenSignals) already closed this signal first.
+        // Skip the notification if a concurrent path (e.g. the per-tick practice
+        // check) already closed this signal first.
         if (closeResult.closedSignal) {
-          const isWin     = outcome === 'WIN';
+          const viaTp2    = decision.action === 'TP2_FINAL';
+          const isWin     = decision.outcome === 'WIN';
           const hitEmoji  = isWin ? '🎯' : '🛑';
-          const hitLabel  = isWin ? 'TP HIT' : 'SL HIT';
+          const hitLabel  = viaTp2 ? 'TP2 HIT' : (isWin ? 'BREAKEVEN+ (SL nach TP1)' : 'SL HIT');
           const pnlSign   = pnlPct >= 0 ? '+' : '';
-          const tpLine    = isWin
-            ? `TP: $${signal.ai_tp?.toFixed(2)}`
-            : `SL: $${signal.ai_sl?.toFixed(2)}`;
 
           await sendTelegramMessage(env,
             `${hitEmoji} <b>${hitLabel} — ${signal.symbol} ${signal.direction}</b>\n` +
-            `Ergebnis: <b>${outcome}</b>\n\n` +
-            `Entry: $${entry.toFixed(2)} · ${tpLine} · Exit: $${exitPrice.toFixed(2)}\n` +
+            `Ergebnis: <b>${decision.outcome}</b>\n\n` +
+            `Entry: $${Number(entry).toFixed(2)} · Exit: $${Number(exitPrice).toFixed(2)}\n` +
             `PnL: <b>${pnlSign}${pnlPct.toFixed(2)}%</b> · Dauer: ${duration}`
           );
-          console.log(`📊 Signal ${signal.id} closed: ${outcome} | PnL: ${pnlPct.toFixed(2)}% | ${duration}`);
+          console.log(`📊 Signal ${signal.id} closed: ${decision.outcome} | PnL: ${pnlPct.toFixed(2)}% | ${decision.action}`);
         }
       }
     }
@@ -5692,8 +5812,9 @@ export default {
         await env.DB.prepare(`
           INSERT INTO practice_trades (
             signal_id, symbol, timeframe, direction,
-            entry_price, take_profit, stop_loss, status, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'OPEN', ?)
+            entry_price, take_profit, stop_loss, tp1_price, sl_price, tp1_hit, realized_pct,
+            status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'OPEN', ?)
         `).bind(
           signalId,
           signal.symbol || 'UNKNOWN',
@@ -5702,6 +5823,8 @@ export default {
           signal.ai_entry,
           signal.ai_tp,
           signal.ai_sl,
+          deriveTp1(signal.ai_entry, signal.ai_tp), // tp1_price
+          signal.ai_sl,                             // sl_price (startet auf Original-SL)
           new Date().toISOString()
         ).run();
 
@@ -6066,21 +6189,6 @@ export default {
         }
       }
 
-      // ── 3H PROFIT-CLOSE (manual trigger) ────────────────────────
-      if (request.method === "POST" && url.pathname === "/admin/check-3h-profit") {
-        const session = await validateSession(env, request);
-        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
-        try {
-          const results  = await check3hProfitClose(env);
-          const closed   = results.filter(r => r.status === 'closed_profit').length;
-          const open     = results.filter(r => r.status === 'open_no_profit').length;
-          const noPrice  = results.filter(r => r.status === 'no_price').length;
-          return jsonResponse({ success: true, checked: results.length, closed_profit: closed, still_open: open, no_price: noPrice, results });
-        } catch (e) {
-          return jsonResponse({ success: false, error: e.message }, 500);
-        }
-      }
-
       if (request.method === "POST" && url.pathname === "/admin/check-open-trades") {
         const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
@@ -6228,6 +6336,27 @@ export default {
         for (const [col, type] of stratCols) {
           try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); results.push(`signals.${col}: added`); }
           catch (_) { results.push(`signals.${col}: already exists`); }
+        }
+
+        // TP1/Breakeven/TP2 partial-exit columns (ersetzt die 3h-Regel)
+        const signalTp1Cols = [
+          ['ai_tp1',     'REAL'],
+          ['tp1_hit',    'INTEGER DEFAULT 0'],
+          ['sl_current', 'REAL'],
+        ];
+        for (const [col, type] of signalTp1Cols) {
+          try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); results.push(`signals.${col}: added`); }
+          catch (_) { results.push(`signals.${col}: already exists`); }
+        }
+        const practiceTp1Cols = [
+          ['tp1_price',    'REAL'],
+          ['tp1_hit',      'INTEGER DEFAULT 0'],
+          ['sl_price',     'REAL'],
+          ['realized_pct', 'REAL'],
+        ];
+        for (const [col, type] of practiceTp1Cols) {
+          try { await env.DB.prepare(`ALTER TABLE practice_trades ADD COLUMN ${col} ${type}`).run(); results.push(`practice_trades.${col}: added`); }
+          catch (_) { results.push(`practice_trades.${col}: already exists`); }
         }
 
         // User Phase-2 columns
@@ -6974,20 +7103,15 @@ export default {
   async scheduled(event, env, ctx) {
     console.log('⏰ Cron triggered:', event.cron);
 
-    // Every 3h: close open trades that are in profit
-    if (event.cron === "0 */3 * * *") {
-      try {
-        await check3hProfitClose(env);
-      } catch (err) {
-        console.error('❌ Cron 3h profit-close error:', err.message);
-        ctx.waitUntil(sendTelegramMessage(env, `⚠️ Cron-Fehler (3h): ${err.message}`).catch(() => {}));
-      }
-    }
+    // Sicherstellen, dass die TP1/Breakeven-Spalten existieren, bevor die
+    // Cron-Evaluatoren laufen (HTTP-Pfad macht das via processSignal, der
+    // Cron-Pfad bisher nicht). Idempotent durch _tablesReady-Guard.
+    try { await ensureTables(env); } catch (_) {}
 
-    // Every 4h: evaluate TP/SL hits + profit-close for 4h window
+    // Every 4h: evaluate TP1 / Breakeven / TP2 exits for open signals (backstop;
+    // der schnelle Pfad ist der per-Tick-Practice-Check auf jedem Snapshot).
     if (event.cron === "0 */4 * * *") {
       try {
-        await check3hProfitClose(env);
         await evaluateOpenTrades(env);
       } catch (err) {
         console.error('❌ Cron 4h evaluation error:', err.message);
@@ -7033,4 +7157,7 @@ export default {
 // named exports merely expose the pure scoring helpers so they can be
 // unit-tested with `node --test`. They do not change runtime logic or
 // the default export.
-export { analyzeWithRules, calcRR, safePct, getSignalQuality, DEFAULT_STRATEGY_CONFIG };
+export {
+  analyzeWithRules, calcRR, safePct, getSignalQuality, DEFAULT_STRATEGY_CONFIG,
+  evaluateExit, deriveTp1, EXIT_CONFIG,
+};
