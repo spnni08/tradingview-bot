@@ -19,6 +19,5 @@ database_id = "550e7c98-5757-451d-b0ea-5c8f374c53b1"
 [triggers]
 crons = [
   "0 7 * * *",   # Daily summary at 7am UTC
-  "0 */3 * * *", # 3h profit-close: close open trades that are in profit after 3h
-  "0 */4 * * *"  # TP/SL evaluation every 4 hours
+  "0 */4 * * *"  # TP1/Breakeven/TP2 exit evaluation every 4 hours (backstop)
 ]
