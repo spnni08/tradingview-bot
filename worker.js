@@ -544,6 +544,40 @@ function escapeHtml(text) {
   return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Kurzes, menschenlesbares Strategie-Label für Telegram (z. B. "Krypto-1
+// (RSI+EMA200)"). Greift auf STRATEGIES[key].display zu, fällt auf .label bzw.
+// den rohen Key zurück. Gibt null zurück, wenn keine Strategie bekannt ist
+// (→ Aufrufer blendet die Zeile dann aus). STRATEGIES ist ein später im Modul
+// deklariertes const; da diese Funktion erst zur Laufzeit aufgerufen wird, ist
+// der Zugriff unkritisch.
+function strategyDisplayLabel(strategyKey) {
+  const key = String(strategyKey || '').trim();
+  if (!key) return null;
+  const def = (typeof STRATEGIES !== 'undefined') ? STRATEGIES[key] : null;
+  return (def && (def.display || def.label)) || key;
+}
+
+// Kompakte, nach Betrag sortierte Score-Komponenten-Zeile aus dem
+// score_breakdown-Objekt (z. B. "RSI +18 · EMA +15 · Trend +10"). Akzeptiert
+// sowohl ein Objekt als auch einen JSON-String und ignoriert Nullbeiträge.
+// Liefert '' wenn nichts Verwertbares vorliegt → Aufrufer blendet die Zeile aus.
+function formatScoreComponents(breakdown, max = 4) {
+  const obj = (breakdown && typeof breakdown === 'object') ? breakdown : tryParseJSON(breakdown);
+  if (!obj || typeof obj !== 'object') return '';
+  const LABELS = {
+    rsi: 'RSI', ema: 'EMA', trend: 'Trend', wave_bias: 'Bias',
+    timeframe: 'TF', confidence: 'Conf', support_resistance: 'S&R',
+    session_filter: 'Session', vp: 'VP',
+  };
+  const parts = Object.entries(obj)
+    .map(([k, v]) => [k, Number(v)])
+    .filter(([, v]) => Number.isFinite(v) && v !== 0)
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .slice(0, max)
+    .map(([k, v]) => `${LABELS[k] || k} ${v >= 0 ? '+' : ''}${v}`);
+  return parts.join(' · ');
+}
+
 function formatSignalForTelegram(signal) {
   const emoji = signal.direction === 'LONG' ? '🟢' : '🔴';
   const sc    = signal.ai_score || 0;
@@ -552,6 +586,21 @@ function formatSignalForTelegram(signal) {
   const rrVal   = signal.risk_reward;
   const rrStr   = rrVal ? `1:${rrVal.toFixed(1)}` : 'N/A';
   const fmt     = (v) => v != null && !isNaN(v) ? `$${parseFloat(v).toFixed(2)}` : 'unbekannt';
+
+  // Optionale Zusatz-Infos (alle mit Fallback → Zeile entfällt, wenn leer).
+  const tfStr     = signal.timeframe ? ` · ${escapeHtml(String(signal.timeframe))}` : '';
+  const stratLbl  = strategyDisplayLabel(signal.strategy_key);
+  const stratLine = stratLbl ? `\n🧭 Strategie: <b>${escapeHtml(stratLbl)}</b>` : '';
+  const reversalLine = String(signal.signal_class || '').toUpperCase() === 'REVERSAL'
+    ? `\n⚠️ <b>Reversal-Signal</b>` : '';
+
+  // TP1 (Teilgewinn → Breakeven) optional; TP2 ist das bestehende finale ai_tp.
+  const tp1Line  = (signal.ai_tp1 != null && !isNaN(signal.ai_tp1))
+    ? `\n🎯 TP1: ${fmt(signal.ai_tp1)} <i>(Teilgewinn → Breakeven)</i>` : '';
+  const tp2Label = tp1Line ? 'TP2' : 'TP';
+
+  const comps    = formatScoreComponents(signal.score_breakdown);
+  const compLine = comps ? `\n📊 Komponenten: ${comps}` : '';
 
   const biasLine = signal.daily_bias
     ? `\n📐 Tagesbias: ${escapeHtml(signal.daily_bias)}${signal.bias_match ? ` · ${escapeHtml(signal.bias_match)}` : ''}` : '';
@@ -566,11 +615,11 @@ function formatSignalForTelegram(signal) {
 
   const disclaimer = '\n\n⚠️ <i>Hinweis: Keine Finanzberatung. Signale dienen nur zu Analyse- und Backtesting-Zwecken. Trading birgt Risiko. Keine Garantie für Gewinne.</i>';
 
-  return `${emoji} <b>${signal.symbol}</b> ${signal.direction}
+  return `${emoji} <b>${escapeHtml(signal.symbol)}</b> ${signal.direction}${tfStr}${stratLine}${reversalLine}
 
-${scoreEmoji} Score: <b>${sc}/100</b> · ${quality}
-💰 Entry: ${fmt(signal.ai_entry ?? signal.price)}
-🎯 TP: ${fmt(signal.ai_tp)}
+${scoreEmoji} Score: <b>${sc}/100</b> · ${quality}${compLine}
+💰 Entry: ${fmt(signal.ai_entry ?? signal.price)}${tp1Line}
+🎯 ${tp2Label}: ${fmt(signal.ai_tp)}
 🛑 SL: ${fmt(signal.ai_sl)}
 ⚖️ R:R: ${rrStr}${biasLine}${vpLine}
 
@@ -585,23 +634,41 @@ ${failedStr}
 
 function formatPriorityAlert(signal) {
   const sc  = signal.ai_score || 0;
-  const dir = signal.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
+  const dir = signal.direction === 'LONG' ? '🟢' : '🔴';
+  const dirTxt = signal.direction === 'LONG' ? 'LONG' : 'SHORT';
   const fmt = (v) => v != null && !isNaN(v) ? `$${parseFloat(v).toFixed(4)}` : '–';
   const rrVal = signal.risk_reward;
   const rrStr = rrVal ? `1:${rrVal.toFixed(1)}` : 'N/A';
   const stars = sc >= 90 ? '⭐⭐⭐' : '⭐⭐';
 
+  // Optionale Zusatz-Infos (alle mit Fallback → Zeile entfällt, wenn leer).
+  const tfStr     = signal.timeframe ? ` · ${escapeHtml(String(signal.timeframe))}` : '';
+  const stratLbl  = strategyDisplayLabel(signal.strategy_key);
+  const stratLine = stratLbl ? `\n🧭 <b>${escapeHtml(stratLbl)}</b>` : '';
+  const reversalLine = String(signal.signal_class || '').toUpperCase() === 'REVERSAL'
+    ? `\n⚠️ <b>Reversal-Signal</b>` : '';
+
+  // TP1 (Teilgewinn → Breakeven) optional; TP2 ist das bestehende finale ai_tp.
+  const tp1Line  = (signal.ai_tp1 != null && !isNaN(signal.ai_tp1))
+    ? `\n🎯 TP1:   <b>${fmt(signal.ai_tp1)}</b> <i>(Teilgewinn → Breakeven)</i>` : '';
+  const tp2Label = tp1Line ? 'TP2' : 'TP';
+
+  const comps    = formatScoreComponents(signal.score_breakdown);
+  const compLine = comps ? `\n📊 ${comps}` : '';
+
+  const ts = `\n🕒 ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+
   return `🚨🔥 <b>PRIORITY SIGNAL</b> 🔥🚨
 ━━━━━━━━━━━━━━━━━━━━━
 ${stars} Score: <b>${sc}/100</b> · ${getSignalQuality(sc)}
-<b>${signal.symbol}</b> · ${dir}
+${dir} <b>${escapeHtml(signal.symbol)}</b> · ${dirTxt}${tfStr}${stratLine}${reversalLine}
 ━━━━━━━━━━━━━━━━━━━━━
-💰 Entry: <b>${fmt(signal.ai_entry ?? signal.price)}</b>
-🎯 TP:    <b>${fmt(signal.ai_tp)}</b>
+💰 Entry: <b>${fmt(signal.ai_entry ?? signal.price)}</b>${tp1Line}
+🎯 ${tp2Label}:   <b>${fmt(signal.ai_tp)}</b>
 🛑 SL:    <b>${fmt(signal.ai_sl)}</b>
-⚖️ R:R:   <b>${rrStr}</b>
+⚖️ R:R:   <b>${rrStr}</b>${compLine}
 ━━━━━━━━━━━━━━━━━━━━━
-📋 ${escapeHtml(signal.ai_reason) || ''}
+📋 ${escapeHtml(signal.ai_reason) || ''}${ts}
 
 ⚠️ <i>Keine Finanzberatung. Eigenverantwortlich prüfen.</i>`.trim();
 }
@@ -768,6 +835,7 @@ const STRATEGIES = {
   // 1. Kontrollgruppe: bestehende RSI + EMA200-Logik, Score-Optimizer-Gewichte.
   crypto_baseline: {
     label:        'Crypto Baseline (Kontrollgruppe)',
+    display:      'Krypto-1 (RSI+EMA200)', // kurzes, menschenlesbares Label für Telegram
     assetClass:   'crypto',
     useScoreGate: true,   // Score ≥ minScore entscheidet über OPEN (wie bisher)
     minScore:     75,
@@ -777,6 +845,7 @@ const STRATEGIES = {
   // 2. Level über Volume Profile (VAL/VAH/POC) + EMA200-Trendfilter.
   crypto_sr_volume: {
     label:        'Crypto S&R Volume Profile',
+    display:      'Krypto-2 (S&R+VP)',
     assetClass:   'crypto',
     useScoreGate: false,  // Entry kommt aus Pine; Score nur Telemetrie
     minScore:     0,
@@ -787,6 +856,7 @@ const STRATEGIES = {
   // 3. Range-Breakout mit Volumen-Bestätigung (> volMult × Ø-Vol) + EMA-Filter.
   crypto_orderflow_breakout: {
     label:        'Crypto Orderflow Breakout',
+    display:      'Krypto-3 (Order Flow/Breakout)',
     assetClass:   'crypto',
     useScoreGate: false,
     minScore:     0,
@@ -800,6 +870,7 @@ const STRATEGIES = {
   //    HART session-gated (London-Open / London-NY-Overlap).
   forex_sr_fib_rsi: {
     label:        'Forex S&R + Fib + RSI',
+    display:      'Forex (S&R/VP+Fib+RSI)',
     assetClass:   'forex',
     useScoreGate: false,
     minScore:     0,
@@ -2391,12 +2462,17 @@ async function processSignal(env, signal) {
       const alertMsg = formatPriorityAlert({
         ...signal,
         direction,
-        ai_score:    analysis.score,
-        ai_entry:    analysis.entry,
-        ai_tp:       analysis.tp,
-        ai_sl:       analysis.sl,
-        ai_reason:   analysis.reason,
-        risk_reward: riskReward,
+        ai_score:        analysis.score,
+        ai_entry:        analysis.entry,
+        ai_tp:           analysis.tp,
+        ai_sl:           analysis.sl,
+        ai_reason:       analysis.reason,
+        risk_reward:     riskReward,
+        // Erweiterte Signal-Details (alle optional, mit Fallback in der Format-Fn):
+        ai_tp1:          deriveTp1(analysis.entry, analysis.tp), // TP1-Trigger (Teilgewinn)
+        strategy_key:    strategyKey,                            // → "Krypto-1 (RSI+EMA200)" etc.
+        signal_class:    signal.signal_class || null,            // REVERSAL → Warnhinweis
+        score_breakdown: ruleAnalysis.score_breakdown,           // Score-Komponenten
       });
       const sent = await withTimeout(sendAlertMessage(env, alertMsg), TELEGRAM_TIMEOUT_MS, false);
       if (sent) telegramSent = 1;
@@ -2407,17 +2483,22 @@ async function processSignal(env, signal) {
       const telegramMessage = debugPrefix + formatSignalForTelegram({
         ...signal,
         direction,
-        ai_score:       analysis.score,
-        ai_entry:       analysis.entry,
-        ai_tp:          analysis.tp,
-        ai_sl:          analysis.sl,
-        ai_reason:      analysis.reason,
-        signal_quality: signalQuality,
-        risk_reward:    riskReward,
-        matched_rules:  matchedRulesJSON,
-        failed_rules:   failedRulesJSON,
-        vp_zone:        vpZone,
-        vp_score:       vpScore,
+        ai_score:        analysis.score,
+        ai_entry:        analysis.entry,
+        ai_tp:           analysis.tp,
+        ai_sl:           analysis.sl,
+        ai_reason:       analysis.reason,
+        signal_quality:  signalQuality,
+        risk_reward:     riskReward,
+        matched_rules:   matchedRulesJSON,
+        failed_rules:    failedRulesJSON,
+        vp_zone:         vpZone,
+        vp_score:        vpScore,
+        // Erweiterte Signal-Details (alle optional, mit Fallback in der Format-Fn):
+        ai_tp1:          deriveTp1(analysis.entry, analysis.tp), // TP1-Trigger (Teilgewinn)
+        strategy_key:    strategyKey,                            // → "Krypto-1 (RSI+EMA200)" etc.
+        signal_class:    signal.signal_class || null,            // REVERSAL → Warnhinweis
+        score_breakdown: ruleAnalysis.score_breakdown,           // Score-Komponenten
       });
       const sent = await withTimeout(sendTelegramMessage(env, telegramMessage), TELEGRAM_TIMEOUT_MS, false);
       if (sent) telegramSent = 1;
