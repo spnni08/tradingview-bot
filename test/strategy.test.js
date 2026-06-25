@@ -25,6 +25,18 @@ test('Registry enthält genau 4 Strategien (3 crypto, 1 forex)', () => {
   }
 });
 
+test('Score-Optimizer-Scope: nur crypto_baseline ist score-optimiert (useScoreGate)', () => {
+  // processSignal leitet `scoreOptimized` aus stratDef.useScoreGate ab: nur die
+  // score-optimierte Strategie durchläuft Rule-Score+Claude und den Telegram-
+  // Score-Filter (≥80). Die Pine-gefilterten Strategien laufen direkt durch.
+  const optimized = Object.keys(STRATEGIES).filter(k => STRATEGIES[k].useScoreGate);
+  assert.deepEqual(optimized, ['crypto_baseline']);
+  // Die übrigen 3 vertrauen dem Pine-Entry (kein Score-Gate).
+  for (const k of ['crypto_sr_volume', 'crypto_orderflow_breakout', 'forex_sr_fib_rsi']) {
+    assert.equal(STRATEGIES[k].useScoreGate, false, `${k} darf nicht score-gated sein`);
+  }
+});
+
 test('resolveStrategyKey: gültiges Feld, case-insensitiv, Fallback', () => {
   assert.equal(resolveStrategyKey({ strategy: 'crypto_sr_volume' }), 'crypto_sr_volume');
   assert.equal(resolveStrategyKey({ strategy: 'CRYPTO_SR_VOLUME' }), 'crypto_sr_volume');

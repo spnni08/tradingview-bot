@@ -2338,6 +2338,15 @@ async function processSignal(env, signal) {
     console.log(`⏸️ ${strategyKey} ${signal.symbol}: Strategie pausiert → kein neuer Trade`);
   }
 
+  // ── Score-Optimizer-Scope ────────────────────────────────────────────
+  // Der Score-Optimizer (Regel-Score + Claude + Score-Schwellen) ist NUR für
+  // crypto_baseline kalibriert. Die übrigen Strategien (crypto_sr_volume,
+  // crypto_orderflow_breakout, forex_sr_fib_rsi) liefern aus Pine bereits eine
+  // harte Ja/Nein-Entscheidung → sie durchlaufen ohne Score-Filter (kein
+  // Claude-Call, Telegram direkt bei handelbarem Signal). Genau diese Strategien
+  // sind die mit useScoreGate=false — Single Source of Truth, kein Hardcoding.
+  const scoreOptimized = stratDef.useScoreGate;
+
   const ruleAnalysis     = analyzeWithRules(signal, strategyConfig, exitCfg);
   const fallbackAnalysis = ruleAnalysis;
 
@@ -2368,10 +2377,14 @@ async function processSignal(env, signal) {
   const aiTimer = setTimeout(() => aiAbort.abort(), AI_TIMEOUT_MS);
   let analysis;
   try {
-    if (preAiScore >= aiThreshold) {
+    // Score-Optimizer/Claude nur für die score-optimierte Strategie. Die
+    // Pine-gefilterten Strategien nutzen die deterministische Rule-Analyse
+    // (liefert Entry/TP/SL ebenfalls) und sparen den Claude-Call.
+    if (scoreOptimized && preAiScore >= aiThreshold) {
       analysis = await analyzeSignalWithAI(env, signal, strategyConfig, aiAbort.signal) || fallbackAnalysis;
     } else {
-      console.log(`⏭️ Score-Gate: ${preAiScore} < ${aiThreshold} → Claude-Call übersprungen`);
+      if (!scoreOptimized) console.log(`⏭️ ${strategyKey}: Pine-gefiltert → Score-Optimizer/Claude übersprungen`);
+      else                 console.log(`⏭️ Score-Gate: ${preAiScore} < ${aiThreshold} → Claude-Call übersprungen`);
       analysis = fallbackAnalysis;
     }
   } catch (aiErr) {
@@ -2422,11 +2435,16 @@ async function processSignal(env, signal) {
   const triggerReason      = signal.trigger || signal.action || 'WEBHOOK';
 
   // Determine Telegram notification.
-  // Telegram fires only for score >= 80 (or test signals). Signals scoring
-  // 75–79 are still treated as tradeable elsewhere (practice trade, dashboard
-  // bell ≥70) but deliberately do NOT trigger a Telegram alert.
+  // Score-Optimizer-Notify-Filter (Telegram erst ab Score ≥80) gilt NUR für die
+  // score-optimierte Strategie (crypto_baseline). Dort sind Signale mit 75–79
+  // zwar handelbar (practice/Dashboard-Bell ≥70), lösen aber bewusst KEINEN
+  // Telegram-Alert aus. Die Pine-gefilterten Strategien benachrichtigen direkt,
+  // sobald das Signal handelbar ist (nicht pausiert / innerhalb Session) — sie
+  // sind bereits eine harte Ja/Nein-Entscheidung, kein Score-Gate.
   const isTest       = signal.test === true || signal.is_test === 1;
-  let   shouldNotify = isTest || analysis.score >= 80;
+  let   shouldNotify = isTest || (scoreOptimized
+    ? analysis.score >= 80
+    : (!sessionClosed && !strategyPaused));
   let telegramSent   = 0;
   let telegramReason = 'below_threshold';
 
@@ -2455,10 +2473,11 @@ async function processSignal(env, signal) {
   }
 
   if (shouldNotify) {
-    // Score >= 80 → Priority-Alert. Der else-Zweig ist nur für Test-Signale
-    // erreichbar (echte Signale < 80 setzen shouldNotify gar nicht erst).
-    if (!isTest && analysis.score >= 80) {
-      telegramReason = 'score_80_priority';
+    // Echtes Signal → Priority-Alert. Erreichbar für crypto_baseline nur ab
+    // Score ≥80 (shouldNotify), für die Pine-gefilterten Strategien sobald das
+    // Signal handelbar ist. Der else-Zweig ist damit ausschließlich für Tests.
+    if (!isTest) {
+      telegramReason = scoreOptimized ? 'score_80_priority' : 'pine_signal';
       const alertMsg = formatPriorityAlert({
         ...signal,
         direction,
@@ -2507,8 +2526,9 @@ async function processSignal(env, signal) {
     if (!isTest && analysis.score >= 95) {
       await withTimeout(sendNtfyAlert(env, signal.symbol, signal.timeframe || '', analysis.score), 5000, false);
     }
-    // Web Push to all subscribed browsers/devices (score ≥ 80)
-    if (!isTest && analysis.score >= 80) {
+    // Web Push an alle Geräte: für jedes echte benachrichtigte Signal (baseline
+    // erreicht den Block nur ab ≥80, die Pine-Strategien sobald handelbar).
+    if (!isTest) {
       const dir = direction === 'LONG' ? '▲' : '▼';
       sendWebPushToAll(env,
         `${dir} ${signal.symbol} · Score ${analysis.score}`,
