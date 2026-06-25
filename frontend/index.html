@@ -18,7 +18,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="shared.css?v=406"/>
+<link rel="stylesheet" href="shared.css?v=407"/>
 </head>
 <body>
 
@@ -52,22 +52,26 @@
 
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<!-- @babel/standalone MUSS gepinnt bleiben: ungepinnt liefert unpkg seit dem
+     Babel-8-Release automatisch v8, das die type="text/babel"-Scripts ohne
+     explizite Presets nicht mehr transpiliert (kryptische SyntaxError/import-
+     Fehler, ganze SPA bricht). v7.x wendet das React-Preset implizit an. -->
+<script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
 
 <!-- Shell must load first (declares React hooks + shared components) -->
-<script type="text/babel" src="shell.jsx?v=406"></script>
+<script type="text/babel" src="shell.jsx?v=407"></script>
 
 <!-- Page components (no ReactDOM.createRoot — app.jsx handles that) -->
-<script type="text/babel" src="dashboard.jsx?v=406"></script>
-<script type="text/babel" src="journal.jsx?v=406"></script>
-<script type="text/babel" src="backtest.jsx?v=406"></script>
-<script type="text/babel" src="statistiken.jsx?v=406"></script>
-<script type="text/babel" src="einstellungen.jsx?v=406"></script>
-<script type="text/babel" src="news.jsx?v=406"></script>
-<script type="text/babel" src="admin.jsx?v=406"></script>
+<script type="text/babel" src="dashboard.jsx?v=407"></script>
+<script type="text/babel" src="journal.jsx?v=407"></script>
+<script type="text/babel" src="backtest.jsx?v=407"></script>
+<script type="text/babel" src="statistiken.jsx?v=407"></script>
+<script type="text/babel" src="einstellungen.jsx?v=407"></script>
+<script type="text/babel" src="news.jsx?v=407"></script>
+<script type="text/babel" src="admin.jsx?v=407"></script>
 
 <!-- Router — must load last -->
-<script type="text/babel" src="app.jsx?v=406"></script>
+<script type="text/babel" src="app.jsx?v=407"></script>
 
 </body>
 </html>
