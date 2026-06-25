@@ -216,6 +216,7 @@ const Sidebar = ({ page, setPage, user, onLogout, collapsed, setCollapsed, mobil
 
   const NAV = [
     { id: 'dashboard',   label: 'Dashboard',   icon: 'home'    },
+    { id: 'strategien',  label: 'Strategien',   icon: 'target'  },
     { id: 'backtest',    label: 'Backtesting',  icon: 'chart'   },
     { id: 'journal',     label: 'Journal',      icon: 'book'    },
     { id: 'news',        label: 'News',         icon: 'bell'    },

@@ -45,6 +45,8 @@ class PageErrorBoundary extends React.Component {
 const App = () => {
   const ROUTES = {
     '/dashboard': 'dashboard',
+    '/strategien': 'strategien',
+    '/strategies': 'strategien',
     '/signals': 'backtest',
     '/backtesting': 'backtest',
     '/journal': 'journal',
@@ -55,6 +57,7 @@ const App = () => {
   };
   const pageToPath = {
     dashboard: '/dashboard',
+    strategien: '/strategien',
     backtest: '/backtesting',
     journal: '/journal',
     statistiken: '/analytics',
@@ -150,6 +153,7 @@ const App = () => {
 
   const PAGE_COMPONENTS = {
     dashboard:     <DashboardPage     {...props}/>,
+    strategien:    <StrategienPage    {...props}/>,
     journal:       <JournalPage       {...props}/>,
     backtest:      <BacktestPage      {...props}/>,
     statistiken:   <StatistikenPage   {...props}/>,
