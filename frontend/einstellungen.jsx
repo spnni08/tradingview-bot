@@ -388,7 +388,6 @@ function AdminTestSignalPanel() {
 // ─── Admin Section (internal sub-nav) ────────────────────────
 
 const ADMIN_SUBS = [
-  { id: 'strategien', label: 'Strategien',     icon: 'chart'   },
   { id: 'verwaltung', label: 'Verwaltung',     icon: 'users'   },
   { id: 'testsignal', label: 'Test-Signal',    icon: 'bolt'    },
   { id: 'tradecheck', label: 'Trade Check',    icon: 'target'  },
@@ -498,8 +497,25 @@ function StrategyOverviewPanel({ user, navigate }) {
   );
 }
 
+// ─── Top-Level-Seite „Strategien" (Hauptnavigation) ──────────────────
+// Macht die Strategie-Übersicht als eigener Menüpunkt sichtbar. Vorher war
+// StrategyOverviewPanel nur als Admin-Sub-Tab erreichbar (dreifach versteckt:
+// nur isAdmin → User-Dropdown „Admin" → Einstellungen → Sub-Tab). Inhalt
+// identisch (StrategyOverviewPanel), nur als eigenständige Route.
+function StrategienPage({ user, navigate }) {
+  return (
+    <div className="content page-enter">
+      <div className="page-header">
+        <h2>Strategien</h2>
+        <p className="subtitle">Übersicht &amp; Performance aller Handelsstrategien</p>
+      </div>
+      <StrategyOverviewPanel user={user} navigate={navigate}/>
+    </div>
+  );
+}
+
 function AdminSection({ user, navigate }) {
-  const [sub, setSub] = useState('strategien');
+  const [sub, setSub] = useState('verwaltung');
   // Orphaned Voll-Admin-Panel (admin.jsx) defensiv referenzieren (lädt nach dieser Datei).
   const AdminFullPanel = (typeof AdminPage !== 'undefined') ? AdminPage : (typeof window !== 'undefined' ? window.AdminPage : null);
 
@@ -524,7 +540,6 @@ function AdminSection({ user, navigate }) {
           </button>
         ))}
       </div>
-      {sub === 'strategien' && <StrategyOverviewPanel user={user} navigate={navigate}/>}
       {sub === 'verwaltung' && (AdminFullPanel
         ? <AdminFullPanel user={user}/>
         : <div style={{ padding: 20, color: 'var(--text-tertiary)', fontSize: 13 }}>Admin-Panel konnte nicht geladen werden.</div>)}
