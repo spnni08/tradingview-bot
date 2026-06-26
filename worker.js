@@ -7374,7 +7374,17 @@ export default {
               console.log('⏭️ SIGNAL_NEW skipped — no recognisable direction:', JSON.stringify(payload).substring(0, 300));
               return jsonResponse({ success: true, type: 'SIGNAL_NEW', status: 'skipped', reason: 'no_actionable_direction', direction, action });
             }
-            return jsonResponse(await processSignal(env, payload));
+            // Sofortige 200-Response — Verarbeitung läuft asynchron weiter.
+            // ctx.waitUntil() garantiert, dass der Cloudflare-Isolate erst nach
+            // Abschluss von processSignal beendet wird → kein Signal geht verloren.
+            // (TradingView-Webhook-Timeout: ~10s; Claude-AI-Call allein kann 8s dauern.)
+            const signalTs = Date.now();
+            ctx.waitUntil(
+              processSignal(env, payload)
+                .then(result => console.log(`✅ processSignal done in ${Date.now() - signalTs}ms:`, result?.status || result?.outcome || 'ok'))
+                .catch(err   => console.error('❌ processSignal async error:', err?.message || err, err?.stack))
+            );
+            return jsonResponse({ success: true, type: 'SIGNAL_NEW', status: 'received', symbol: payload.symbol, direction });
           }
 
           return jsonResponse({ success: true, type: eventType, message: 'Unsupported event_type accepted' });
