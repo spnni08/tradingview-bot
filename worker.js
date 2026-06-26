@@ -2544,7 +2544,9 @@ async function processSignal(env, signal) {
   const passesGate = !sessionClosed && !strategyPaused &&
     (stratDef.useScoreGate ? analysis.score >= (stratDef.minScore ?? 75) : true);
 
-  await env.DB.prepare(`
+  let dbInsertResult;
+  try {
+    dbInsertResult = await env.DB.prepare(`
     INSERT INTO signals (
       id, symbol, timeframe, price, direction, action, trigger,
       rsi, ema50, ema200, trend, support, resistance, wave_bias,
@@ -2622,6 +2624,10 @@ async function processSignal(env, signal) {
     assetClass,                             // asset_class ('crypto' | 'forex')
     strategyKey                             // strategy_key (Routing-Strategie)
   ).run();
+  } catch (dbErr) {
+    console.error('❌ Signal INSERT fehlgeschlagen — Signal nicht gespeichert:', dbErr.message, 'signalId:', signalId);
+    throw new Error(`Signal-Persistierung fehlgeschlagen: ${dbErr.message}`);
+  }
 
   // AUFGABE 3: Kein paralleler Übungstrade-Pfad mehr. Die `signals`-Zeile oben
   // IST der Live-Pfad (Outcome/PnL/Exit). createPracticeTrade entfällt, damit
@@ -3378,7 +3384,11 @@ async function checkOpenSignalsForSymbol(env, symbol, currentPrice) {
       WHERE outcome = 'OPEN' AND symbol = ? AND ai_tp IS NOT NULL AND ai_sl IS NOT NULL
     `).bind(symbol).all();
     for (const signal of (open.results || [])) {
-      await applySignalExit(env, signal, currentPrice);
+      try {
+        await applySignalExit(env, signal, currentPrice);
+      } catch (sigErr) {
+        console.error(`❌ checkOpenSignalsForSymbol: Signal ${signal.id} (${signal.symbol}) übersprungen:`, sigErr.message);
+      }
     }
   } catch (err) {
     console.error('❌ checkOpenSignalsForSymbol error:', err.message);
@@ -3393,9 +3403,13 @@ async function evaluateOpenTrades(env) {
       ORDER BY created_at ASC
     `).all();
     for (const signal of (open.results || [])) {
-      const price = await getLivePrice(env, signal.symbol);
-      if (!price) continue;
-      await applySignalExit(env, signal, price);
+      try {
+        const price = await getLivePrice(env, signal.symbol);
+        if (!price) continue;
+        await applySignalExit(env, signal, price);
+      } catch (sigErr) {
+        console.error(`❌ evaluateOpenTrades: Signal ${signal.id} (${signal.symbol}) übersprungen:`, sigErr.message);
+      }
     }
     console.log('✅ evaluateOpenTrades done');
   } catch (err) {
