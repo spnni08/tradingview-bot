@@ -879,6 +879,264 @@ const STRATEGIES = {
   },
 };
 
+// ═══════════════════════════════════════════════════════════════
+// CANDIDATE SCORING — per-Strategie, konfigurierbare Gewichte
+// ═══════════════════════════════════════════════════════════════
+//
+// Jedes Pine-Signal wird ZUERST hier bewertet (Score 0-100) bevor
+// ein echter Trade/Signal-Eintrag angelegt wird. Wird der Schwellenwert
+// (threshold) nicht erreicht, landet das Signal nur in signal_candidates
+// (Datenbasis für spätere Kalibrierung), aber nicht in signals.
+//
+// Gewichte und Schwellenwerte sind konfigurierbar über:
+//   settings-Key "candidate_scoring_overrides" (JSON-Map, pro strategyKey).
+// Fehlt der Key, greifen CANDIDATE_SCORING_DEFAULTS.
+
+const CANDIDATE_SCORING_DEFAULTS = {
+  crypto_baseline: {
+    threshold: 60,
+    base: 50,
+    weights: {
+      // EMA-Distanz zum EMA200 (historisch: 0.5-1.3 % performte am besten)
+      ema_dist_sweet_spot:      20,  // 0.5–1.3 %
+      ema_dist_acceptable:       8,  // 1.3–2.5 % (noch ok, aber extended)
+      ema_dist_too_close:      -12,  // < 0.5 % (zu nah, kein Puffer)
+      ema_dist_too_far:         -8,  // > 2.5 % (zu überstreckt)
+      // RSI Dead-Zone 55–65 (LONG) / 35–45 (SHORT): schlechte historische WR
+      rsi_dead_zone_penalty:   -15,
+      // S/R-Kontext
+      near_sup_long:            12,  // LONG + Support in Nähe → günstig
+      near_res_short:           12,  // SHORT + Resistance in Nähe → günstig
+      near_res_long_penalty:    -8,  // LONG + Resistance über Preis → Gegenwind
+      near_sup_short_penalty:   -8,  // SHORT + Support unter Preis → Gegenwind
+    },
+  },
+  crypto_sr_volume: {
+    threshold: 60,
+    base: 40,
+    weights: {
+      reclaim:              25,  // echter Level-Reclaim (nicht nur Touch)
+      breakdown:            25,  // echter Breakdown
+      rsi_was_oversold:     10,  // RSI war überverkauft (LONG)
+      rsi_was_overbought:   10,  // RSI war überkauft (SHORT)
+      rsi_rising:            8,  // RSI steigt (LONG-Bestätigung)
+      rsi_falling:           8,  // RSI fällt (SHORT-Bestätigung)
+      trend_ok:             10,  // EMA200-Trend passt zur Richtung
+    },
+  },
+  crypto_orderflow_breakout: {
+    threshold: 60,
+    base: 35,
+    weights: {
+      breakout_above_range:  30,  // echter Range-Breakout nach oben
+      breakout_below_range:  30,  // echter Range-Breakdown nach unten
+      vol_ratio_high:        20,  // volRatio >= 2.0 (starke Bestätigung)
+      vol_ratio_medium:      10,  // volRatio 1.5–2.0
+      vol_ratio_low_penalty: -5,  // volRatio < 1.5 (reiner Vol-Spike ohne Breakout)
+      trend_ok:              10,  // EMA200-Trendfilter passt
+    },
+  },
+  forex_sr_fib_rsi: {
+    threshold: 60,
+    base: 35,
+    weights: {
+      reclaim_val:      30,  // echter VAL-Reclaim (LONG)
+      breakdown_vah:    30,  // echter VAH-Breakdown (SHORT)
+      dist_very_close:  15,  // Abstand zu VAL/VAH < 0.1 % (hohe Präzision)
+      dist_close:        5,  // Abstand 0.1–0.3 %
+    },
+  },
+};
+
+// Berechnet den Kandidaten-Score (0-100) für eine gegebene Strategie.
+// customWeights überschreibt einzelne Einträge aus CANDIDATE_SCORING_DEFAULTS.
+// Gibt { score, details, threshold } zurück (pure Funktion, kein DB-Zugriff).
+function scoreCandidate(strategyKey, signal, customWeights = null) {
+  const defaults = CANDIDATE_SCORING_DEFAULTS[strategyKey];
+  if (!defaults) return { score: 50, details: {}, threshold: 60 };
+
+  const w   = customWeights ? { ...defaults.weights, ...customWeights } : defaults.weights;
+  const thr = (customWeights?._threshold ?? defaults.threshold);
+  const dir = String(signal.direction || '').toUpperCase();
+
+  let score    = defaults.base;
+  const details = {};
+
+  // ── crypto_baseline ─────────────────────────────────────────
+  if (strategyKey === 'crypto_baseline') {
+    const emaDistPct = parseFloat(signal.emaDistPct ?? signal.ema_dist_pct ?? 0);
+    if (emaDistPct > 0) {
+      if (emaDistPct >= 0.5 && emaDistPct <= 1.3) {
+        score += w.ema_dist_sweet_spot;
+        details.ema_dist = w.ema_dist_sweet_spot;
+      } else if (emaDistPct > 1.3 && emaDistPct <= 2.5) {
+        score += w.ema_dist_acceptable;
+        details.ema_dist = w.ema_dist_acceptable;
+      } else if (emaDistPct < 0.5) {
+        score += w.ema_dist_too_close;
+        details.ema_dist = w.ema_dist_too_close;
+      } else {
+        score += w.ema_dist_too_far;
+        details.ema_dist = w.ema_dist_too_far;
+      }
+    }
+
+    // RSI dead-zone: Pine sendet rsiDeadZone=1 explizit, oder wir leiten es her
+    const rsi = parseFloat(signal.rsi ?? 50);
+    const inDeadZone = signal.rsiDeadZone == 1 || signal.rsi_dead_zone == 1 ||
+      (dir === 'LONG'  && rsi >= 55 && rsi <= 65) ||
+      (dir === 'SHORT' && rsi >= 35 && rsi <= 45);
+    if (inDeadZone) {
+      score += w.rsi_dead_zone_penalty;
+      details.rsi_dead_zone = w.rsi_dead_zone_penalty;
+    }
+
+    const nearSup = !!(signal.nearSup || signal.near_sup);
+    const nearRes = !!(signal.nearRes || signal.near_res);
+    if (dir === 'LONG') {
+      if (nearSup) { score += w.near_sup_long;         details.near_sup = w.near_sup_long; }
+      if (nearRes) { score += w.near_res_long_penalty; details.near_res = w.near_res_long_penalty; }
+    } else if (dir === 'SHORT') {
+      if (nearRes) { score += w.near_res_short;          details.near_res = w.near_res_short; }
+      if (nearSup) { score += w.near_sup_short_penalty;  details.near_sup = w.near_sup_short_penalty; }
+    }
+  }
+
+  // ── crypto_sr_volume ─────────────────────────────────────────
+  else if (strategyKey === 'crypto_sr_volume') {
+    const reclaim   = !!(signal.reclaim);
+    const breakdown = !!(signal.breakdown);
+    if (reclaim)   { score += w.reclaim;   details.reclaim   = w.reclaim; }
+    if (breakdown) { score += w.breakdown; details.breakdown = w.breakdown; }
+
+    if (signal.rsiWasOversold  || signal.rsi_was_oversold)  { score += w.rsi_was_oversold;  details.rsi_was_oversold  = w.rsi_was_oversold; }
+    if (signal.rsiWasOverbought|| signal.rsi_was_overbought){ score += w.rsi_was_overbought; details.rsi_was_overbought= w.rsi_was_overbought; }
+    if (signal.rsiRising  || signal.rsi_rising)  { score += w.rsi_rising;  details.rsi_rising  = w.rsi_rising; }
+    if (signal.rsiFalling || signal.rsi_falling) { score += w.rsi_falling; details.rsi_falling = w.rsi_falling; }
+    if (signal.trendOk    || signal.trend_ok)    { score += w.trend_ok;    details.trend_ok    = w.trend_ok; }
+  }
+
+  // ── crypto_orderflow_breakout ─────────────────────────────────
+  else if (strategyKey === 'crypto_orderflow_breakout') {
+    const breakoutAbove = !!(signal.breakoutAboveRange || signal.breakout_above_range);
+    const breakoutBelow = !!(signal.breakoutBelowRange || signal.breakout_below_range);
+    if (breakoutAbove) { score += w.breakout_above_range; details.breakout_above_range = w.breakout_above_range; }
+    if (breakoutBelow) { score += w.breakout_below_range; details.breakout_below_range = w.breakout_below_range; }
+
+    const volRatio = parseFloat(signal.volRatio ?? signal.vol_ratio ?? 0);
+    if (volRatio >= 2.0) {
+      score += w.vol_ratio_high;   details.vol_ratio = w.vol_ratio_high;
+    } else if (volRatio >= 1.5) {
+      score += w.vol_ratio_medium; details.vol_ratio = w.vol_ratio_medium;
+    } else if (volRatio > 0) {
+      score += w.vol_ratio_low_penalty; details.vol_ratio = w.vol_ratio_low_penalty;
+    }
+
+    if (signal.trendOk || signal.trend_ok) { score += w.trend_ok; details.trend_ok = w.trend_ok; }
+  }
+
+  // ── forex_sr_fib_rsi ─────────────────────────────────────────
+  else if (strategyKey === 'forex_sr_fib_rsi') {
+    if (signal.reclaimVAL || signal.reclaim_val) { score += w.reclaim_val;   details.reclaim_val   = w.reclaim_val; }
+    if (signal.breakdownVAH || signal.breakdown_vah) { score += w.breakdown_vah; details.breakdown_vah = w.breakdown_vah; }
+
+    // Abstand zu VAL (LONG) oder VAH (SHORT)
+    const dist = dir === 'LONG'
+      ? parseFloat(signal.distToVAL ?? signal.dist_to_val ?? 999)
+      : parseFloat(signal.distToVAH ?? signal.dist_to_vah ?? 999);
+    if (dist < 0.1) {
+      score += w.dist_very_close; details.dist_to_level = w.dist_very_close;
+    } else if (dist < 0.3) {
+      score += w.dist_close;      details.dist_to_level = w.dist_close;
+    }
+  }
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  return { score, details, threshold: thr };
+}
+
+// Lädt optionale Gewichts-Overrides aus der settings-Tabelle.
+// Format: { "crypto_baseline": { "ema_dist_sweet_spot": 25, "_threshold": 65 }, ... }
+async function loadCandidateScoringConfig(env, strategyKey) {
+  try {
+    const raw = await getSetting(env, 'candidate_scoring_overrides', null);
+    if (!raw) return null;
+    const map = JSON.parse(raw);
+    return map?.[strategyKey] ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Speichert einen Signal-Kandidaten (immer, unabhängig vom Score-Ergebnis).
+async function saveSignalCandidate(env, { signal, strategyKey, strategyId, candidateScore, threshold, scoreDetails, passedThreshold, signalId }) {
+  try {
+    const id = `cand_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    await env.DB.prepare(`
+      INSERT INTO signal_candidates (
+        id, received_at, strategy_key, strategy_id,
+        symbol, timeframe, direction, price, rsi,
+        ema_dist_pct, near_sup, near_res, rsi_dead_zone,
+        reclaim, breakdown, rsi_was_oversold, rsi_was_overbought,
+        rsi_rising, rsi_falling, trend_ok, poc,
+        breakout_above_range, breakout_below_range, vol_ratio,
+        reclaim_val, breakdown_vah, dist_to_val, dist_to_vah,
+        candidate_score, score_threshold, score_details,
+        passed_threshold, signal_id, raw_payload
+      ) VALUES (
+        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?
+      )
+    `).bind(
+      id, Date.now(), strategyKey, strategyId || null,
+      signal.symbol || null, String(signal.timeframe || ''), signal.direction || null,
+      signal.price ?? signal.close ?? null,
+      signal.rsi ?? null,
+      // crypto_baseline
+      signal.emaDistPct ?? signal.ema_dist_pct ?? null,
+      signal.nearSup ?? signal.near_sup ?? null,
+      signal.nearRes ?? signal.near_res ?? null,
+      signal.rsiDeadZone ?? signal.rsi_dead_zone ?? null,
+      // crypto_sr_volume
+      signal.reclaim   != null ? (signal.reclaim   ? 1 : 0) : null,
+      signal.breakdown != null ? (signal.breakdown ? 1 : 0) : null,
+      signal.rsiWasOversold   ?? signal.rsi_was_oversold   ?? null,
+      signal.rsiWasOverbought ?? signal.rsi_was_overbought ?? null,
+      signal.rsiRising  ?? signal.rsi_rising  ?? null,
+      signal.rsiFalling ?? signal.rsi_falling ?? null,
+      signal.trendOk    ?? signal.trend_ok    ?? null,
+      signal.poc        ?? null,
+      // crypto_orderflow_breakout
+      signal.breakoutAboveRange ?? signal.breakout_above_range ?? null,
+      signal.breakoutBelowRange ?? signal.breakout_below_range ?? null,
+      signal.volRatio   ?? signal.vol_ratio   ?? null,
+      // forex_sr_fib_rsi
+      signal.reclaimVAL   ?? signal.reclaim_val   ?? null,
+      signal.breakdownVAH ?? signal.breakdown_vah ?? null,
+      signal.distToVAL    ?? signal.dist_to_val   ?? null,
+      signal.distToVAH    ?? signal.dist_to_vah   ?? null,
+      // scoring
+      candidateScore,
+      threshold,
+      JSON.stringify(scoreDetails || {}),
+      passedThreshold ? 1 : 0,
+      signalId || null,
+      JSON.stringify(signal).substring(0, 2000)
+    ).run();
+    return id;
+  } catch (e) {
+    console.error('❌ saveSignalCandidate failed:', e.message);
+    return null;
+  }
+}
+
 // Forex-Handelsfenster (HART gated). Vorgabe in MEZ (CET = UTC+1), intern UTC:
 //   London-Open 09–10 MEZ → 08–09 UTC · London/NY-Overlap 14–17 MEZ → 13–16 UTC.
 // NB: ohne Sommerzeit gerechnet — bei Bedarf hier anpassen.
@@ -1814,6 +2072,46 @@ async function ensureTables(env) {
       )
     `).run();
 
+    // signal_candidates: alle eingehenden Kandidaten (inkl. abgelehnter)
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS signal_candidates (
+        id TEXT PRIMARY KEY,
+        received_at INTEGER NOT NULL,
+        strategy_key TEXT NOT NULL,
+        strategy_id TEXT,
+        symbol TEXT,
+        timeframe TEXT,
+        direction TEXT,
+        price REAL,
+        rsi REAL,
+        ema_dist_pct REAL,
+        near_sup INTEGER,
+        near_res INTEGER,
+        rsi_dead_zone INTEGER,
+        reclaim INTEGER,
+        breakdown INTEGER,
+        rsi_was_oversold INTEGER,
+        rsi_was_overbought INTEGER,
+        rsi_rising INTEGER,
+        rsi_falling INTEGER,
+        trend_ok INTEGER,
+        poc REAL,
+        breakout_above_range INTEGER,
+        breakout_below_range INTEGER,
+        vol_ratio REAL,
+        reclaim_val INTEGER,
+        breakdown_vah INTEGER,
+        dist_to_val REAL,
+        dist_to_vah REAL,
+        candidate_score INTEGER,
+        score_threshold INTEGER,
+        score_details TEXT,
+        passed_threshold INTEGER NOT NULL DEFAULT 0,
+        signal_id TEXT,
+        raw_payload TEXT
+      )
+    `).run();
+
     _tablesReady = true;
   } catch (error) {
     console.error('❌ ensureTables error:', error.message);
@@ -2381,6 +2679,27 @@ async function processSignal(env, signal) {
     console.log(`⏸️ ${strategyKey} ${signal.symbol}: Strategie pausiert → kein neuer Trade`);
   }
 
+  // ── Kandidaten-Score (pro Strategie) ────────────────────────────────
+  // JEDES eingehende Signal wird als Kandidat bewertet und in signal_candidates
+  // gespeichert. Nur wenn der Score den Schwellenwert überschreitet, läuft die
+  // volle Verarbeitungs-Pipeline (analyzeWithRules / Claude / Trade-Insert).
+  const candidateScoringOverrides = await loadCandidateScoringConfig(env, strategyKey);
+  const { score: candidateScore, details: candidateScoreDetails, threshold: candidateThreshold } =
+    scoreCandidate(strategyKey, signal, candidateScoringOverrides);
+  const passedCandidateGate = candidateScore >= candidateThreshold;
+  console.log(`📊 Candidate score [${strategyKey}]: ${candidateScore}/${candidateThreshold} → ${passedCandidateGate ? 'PASS' : 'REJECT'}`);
+
+  if (!passedCandidateGate) {
+    // Abgelehnter Kandidat: nur speichern, kein Trade
+    await saveSignalCandidate(env, {
+      signal, strategyKey, strategyId: strategy?.id,
+      candidateScore, threshold: candidateThreshold,
+      scoreDetails: candidateScoreDetails,
+      passedThreshold: false, signalId: null,
+    });
+    return { status: 'candidate_rejected', candidateScore, candidateThreshold, strategyKey };
+  }
+
   // ── Score-Optimizer-Scope ────────────────────────────────────────────
   // Der Score-Optimizer (Regel-Score + Claude + Score-Schwellen) ist NUR für
   // crypto_baseline kalibriert. Die übrigen Strategien (crypto_sr_volume,
@@ -2718,6 +3037,14 @@ async function processSignal(env, signal) {
   } catch (atErr) {
     console.error('❌ Autotrade setup error:', atErr.message);
   }
+
+  // Kandidaten-Eintrag mit signal_id verknüpfen (Kandidat hat den Gate passiert)
+  await saveSignalCandidate(env, {
+    signal, strategyKey, strategyId: strategy?.id,
+    candidateScore, threshold: candidateThreshold,
+    scoreDetails: candidateScoreDetails,
+    passedThreshold: true, signalId,
+  });
 
   console.log('✅ Signal processed:', signalId, '| Score:', analysis.score, '| Rec:', analysis.recommendation, '| Telegram:', telegramSent ? telegramReason : 'no');
   return { status: 'ok', signalId, analysis };
@@ -7566,4 +7893,5 @@ export {
   detectAssetClass, normalizeSymbol, resolveStrategyKey, exitConfigForStrategy,
   isWithinForexSession, STRATEGIES, FOREX_SESSIONS_UTC, resetStartingCapital,
   setStrategyStatus, getStrategyStatuses, computeWinRate, computeExpectancy,
+  scoreCandidate, CANDIDATE_SCORING_DEFAULTS,
 };
