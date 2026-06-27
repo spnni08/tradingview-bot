@@ -388,11 +388,13 @@ function AdminTestSignalPanel() {
 // ─── Admin Section (internal sub-nav) ────────────────────────
 
 const ADMIN_SUBS = [
-  { id: 'verwaltung', label: 'Verwaltung',     icon: 'users'   },
-  { id: 'testsignal', label: 'Test-Signal',    icon: 'bolt'    },
-  { id: 'tradecheck', label: 'Trade Check',    icon: 'target'  },
-  { id: 'webhook',    label: 'Webhook Tester', icon: 'signal'  },
-  { id: 'system',     label: 'System',         icon: 'settings'},
+  { id: 'verwaltung',  label: 'Verwaltung',      icon: 'users'   },
+  { id: 'testsignal',  label: 'Test-Signal',     icon: 'bolt'    },
+  { id: 'tradecheck',  label: 'Trade Check',     icon: 'target'  },
+  { id: 'webhook',     label: 'Webhook Tester',  icon: 'signal'  },
+  { id: 'webhook-log', label: 'Webhook-Log',     icon: 'list'    },
+  { id: 'kapital',     label: 'Kapital-Reset',   icon: 'coins'   },
+  { id: 'system',      label: 'System',          icon: 'settings'},
 ];
 
 // ─── AUFGABE 1: Strategie-Übersicht (Vergleich + Admin-Toggle) ───────
@@ -543,10 +545,12 @@ function AdminSection({ user, navigate }) {
       {sub === 'verwaltung' && (AdminFullPanel
         ? <AdminFullPanel user={user}/>
         : <div style={{ padding: 20, color: 'var(--text-tertiary)', fontSize: 13 }}>Admin-Panel konnte nicht geladen werden.</div>)}
-      {sub === 'testsignal' && <AdminTestSignalPanel/>}
-      {sub === 'tradecheck' && <AdminTradeCheckPanel/>}
-      {sub === 'webhook'    && <AdminWebhookTester/>}
-      {sub === 'system'     && <SystemSection/>}
+      {sub === 'testsignal'  && <AdminTestSignalPanel/>}
+      {sub === 'tradecheck'  && <AdminTradeCheckPanel/>}
+      {sub === 'webhook'     && <AdminWebhookTester/>}
+      {sub === 'webhook-log' && (typeof AdminWebhookLogPanel !== 'undefined' ? <AdminWebhookLogPanel/> : <div className="muted" style={{ padding: 20 }}>Lädt…</div>)}
+      {sub === 'kapital'     && (typeof CapitalResetCard !== 'undefined' ? <CapitalResetCard/> : <div className="muted" style={{ padding: 20 }}>Lädt…</div>)}
+      {sub === 'system'      && <SystemSection/>}
     </div>
   );
 }

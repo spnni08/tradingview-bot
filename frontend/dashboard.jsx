@@ -104,15 +104,39 @@ function DashSignalModal({ signal, onClose, onExecuteTrade, onSaveToJournal, onI
             </div>
           </div>
 
+          {/* Strategy + Asset meta */}
+          {(signal.strategy_key || signal.asset_class) && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+              {signal.strategy_key && (
+                <span style={{ padding: '3px 8px', borderRadius: 5, background: 'rgba(59,130,246,.12)', border: '1px solid rgba(59,130,246,.25)', fontSize: 11, color: 'var(--blue-400)', fontFamily: 'var(--font-mono)' }}>
+                  {signal.strategy_key}
+                </span>
+              )}
+              {signal.asset_class && (
+                <span style={{ padding: '3px 8px', borderRadius: 5, background: 'var(--bg-2)', border: '1px solid var(--border)', fontSize: 11, color: 'var(--text-secondary)', textTransform: 'capitalize' }}>
+                  {signal.asset_class}
+                </span>
+              )}
+              {signal.exit_reason && (
+                <span style={{ padding: '3px 8px', borderRadius: 5, background: signal.exit_reason === 'TP2' ? 'rgba(34,197,94,.1)' : 'rgba(239,68,68,.1)', border: `1px solid ${signal.exit_reason === 'TP2' ? 'rgba(34,197,94,.3)' : 'rgba(239,68,68,.3)'}`, fontSize: 11, color: signal.exit_reason === 'TP2' ? 'var(--win)' : 'var(--loss)' }}>
+                  Exit: {signal.exit_reason === 'TP2' ? 'TP2 erreicht' : signal.exit_reason === 'SL_after_TP1' ? 'SL nach TP1 (BE)' : signal.exit_reason === 'SL_before_TP1' ? 'SL vor TP1' : signal.exit_reason}
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Prices */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, padding: '14px 0', borderBottom: '1px solid var(--border)' }}>
             {[
-              ['Entry',      fmt(signal.ai_entry ?? signal.price), 'var(--text-primary)'],
-              ['Take Profit', fmt(signal.ai_tp),                   'var(--win)'],
-              ['Stop Loss',   fmt(signal.ai_sl),                   'var(--loss)'],
-              ['Exit',        fmt(signal.exit_price),              pnl > 0 ? 'var(--win)' : pnl < 0 ? 'var(--loss)' : 'var(--text-primary)'],
-              ['R:R',         rr ? `1:${parseFloat(rr).toFixed(1)}` : '–', rr >= 1.5 ? 'var(--win)' : rr ? 'var(--wait)' : 'var(--text-tertiary)'],
-              ['PnL',         pnl !== 0 ? _fmtPct(pnl) : '–',   pnl > 0 ? 'var(--win)' : pnl < 0 ? 'var(--loss)' : 'var(--text-tertiary)'],
+              ['Entry',   fmt(signal.ai_entry ?? signal.price), 'var(--text-primary)'],
+              ['TP1',     signal.ai_tp1 ? fmt(signal.ai_tp1) : '–', signal.tp1_hit ? 'var(--win)' : 'var(--text-secondary)'],
+              ['TP2',     fmt(signal.ai_tp),                   'var(--win)'],
+              ['SL',      fmt(signal.ai_sl),                   'var(--loss)'],
+              ['SL akt.', signal.sl_current && signal.sl_current !== signal.ai_sl ? fmt(signal.sl_current) : '–', signal.tp1_hit ? 'var(--wait)' : 'var(--text-tertiary)'],
+              ['Exit',    fmt(signal.exit_price),              pnl > 0 ? 'var(--win)' : pnl < 0 ? 'var(--loss)' : 'var(--text-primary)'],
+              ['R:R',     rr ? `1:${parseFloat(rr).toFixed(1)}` : '–', rr >= 1.5 ? 'var(--win)' : rr ? 'var(--wait)' : 'var(--text-tertiary)'],
+              ['PnL',     pnl !== 0 ? _fmtPct(pnl) : '–',   pnl > 0 ? 'var(--win)' : pnl < 0 ? 'var(--loss)' : 'var(--text-tertiary)'],
+              ['TP1 Hit', signal.tp1_hit ? '✓ Ja' : '✗ Nein', signal.tp1_hit ? 'var(--win)' : 'var(--text-tertiary)'],
             ].map(([l, v, c]) => (
               <div key={l} style={{ background: 'var(--bg-0)', borderRadius: 8, padding: '8px 12px' }}>
                 <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 3 }}>{l}</div>
@@ -120,6 +144,21 @@ function DashSignalModal({ signal, onClose, onExecuteTrade, onSaveToJournal, onI
               </div>
             ))}
           </div>
+
+          {/* Indicator values */}
+          {(signal.rsi != null || signal.vah != null || signal.poc != null) && (
+            <div style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 700, letterSpacing: '.08em', marginBottom: 8 }}>INDIKATOREN</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {signal.rsi    != null && <span style={{ fontSize: 12, padding: '3px 8px', background: 'var(--bg-2)', borderRadius: 6, fontFamily: 'var(--font-mono)' }}>RSI {signal.rsi.toFixed(1)}</span>}
+                {signal.ema50  != null && <span style={{ fontSize: 12, padding: '3px 8px', background: 'var(--bg-2)', borderRadius: 6, fontFamily: 'var(--font-mono)' }}>EMA50 {fmt(signal.ema50)}</span>}
+                {signal.ema200 != null && <span style={{ fontSize: 12, padding: '3px 8px', background: 'var(--bg-2)', borderRadius: 6, fontFamily: 'var(--font-mono)' }}>EMA200 {fmt(signal.ema200)}</span>}
+                {signal.val    != null && <span style={{ fontSize: 12, padding: '3px 8px', background: 'rgba(59,130,246,.08)', borderRadius: 6, fontFamily: 'var(--font-mono)', color: 'var(--blue-400)' }}>VAL {fmt(signal.val)}</span>}
+                {signal.poc    != null && <span style={{ fontSize: 12, padding: '3px 8px', background: 'rgba(59,130,246,.08)', borderRadius: 6, fontFamily: 'var(--font-mono)', color: 'var(--blue-400)' }}>POC {fmt(signal.poc)}</span>}
+                {signal.vah    != null && <span style={{ fontSize: 12, padding: '3px 8px', background: 'rgba(59,130,246,.08)', borderRadius: 6, fontFamily: 'var(--font-mono)', color: 'var(--blue-400)' }}>VAH {fmt(signal.vah)}</span>}
+              </div>
+            </div>
+          )}
 
           {/* AI reason */}
           {signal.ai_reason && (
@@ -878,7 +917,7 @@ const LatestTradesCard = ({ signals, onViewAll, onExecuteTrade, onSaveToJournal,
               <thead>
                 <tr>
                   <th>Zeit</th><th>Asset</th><th>Richtung</th>
-                  <th>Entry</th><th>TP</th><th>SL</th><th>R:R</th><th>Score</th><th>Status</th>
+                  <th>Entry</th><th>TP1</th><th>TP2</th><th>SL</th><th>Score</th><th>Strategie</th><th>Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -888,10 +927,13 @@ const LatestTradesCard = ({ signals, onViewAll, onExecuteTrade, onSaveToJournal,
                     <td><AssetChip symbol={s.symbol}/></td>
                     <td><span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span></td>
                     <td className="mono">${(s.ai_entry || s.price || 0).toFixed(2)}</td>
-                    <td className="mono win">{s.ai_tp ? `$${s.ai_tp.toFixed(2)}` : '–'}</td>
-                    <td className="mono loss">{s.ai_sl ? `$${s.ai_sl.toFixed(2)}` : '–'}</td>
-                    <td className="mono">{s.risk_reward != null ? `1:${s.risk_reward.toFixed(1)}` : '–'}</td>
+                    <td className="mono" style={{ color: s.tp1_hit ? 'var(--win)' : 'var(--text-secondary)', fontSize: 11 }}>
+                      {s.ai_tp1 ? `$${s.ai_tp1.toFixed(2)}${s.tp1_hit ? ' ✓' : ''}` : '–'}
+                    </td>
+                    <td className="mono win" style={{ fontSize: 11 }}>{s.ai_tp ? `$${s.ai_tp.toFixed(2)}` : '–'}</td>
+                    <td className="mono loss" style={{ fontSize: 11 }}>{s.ai_sl ? `$${s.ai_sl.toFixed(2)}` : '–'}</td>
                     <td className="mono">{s.ai_score || 0}</td>
+                    <td className="mono muted" style={{ fontSize: 10 }}>{s.strategy_key ? s.strategy_key.replace('crypto_', '').replace('forex_', '') : '–'}</td>
                     <td>
                       <span className={`badge ${s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`}>
                         {s.outcome || 'OPEN'}

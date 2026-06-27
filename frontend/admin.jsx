@@ -1241,4 +1241,264 @@ const ChangePasswordModal = ({ user, onClose, onSave }) => {
   );
 };
 
+// ─── Capital Reset Card ──────────────────────────────────────
+
+const CapitalResetCard = () => {
+  const [currentCapital, setCurrentCapital] = useState(null);
+  const [newValue,       setNewValue]       = useState('');
+  const [log,            setLog]            = useState([]);
+  const [loading,        setLoading]        = useState(false);
+  const [result,         setResult]         = useState(null);
+  const [confirm,        setConfirm]        = useState(false);
+
+  const load = async () => {
+    try {
+      const res = await fetch(`${API_URL}/admin/settings`, { credentials: 'include' });
+      if (res.ok) {
+        const d = await res.json();
+        setCurrentCapital(d.starting_capital ?? d.startingCapital ?? 10000);
+      }
+    } catch (_) {}
+    try {
+      const res = await fetch(`${API_URL}/admin/capital-log`, { credentials: 'include' });
+      if (res.ok) { const d = await res.json(); setLog(d.entries || []); }
+    } catch (_) {}
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handleReset = async () => {
+    const val = parseFloat(newValue);
+    if (!Number.isFinite(val) || val < 0) { setResult({ success: false, error: 'Ungültiger Wert' }); return; }
+    setLoading(true); setResult(null);
+    try {
+      const res = await fetch(`${API_URL}/admin/reset-capital`, {
+        credentials: 'include', method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: val }),
+      });
+      const d = await res.json();
+      setResult(d);
+      if (d.success) { setNewValue(''); load(); }
+    } catch (e) { setResult({ success: false, error: e.message }); }
+    setLoading(false);
+  };
+
+  const fmtNum = v => v != null ? Number(v).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '–';
+
+  return (
+    <div className="card">
+      <div className="card-head"><Icon name="coins" className="ico"/><h3>Einstiegskapital zurücksetzen</h3></div>
+      <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '12px 16px', background: 'var(--bg-2)', borderRadius: 10, border: '1px solid var(--border)' }}>
+          <Icon name="wallet" size={20} style={{ color: 'var(--blue-400)', flexShrink: 0 }}/>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Aktuelles Startkapital</div>
+            <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+              {currentCapital != null ? `${fmtNum(currentCapital)} USDT` : <span className="muted">Lädt…</span>}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>Neues Startkapital (USDT)</label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type="number" min="0" step="0.01"
+              value={newValue}
+              onChange={e => setNewValue(e.target.value)}
+              placeholder="z.B. 10000"
+              className="input"
+              style={{ flex: 1 }}
+            />
+            <button
+              className="btn btn-primary"
+              disabled={loading || !newValue}
+              onClick={() => setConfirm(true)}
+            >
+              {loading ? <div className="spinner-sm"/> : <Icon name="refresh" size={14}/>}
+              Zurücksetzen
+            </button>
+          </div>
+          <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6 }}>
+            Setzt das Startkapital für die PnL-Berechnung zurück. Bestehende Trades werden nicht verändert.
+          </p>
+        </div>
+
+        {result && (
+          <div style={{
+            padding: '10px 14px', borderRadius: 8,
+            background: result.success ? 'var(--bg-success)' : 'var(--bg-error)',
+            border: `1px solid ${result.success ? 'var(--win)' : 'var(--loss)'}`,
+            fontSize: 13, color: result.success ? 'var(--win)' : 'var(--loss)',
+          }}>
+            {result.success ? `✅ Zurückgesetzt: ${fmtNum(result.oldValue)} → ${fmtNum(result.newValue)} USDT` : `❌ ${result.error}`}
+          </div>
+        )}
+
+        {log.length > 0 && (
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Reset-Verlauf</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {log.slice(0, 5).map(entry => (
+                <div key={entry.id} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12, padding: '6px 10px', background: 'var(--bg-2)', borderRadius: 6 }}>
+                  <span className="mono muted" style={{ fontSize: 11 }}>{new Date(entry.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                  <span style={{ color: 'var(--text-secondary)', flex: 1 }}>{entry.username || 'system'}</span>
+                  <span className="mono" style={{ color: 'var(--loss)' }}>{fmtNum(entry.old_value)}</span>
+                  <Icon name="arrow-right" size={11} style={{ color: 'var(--text-quaternary)' }}/>
+                  <span className="mono" style={{ color: 'var(--win)' }}>{fmtNum(entry.new_value)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {confirm && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}>
+            <div style={{ background: 'var(--bg-1)', borderRadius: 14, padding: 28, maxWidth: 380, width: '90%', border: '1px solid var(--border)' }}>
+              <h3 style={{ marginBottom: 12 }}>⚠️ Startkapital zurücksetzen?</h3>
+              <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 20 }}>
+                Das Startkapital wird von <strong>{fmtNum(currentCapital)} USDT</strong> auf <strong>{fmtNum(parseFloat(newValue))} USDT</strong> zurückgesetzt. Diese Aktion wird geloggt.
+              </p>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button className="btn btn-ghost" onClick={() => setConfirm(false)}>Abbrechen</button>
+                <button className="btn btn-primary" onClick={() => { setConfirm(false); handleReset(); }}>Bestätigen</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── Webhook Log Panel ───────────────────────────────────────
+
+const AdminWebhookLogPanel = () => {
+  const [entries,   setEntries]   = useState([]);
+  const [loading,   setLoading]   = useState(true);
+  const [filter,    setFilter]    = useState('all');
+  const [expanded,  setExpanded]  = useState(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+
+  const load = async (statusFilter) => {
+    setLoading(true);
+    try {
+      const qs = statusFilter && statusFilter !== 'all' ? `?status=${statusFilter}` : '';
+      const res = await fetch(`${API_URL}/admin/webhook-log${qs}`, { credentials: 'include' });
+      if (res.ok) { const d = await res.json(); setEntries(d.entries || []); }
+    } catch (_) {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(filter); }, [filter]);
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const iv = setInterval(() => load(filter), 10000);
+    return () => clearInterval(iv);
+  }, [autoRefresh, filter]);
+
+  const STATUS_COLORS = {
+    ok:          'var(--win)',
+    error:       'var(--loss)',
+    auth_fail:   '#f59e0b',
+    parse_error: '#f59e0b',
+    skipped:     'var(--text-tertiary)',
+  };
+  const STATUS_LABELS = { ok: 'OK', error: 'Fehler', auth_fail: 'Auth-Fehler', parse_error: 'Parse-Fehler', skipped: 'Übersprungen' };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className="card">
+        <div className="card-head">
+          <Icon name="signal" className="ico"/><h3>Webhook-Eingänge</h3>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <label style={{ fontSize: 12, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)}/>
+              Auto (10s)
+            </label>
+            <button className="btn btn-ghost btn-sm" onClick={() => load(filter)}>
+              <Icon name="refresh" size={13}/> Aktualisieren
+            </button>
+          </div>
+        </div>
+        <div className="card-body">
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+            {['all', 'ok', 'error', 'auth_fail', 'parse_error', 'skipped'].map(s => (
+              <button key={s}
+                onClick={() => setFilter(s)}
+                style={{
+                  padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: filter === s ? 700 : 400,
+                  border: `1px solid ${filter === s ? 'rgba(59,130,246,.4)' : 'var(--border)'}`,
+                  background: filter === s ? 'rgba(59,130,246,.08)' : 'var(--bg-2)',
+                  color: filter === s ? 'var(--blue-400)' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                {s === 'all' ? 'Alle' : (STATUS_LABELS[s] || s)}
+              </button>
+            ))}
+          </div>
+
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 32, color: 'var(--text-tertiary)' }}><div className="spinner-sm" style={{ margin: '0 auto' }}/></div>
+          ) : entries.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 32, color: 'var(--text-tertiary)', fontSize: 13 }}>
+              Keine Einträge {filter !== 'all' ? `für Filter "${STATUS_LABELS[filter] || filter}"` : ''}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {entries.map(e => (
+                <div key={e.id}>
+                  <div
+                    onClick={() => setExpanded(expanded === e.id ? null : e.id)}
+                    style={{
+                      display: 'grid', gridTemplateColumns: '140px 80px 90px 1fr 60px',
+                      gap: 10, alignItems: 'center', padding: '8px 12px',
+                      background: 'var(--bg-2)', borderRadius: expanded === e.id ? '8px 8px 0 0' : 8,
+                      cursor: 'pointer', border: '1px solid var(--border)',
+                      borderBottom: expanded === e.id ? '1px solid transparent' : undefined,
+                    }}
+                  >
+                    <span className="mono muted" style={{ fontSize: 11 }}>
+                      {new Date(e.received_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: STATUS_COLORS[e.status] || 'var(--text-primary)' }}>
+                      {STATUS_LABELS[e.status] || e.status}
+                    </span>
+                    <span className="mono" style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{e.event_type || '–'}</span>
+                    <span style={{ fontSize: 12, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {e.symbol || (e.error_msg ? `⚠️ ${e.error_msg}` : '–')}
+                    </span>
+                    <span className="mono muted" style={{ fontSize: 11, textAlign: 'right' }}>
+                      {e.response_ms != null ? `${e.response_ms}ms` : '–'}
+                    </span>
+                  </div>
+                  {expanded === e.id && (
+                    <div style={{ padding: '12px 14px', background: 'var(--bg-3)', borderRadius: '0 0 8px 8px', border: '1px solid var(--border)', borderTop: 'none' }}>
+                      {e.error_msg && (
+                        <div style={{ marginBottom: 10, padding: '8px 12px', background: 'var(--bg-error)', borderRadius: 6, fontSize: 12, color: 'var(--loss)' }}>
+                          {e.error_msg}
+                        </div>
+                      )}
+                      <pre style={{ margin: 0, fontSize: 11, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 300, overflowY: 'auto', fontFamily: 'var(--font-mono)' }}>
+                        {e.raw_payload ? JSON.stringify(JSON.parse(e.raw_payload), null, 2) : '(kein Payload)'}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <p style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 10 }}>
+            Letzte 100 Einträge · max. 500 gespeichert · PRICE_UPDATE wird nicht geloggt
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 window.AdminPage = AdminPage;
+window.CapitalResetCard = CapitalResetCard;
+window.AdminWebhookLogPanel = AdminWebhookLogPanel;
