@@ -67,6 +67,53 @@ def export_combined(frames: dict[str, pd.DataFrame], fmt: str = "parquet") -> Pa
     return path
 
 
+def export_json_summary(frames: dict[str, pd.DataFrame], output_path: Path) -> dict:
+    """
+    Write a structured JSON summary of backtest results and return the dict.
+    Used by the GitHub Actions workflow to commit a timestamped report.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    summary: dict = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "total_candidates": 0,
+        "strategies": {},
+    }
+
+    for strategy_key, df in frames.items():
+        if df.empty:
+            summary["strategies"][strategy_key] = {"candidates": 0}
+            continue
+
+        n           = len(df)
+        wins        = int(df["win"].sum())
+        win_rate    = round(wins / n * 100, 2) if n else 0.0
+        avg_pnl     = round(float(df["pnl_pct"].mean()), 4)
+        tp1_rate    = round(float(df["tp1_hit"].mean() * 100), 2)
+        timeout_pct = round(float((df["outcome"] == "TIMEOUT").mean() * 100), 2)
+        outcomes    = df["outcome"].value_counts().to_dict()
+        symbols     = df["symbol"].value_counts().to_dict() if "symbol" in df.columns else {}
+
+        summary["strategies"][strategy_key] = {
+            "candidates": n,
+            "wins":       wins,
+            "win_rate":   win_rate,
+            "avg_pnl":    avg_pnl,
+            "tp1_rate":   tp1_rate,
+            "timeout_pct": timeout_pct,
+            "outcomes":   outcomes,
+            "symbols":    symbols,
+        }
+        summary["total_candidates"] += n
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(summary, indent=2))
+    print(f"  [export] JSON summary → {output_path}")
+    return summary
+
+
 def print_validation_report(frames: dict[str, pd.DataFrame]) -> None:
     """Print a human-readable summary after the first run (Aufgabe 5)."""
     print("\n" + "=" * 65)
