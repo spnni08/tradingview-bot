@@ -1,0 +1,319 @@
+// Tests für das Kandidaten-Score-System (scoreCandidate pro Strategie).
+//
+// Abgedeckt:
+//   1. Score-Berechnung pro Strategie mit Beispiel-Payloads
+//   2. Schwellenwert-Entscheidung (knapp drüber / knapp drunter)
+//   3. Korrektheit der Details-Aufschlüsselung
+//   4. Custom-Weights-Override (_threshold)
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { scoreCandidate, CANDIDATE_SCORING_DEFAULTS } from '../worker.js';
+
+// ── Imports prüfen ───────────────────────────────────────────────────────────
+test('scoreCandidate und CANDIDATE_SCORING_DEFAULTS sind exportiert', () => {
+  assert.equal(typeof scoreCandidate, 'function');
+  assert.equal(typeof CANDIDATE_SCORING_DEFAULTS, 'object');
+  assert.ok('crypto_baseline' in CANDIDATE_SCORING_DEFAULTS);
+  assert.ok('crypto_sr_volume' in CANDIDATE_SCORING_DEFAULTS);
+  assert.ok('crypto_orderflow_breakout' in CANDIDATE_SCORING_DEFAULTS);
+  assert.ok('forex_sr_fib_rsi' in CANDIDATE_SCORING_DEFAULTS);
+});
+
+// ══════════════════════════════════════════════════════════════
+// crypto_baseline
+// ══════════════════════════════════════════════════════════════
+
+test('crypto_baseline: optimaler LONG (EMA sweet-spot + nearSup, kein DeadZone) → hoher Score', () => {
+  const result = scoreCandidate('crypto_baseline', {
+    direction: 'LONG',
+    rsi: 38,            // außerhalb Dead-Zone (55-65)
+    emaDistPct: 0.9,    // sweet-spot 0.5-1.3%
+    nearSup: true,
+    nearRes: false,
+  });
+  assert.equal(result.threshold, 60);
+  // base 50 + sweet-spot 20 + nearSup 12 = 82
+  assert.equal(result.score, 82);
+  assert.equal(result.details.ema_dist, CANDIDATE_SCORING_DEFAULTS.crypto_baseline.weights.ema_dist_sweet_spot);
+  assert.equal(result.details.near_sup, CANDIDATE_SCORING_DEFAULTS.crypto_baseline.weights.near_sup_long);
+  assert.ok(!result.details.rsi_dead_zone);
+});
+
+test('crypto_baseline: RSI Dead-Zone LONG (RSI 60) → Strafe -15', () => {
+  const result = scoreCandidate('crypto_baseline', {
+    direction: 'LONG',
+    rsi: 60,            // in Dead-Zone 55-65
+    emaDistPct: 0.9,
+  });
+  // base 50 + sweet-spot 20 - dead-zone 15 = 55
+  assert.equal(result.score, 55);
+  assert.equal(result.details.rsi_dead_zone, CANDIDATE_SCORING_DEFAULTS.crypto_baseline.weights.rsi_dead_zone_penalty);
+});
+
+test('crypto_baseline: Pine sendet rsiDeadZone=1 explizit → Strafe wird angewendet', () => {
+  const result = scoreCandidate('crypto_baseline', {
+    direction: 'LONG',
+    rsi: 45,            // RSI wäre außerhalb Dead-Zone…
+    rsiDeadZone: 1,     // …aber Pine sagt explizit Dead-Zone
+    emaDistPct: 0.9,
+  });
+  assert.ok(result.details.rsi_dead_zone != null);
+  assert.equal(result.details.rsi_dead_zone, CANDIDATE_SCORING_DEFAULTS.crypto_baseline.weights.rsi_dead_zone_penalty);
+});
+
+test('crypto_baseline: EMA zu nah (0.3%) → Strafe -12', () => {
+  const result = scoreCandidate('crypto_baseline', {
+    direction: 'LONG',
+    rsi: 38,
+    emaDistPct: 0.3,    // < 0.5 %
+  });
+  // base 50 - 12 = 38
+  assert.equal(result.score, 38);
+  assert.equal(result.details.ema_dist, CANDIDATE_SCORING_DEFAULTS.crypto_baseline.weights.ema_dist_too_close);
+});
+
+test('crypto_baseline: EMA zu weit (3.0%) → Strafe -8', () => {
+  const result = scoreCandidate('crypto_baseline', {
+    direction: 'LONG',
+    rsi: 38,
+    emaDistPct: 3.0,    // > 2.5 %
+  });
+  // base 50 - 8 = 42
+  assert.equal(result.score, 42);
+  assert.equal(result.details.ema_dist, CANDIDATE_SCORING_DEFAULTS.crypto_baseline.weights.ema_dist_too_far);
+});
+
+test('crypto_baseline: LONG + Resistance overhead → Gegenwind-Strafe -8', () => {
+  const result = scoreCandidate('crypto_baseline', {
+    direction: 'LONG',
+    rsi: 38,
+    emaDistPct: 0.9,
+    nearSup: false,
+    nearRes: true,      // Resistance direkt über dem Preis
+  });
+  // base 50 + sweet-spot 20 - near_res_penalty 8 = 62
+  assert.equal(result.score, 62);
+  assert.equal(result.details.near_res, CANDIDATE_SCORING_DEFAULTS.crypto_baseline.weights.near_res_long_penalty);
+});
+
+// Schwellenwert-Grenzfall
+test('crypto_baseline: Score knapp über Threshold (61 ≥ 60) → passiert', () => {
+  // sweet-spot (20) + nearSup (12) = base 50 + 32 - dead-zone 15 = 67? nein:
+  // Wir bauen ein Szenario mit genau 61.
+  // base 50 + ema_acceptable (8) + nearSup (12) = 70; zu hoch. Probiere ohne nearSup:
+  // base 50 + ema_acceptable (8) = 58 < 60 → zu niedrig.
+  // base 50 + ema_acceptable (8) + nearSup (12) - dead-zone (15) = 55 (nein)
+  // Einfachster Weg: custom weight
+  const result = scoreCandidate('crypto_baseline', {
+    direction: 'LONG',
+    rsi: 38,
+    emaDistPct: 0.9,    // sweet-spot +20
+    nearSup: false,
+    nearRes: false,
+  }, { ema_dist_sweet_spot: 11 }); // 50+11=61 → knapp über 60
+  assert.equal(result.score, 61);
+  assert.ok(result.score >= result.threshold, 'score knapp über threshold → würde Trade öffnen');
+});
+
+test('crypto_baseline: Score knapp unter Threshold (59 < 60) → abgelehnt', () => {
+  const result = scoreCandidate('crypto_baseline', {
+    direction: 'LONG',
+    rsi: 38,
+    emaDistPct: 0.9,
+  }, { ema_dist_sweet_spot: 9 }); // 50+9=59 → knapp unter 60
+  assert.equal(result.score, 59);
+  assert.ok(result.score < result.threshold, 'score knapp unter threshold → Kandidat abgelehnt');
+});
+
+// ══════════════════════════════════════════════════════════════
+// crypto_sr_volume
+// ══════════════════════════════════════════════════════════════
+
+test('crypto_sr_volume: echter Reclaim + oversold + rising + trendOk → hoher Score', () => {
+  const result = scoreCandidate('crypto_sr_volume', {
+    direction: 'LONG',
+    reclaim: true,
+    rsiWasOversold: true,
+    rsiRising: true,
+    trendOk: true,
+  });
+  // base 40 + reclaim 25 + oversold 10 + rising 8 + trendOk 10 = 93
+  assert.equal(result.score, 93);
+  assert.equal(result.details.reclaim, CANDIDATE_SCORING_DEFAULTS.crypto_sr_volume.weights.reclaim);
+  assert.equal(result.details.rsi_was_oversold, CANDIDATE_SCORING_DEFAULTS.crypto_sr_volume.weights.rsi_was_oversold);
+  assert.equal(result.details.rsi_rising, CANDIDATE_SCORING_DEFAULTS.crypto_sr_volume.weights.rsi_rising);
+  assert.equal(result.details.trend_ok, CANDIDATE_SCORING_DEFAULTS.crypto_sr_volume.weights.trend_ok);
+});
+
+test('crypto_sr_volume: nur Touch ohne Reclaim und ohne Kontext → niedriger Score (Basiswert)', () => {
+  const result = scoreCandidate('crypto_sr_volume', {
+    direction: 'LONG',
+    reclaim: false,
+  });
+  // base 40, kein Bonus
+  assert.equal(result.score, 40);
+  assert.ok(result.score < result.threshold, 'reiner Touch ohne Reclaim fällt unter Threshold');
+});
+
+test('crypto_sr_volume: breakdown SHORT mit rsiFalling → solider Score', () => {
+  const result = scoreCandidate('crypto_sr_volume', {
+    direction: 'SHORT',
+    breakdown: true,
+    rsiWasOverbought: true,
+    rsiFalling: true,
+  });
+  // base 40 + breakdown 25 + overbought 10 + falling 8 = 83
+  assert.equal(result.score, 83);
+  assert.ok(result.score >= result.threshold);
+});
+
+test('crypto_sr_volume: snake_case Felder (rsi_was_oversold, rsi_rising) werden erkannt', () => {
+  const result = scoreCandidate('crypto_sr_volume', {
+    direction: 'LONG',
+    reclaim: true,
+    rsi_was_oversold: true,
+    rsi_rising: true,
+  });
+  assert.ok(result.details.rsi_was_oversold != null);
+  assert.ok(result.details.rsi_rising != null);
+});
+
+// ══════════════════════════════════════════════════════════════
+// crypto_orderflow_breakout
+// ══════════════════════════════════════════════════════════════
+
+test('crypto_orderflow_breakout: echter Breakout nach oben + volRatio 2.5 + trendOk → sehr hoher Score', () => {
+  const result = scoreCandidate('crypto_orderflow_breakout', {
+    direction: 'LONG',
+    breakoutAboveRange: true,
+    volRatio: 2.5,      // >= 2.0 → vol_ratio_high
+    trendOk: true,
+  });
+  // base 35 + breakout 30 + vol_high 20 + trendOk 10 = 95
+  assert.equal(result.score, 95);
+  assert.equal(result.details.breakout_above_range, CANDIDATE_SCORING_DEFAULTS.crypto_orderflow_breakout.weights.breakout_above_range);
+  assert.equal(result.details.vol_ratio, CANDIDATE_SCORING_DEFAULTS.crypto_orderflow_breakout.weights.vol_ratio_high);
+});
+
+test('crypto_orderflow_breakout: Volumen-Spike ohne echten Breakout → schwacher Score', () => {
+  const result = scoreCandidate('crypto_orderflow_breakout', {
+    direction: 'LONG',
+    breakoutAboveRange: false,
+    volRatio: 2.5,      // hohes Volumen, aber kein Breakout
+  });
+  // base 35 + vol_high 20 = 55 < 60
+  assert.equal(result.score, 55);
+  assert.ok(result.score < result.threshold, 'reiner Vol-Spike ohne Breakout fällt unter Threshold');
+});
+
+test('crypto_orderflow_breakout: niedriger volRatio (<1.5) → Strafe -5', () => {
+  const result = scoreCandidate('crypto_orderflow_breakout', {
+    direction: 'LONG',
+    breakoutAboveRange: true,
+    volRatio: 1.2,
+  });
+  // base 35 + breakout 30 - vol_low_penalty 5 = 60
+  assert.equal(result.score, 60);
+  assert.equal(result.details.vol_ratio, CANDIDATE_SCORING_DEFAULTS.crypto_orderflow_breakout.weights.vol_ratio_low_penalty);
+});
+
+// ══════════════════════════════════════════════════════════════
+// forex_sr_fib_rsi
+// ══════════════════════════════════════════════════════════════
+
+test('forex_sr_fib_rsi: reclaimVAL LONG + sehr geringer Abstand → hoher Score', () => {
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'LONG',
+    reclaimVAL: true,
+    distToVAL: 0.05,    // < 0.1 % → sehr nah
+  });
+  // base 35 + reclaimVAL 30 + dist_very_close 15 = 80
+  assert.equal(result.score, 80);
+  assert.equal(result.details.reclaim_val, CANDIDATE_SCORING_DEFAULTS.forex_sr_fib_rsi.weights.reclaim_val);
+  assert.equal(result.details.dist_to_level, CANDIDATE_SCORING_DEFAULTS.forex_sr_fib_rsi.weights.dist_very_close);
+});
+
+test('forex_sr_fib_rsi: breakdownVAH SHORT + mittlerer Abstand → solider Score', () => {
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'SHORT',
+    breakdownVAH: true,
+    distToVAH: 0.2,     // 0.1–0.3 % → dist_close
+  });
+  // base 35 + breakdownVAH 30 + dist_close 5 = 70
+  assert.equal(result.score, 70);
+  assert.ok(result.score >= result.threshold);
+});
+
+test('forex_sr_fib_rsi: kein Reclaim/Breakdown → nur Basiswert 35 < Threshold', () => {
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'LONG',
+    reclaimVAL: false,
+  });
+  assert.equal(result.score, 35);
+  assert.ok(result.score < result.threshold);
+});
+
+test('forex_sr_fib_rsi: snake_case Felder (reclaim_val, dist_to_val) werden erkannt', () => {
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'LONG',
+    reclaim_val: true,
+    dist_to_val: 0.05,
+  });
+  assert.equal(result.score, 80);
+});
+
+// ══════════════════════════════════════════════════════════════
+// Sonderfälle
+// ══════════════════════════════════════════════════════════════
+
+test('unbekannter strategyKey → Fallback-Score 50, threshold 60', () => {
+  const result = scoreCandidate('unknown_strategy', { direction: 'LONG' });
+  assert.equal(result.score, 50);
+  assert.equal(result.threshold, 60);
+  assert.deepEqual(result.details, {});
+});
+
+test('Score wird auf 0–100 geclampt (kein Unter-/Überlauf)', () => {
+  // Alle positiven Gewichte addieren → muss ≤ 100 bleiben
+  const high = scoreCandidate('crypto_sr_volume', {
+    direction: 'LONG',
+    reclaim: true,
+    rsiWasOversold: true,
+    rsiRising: true,
+    trendOk: true,
+    rsiWasOverbought: true, // doppelt, irrelevant für Richtung
+  });
+  assert.ok(high.score <= 100);
+
+  // Alles negativ (crypto_baseline) → muss ≥ 0 bleiben
+  const low = scoreCandidate('crypto_baseline', {
+    direction: 'LONG',
+    rsi: 60,             // dead-zone
+    emaDistPct: 0.1,     // too_close
+    nearRes: true,       // adverse
+  }, {
+    ema_dist_too_close:    -50,
+    rsi_dead_zone_penalty: -50,
+    near_res_long_penalty: -50,
+  });
+  assert.ok(low.score >= 0);
+});
+
+test('custom _threshold im Override wird respektiert', () => {
+  const result = scoreCandidate('crypto_baseline', {
+    direction: 'LONG',
+    emaDistPct: 0.9,     // sweet-spot +20 → score 70
+  }, { _threshold: 75 }); // custom threshold
+  assert.equal(result.threshold, 75);
+  assert.ok(result.score < result.threshold, 'custom threshold 75 → score 70 < 75 = abgelehnt');
+});
+
+test('Alle 4 Strategien haben sinnvolle Default-Schwellenwerte (>0, ≤100)', () => {
+  for (const [key, cfg] of Object.entries(CANDIDATE_SCORING_DEFAULTS)) {
+    assert.ok(cfg.threshold > 0 && cfg.threshold <= 100, `${key}: threshold muss 1-100 sein`);
+    assert.ok(cfg.base >= 0, `${key}: base muss ≥ 0 sein`);
+    assert.equal(typeof cfg.weights, 'object', `${key}: weights muss ein Objekt sein`);
+  }
+});
