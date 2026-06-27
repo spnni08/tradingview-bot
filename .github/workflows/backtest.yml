@@ -1,0 +1,133 @@
+name: WAVESCOUT Backtest
+
+on:
+  schedule:
+    # Every Sunday at 03:00 UTC
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      months:
+        description: "Lookback in months"
+        required: false
+        default: "9"
+      symbols:
+        description: "Crypto symbols (space-separated, leave blank for all)"
+        required: false
+        default: ""
+      strategies:
+        description: "Strategies (space-separated, leave blank for all)"
+        required: false
+        default: ""
+      no_forex:
+        description: "Skip forex (no Alpha Vantage key needed)"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  backtest:
+    name: Run Backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    permissions:
+      contents: write   # needed to commit the JSON report
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so we can commit results back
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backtest/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r backtest/requirements.txt
+
+      # ── Build run arguments ─────────────────────────────────────────────────
+      - name: Compute run arguments
+        id: args
+        run: |
+          MONTHS="${{ github.event.inputs.months || '9' }}"
+          SYMBOLS="${{ github.event.inputs.symbols || '' }}"
+          STRATS="${{ github.event.inputs.strategies || '' }}"
+          NO_FOREX="${{ github.event.inputs.no_forex || 'false' }}"
+          TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
+
+          EXTRA_ARGS=""
+          [ -n "$SYMBOLS"   ] && EXTRA_ARGS="$EXTRA_ARGS --symbols $SYMBOLS"
+          [ -n "$STRATS"    ] && EXTRA_ARGS="$EXTRA_ARGS --strategies $STRATS"
+          [ "$NO_FOREX" = "true" ] && EXTRA_ARGS="$EXTRA_ARGS --no-forex"
+
+          echo "months=$MONTHS"         >> "$GITHUB_OUTPUT"
+          echo "extra_args=$EXTRA_ARGS" >> "$GITHUB_OUTPUT"
+          echo "timestamp=$TIMESTAMP"   >> "$GITHUB_OUTPUT"
+          echo "report_path=backtest/results/${TIMESTAMP}.json" >> "$GITHUB_OUTPUT"
+
+      # ── Run backtest ────────────────────────────────────────────────────────
+      - name: Run backtest
+        env:
+          ALPHA_VANTAGE_KEY: ${{ secrets.ALPHA_VANTAGE_KEY }}
+        run: |
+          cd backtest
+          python run.py \
+            --months ${{ steps.args.outputs.months }} \
+            --no-progress \
+            --fail-on-empty \
+            --json-summary "../${{ steps.args.outputs.report_path }}" \
+            ${{ steps.args.outputs.extra_args }}
+
+      # ── Upload output as artifact ───────────────────────────────────────────
+      - name: Upload output artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-output-${{ steps.args.outputs.timestamp }}
+          path: backtest/output/
+          retention-days: 90
+          if-no-files-found: warn
+
+      # ── Commit JSON report ──────────────────────────────────────────────────
+      - name: Commit validation report
+        if: success()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${{ steps.args.outputs.report_path }}"
+          git diff --cached --quiet && echo "Nothing to commit" && exit 0
+          git commit -m "chore: backtest report ${{ steps.args.outputs.timestamp }}"
+          git push
+
+      # ── Telegram notification ───────────────────────────────────────────────
+      - name: Notify via Telegram
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          STATUS="${{ job.status }}"
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets not configured — skipping notification"
+            exit 0
+          fi
+
+          if [ "$STATUS" = "success" ]; then
+            ICON="✅"
+          else
+            ICON="❌"
+          fi
+
+          MSG="${ICON} *WAVESCOUT Backtest* \`$STATUS\`
+          Run: \`${{ steps.args.outputs.timestamp }}\`
+          Branch: \`${{ github.ref_name }}\`
+          Trigger: \`${{ github.event_name }}\`"
+
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"${TELEGRAM_CHAT_ID}\",\"text\":\"${MSG}\",\"parse_mode\":\"Markdown\"}"

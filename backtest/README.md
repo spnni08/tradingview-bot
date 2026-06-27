@@ -114,6 +114,43 @@ backtest/
 | `bars_held` | Candles until exit |
 | Strategy-specific context | `ema_dist_pct`, `near_sup`, `reclaim`, `vol_ratio`, `dist_to_val`, … |
 
+## GitHub Actions (automated backtest)
+
+The workflow at `.github/workflows/backtest.yml` runs every **Sunday at 03:00 UTC**
+and can also be triggered manually from the *Actions* tab.
+
+### Required secrets
+
+| Secret | Description |
+|---|---|
+| `ALPHA_VANTAGE_KEY` | Free key from [alphavantage.co](https://www.alphavantage.co/support/#api-key) — required for EUR/USD data |
+| `TELEGRAM_BOT_TOKEN` | Optional — bot token for run notifications |
+| `TELEGRAM_CHAT_ID` | Optional — chat/channel ID to send notifications to |
+
+Add secrets at **Settings → Secrets and variables → Actions → New repository secret**.
+
+### Manual trigger
+
+1. Go to **Actions → WAVESCOUT Backtest → Run workflow**
+2. Fill in optional inputs:
+   - **Lookback in months** (default 9)
+   - **Crypto symbols** — e.g. `BTC/USDT ETH/USDT` (blank = all)
+   - **Strategies** — e.g. `crypto_baseline` (blank = all)
+   - **Skip forex** — check to run without an Alpha Vantage key
+
+### Outputs
+
+- **Artifact** `backtest-output-<timestamp>` — Parquet/CSV files, retained 90 days
+- **Committed report** `backtest/results/<timestamp>.json` — per-strategy win rate, avg PnL, outcome counts
+
+### Fail-fast behaviour
+
+The workflow exits with code 1 and marks the run **failed** if:
+- All strategies produce 0 candidates (data fetch likely failed)
+- Any uncaught exception is raised during data fetching
+
+This prevents silent green runs where nothing was actually computed.
+
 ## Tests
 
 ```bash
