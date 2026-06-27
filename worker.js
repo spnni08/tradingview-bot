@@ -1720,6 +1720,7 @@ async function ensureTables(env) {
       // Multi-Strategie + Asset-Class (AUFGABE 1+2):
       ['asset_class',          'TEXT'],               // 'crypto' | 'forex'
       ['strategy_key',         'TEXT'],               // Routing-Strategie (z.B. crypto_sr_volume)
+      ['exit_reason',          'TEXT'],               // TP2 | SL_before_TP1 | SL_after_TP1 | MANUAL | ADMIN
     ];
     for (const [col, type] of signalIndicatorCols) {
       try { await env.DB.prepare(`ALTER TABLE signals ADD COLUMN ${col} ${type}`).run(); }
@@ -1800,9 +1801,49 @@ async function ensureTables(env) {
       )
     `).run();
 
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS webhook_log (
+        id TEXT PRIMARY KEY,
+        received_at INTEGER NOT NULL,
+        event_type TEXT,
+        symbol TEXT,
+        raw_payload TEXT,
+        status TEXT NOT NULL,
+        error_msg TEXT,
+        response_ms INTEGER
+      )
+    `).run();
+
     _tablesReady = true;
   } catch (error) {
     console.error('❌ ensureTables error:', error.message);
+  }
+}
+
+// ─── Webhook-Log ─────────────────────────────────────────────
+async function logWebhookRequest(env, { receivedAt, eventType, symbol, rawPayload, status, errorMsg, responseMs }) {
+  try {
+    const id = `whl_${receivedAt}_${Math.random().toString(36).slice(2, 8)}`;
+    await env.DB.prepare(`
+      INSERT INTO webhook_log (id, received_at, event_type, symbol, raw_payload, status, error_msg, response_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      id, receivedAt,
+      eventType || null,
+      symbol || null,
+      rawPayload ? rawPayload.substring(0, 2000) : null,
+      status,
+      errorMsg || null,
+      responseMs || null
+    ).run();
+    // Keep last 500 entries — delete oldest beyond that
+    await env.DB.prepare(`
+      DELETE FROM webhook_log WHERE id NOT IN (
+        SELECT id FROM webhook_log ORDER BY received_at DESC LIMIT 500
+      )
+    `).run();
+  } catch (e) {
+    console.error('webhook_log write failed:', e.message);
   }
 }
 
@@ -2073,6 +2114,7 @@ async function closeTrade(env, {
   pnlPct,
   outcomeSource = 'auto',
   telegramOutcomeSent = null, // null = leave column untouched
+  exitReason = null,          // 'TP2' | 'SL_before_TP1' | 'SL_after_TP1' | 'MANUAL' | 'ADMIN'
 } = {}) {
   if (!signalId && !practiceTradeId) return { closedSignal: false, closedPracticeTrade: false };
 
@@ -2097,6 +2139,7 @@ async function closeTrade(env, {
     const sets  = ['outcome = ?', 'exit_price = ?', 'pnl_pct = ?', 'closed_at = ?', 'outcome_source = ?', 'updated_at = ?'];
     const binds = [outcome, exitPrice, pnlPct, nowMs, outcomeSource, nowMs];
     if (telegramOutcomeSent !== null) { sets.push('telegram_outcome_sent = ?'); binds.push(telegramOutcomeSent); }
+    if (exitReason !== null)          { sets.push('exit_reason = ?');           binds.push(exitReason); }
     binds.push(resolvedSignalId);
     signalIdx = stmts.length;
     stmts.push(env.DB.prepare(`UPDATE signals SET ${sets.join(', ')} WHERE id = ? AND outcome = 'OPEN'`).bind(...binds));
@@ -3344,13 +3387,17 @@ async function applySignalExit(env, signal, price) {
     const pnlPct    = decision.finalPct;
     const duration  = formatDuration(Date.now() - (signal.created_at || Date.now()));
 
+    const exitReason = decision.action === 'TP2_FINAL'
+      ? 'TP2'
+      : (tp1Hit ? 'SL_after_TP1' : 'SL_before_TP1');
     const closeResult = await closeTrade(env, {
       signalId: signal.id,
       outcome: decision.outcome,
       exitPrice,
       pnlPct: parseFloat(pnlPct.toFixed(2)),
       outcomeSource: 'auto',
-      telegramOutcomeSent: 1
+      telegramOutcomeSent: 1,
+      exitReason,
     });
 
     // Skip the notification if a concurrent path already closed this signal first.
@@ -6458,6 +6505,34 @@ export default {
         });
       }
 
+      if (request.method === "GET" && url.pathname === "/admin/capital-log") {
+        const session = await validateSession(env, request);
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const rows = await env.DB.prepare(`SELECT * FROM capital_reset_log ORDER BY created_at DESC LIMIT 20`).all();
+          return jsonResponse({ success: true, entries: rows.results || [] });
+        } catch (e) {
+          return jsonResponse({ success: false, error: e.message }, 500);
+        }
+      }
+
+      if (request.method === "GET" && url.pathname === "/admin/webhook-log") {
+        const session = await validateSession(env, request);
+        if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
+        try {
+          const limit  = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 500);
+          const status = url.searchParams.get('status') || null; // filter: ok | error | auth_fail | skipped | parse_error
+          const query  = status
+            ? `SELECT * FROM webhook_log WHERE status = ? ORDER BY received_at DESC LIMIT ?`
+            : `SELECT * FROM webhook_log ORDER BY received_at DESC LIMIT ?`;
+          const binds  = status ? [status, limit] : [limit];
+          const rows   = await env.DB.prepare(query).bind(...binds).all();
+          return jsonResponse({ success: true, entries: rows.results || [], total: (rows.results || []).length });
+        } catch (e) {
+          return jsonResponse({ success: false, error: e.message }, 500);
+        }
+      }
+
       if (request.method === "POST" && url.pathname.startsWith("/admin/check-trade/")) {
         const session = await validateSession(env, request);
         if (!session || session.role !== 'admin') return jsonResponse({ error: "Unauthorized" }, 401);
@@ -7311,6 +7386,7 @@ export default {
       // ── WEBHOOK (TradingView) ────────────────────────────────
 
       if (request.method === "POST" && url.pathname === "/webhook") {
+        const webhookStart = Date.now();
         // Secret can come from three sources (checked after body parsing):
         //   1. X-Webhook-Secret header  (recommended — never logged)
         //   2. JSON body field "secret"  (acceptable)
@@ -7325,6 +7401,7 @@ export default {
           rawBody = await request.text();
         } catch (readErr) {
           console.error('❌ Failed to read request body:', readErr.message);
+          ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, status: 'parse_error', errorMsg: 'Failed to read body', responseMs: Date.now() - webhookStart }));
           return jsonResponse({ error: 'Failed to read body' }, 400);
         }
 
@@ -7333,6 +7410,7 @@ export default {
           console.log('📦 Parsed payload:', JSON.stringify(payload).substring(0, 500));
         } catch (parseErr) {
           console.error('❌ JSON parse error:', parseErr.message);
+          ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, status: 'parse_error', rawPayload: rawBody, errorMsg: parseErr.message, responseMs: Date.now() - webhookStart }));
           return jsonResponse({ error: 'Invalid JSON' }, 400);
         }
 
@@ -7343,6 +7421,7 @@ export default {
                                || urlSecret;
           if (effectiveSecret !== env.WEBHOOK_SECRET) {
             console.warn('⛔ Webhook: wrong or missing secret');
+            ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType: payload.event_type, symbol: payload.symbol, rawPayload: rawBody, status: 'auth_fail', errorMsg: 'Wrong or missing secret', responseMs: Date.now() - webhookStart }));
             return jsonResponse({ error: "Unauthorized" }, 401);
           }
         }
@@ -7357,6 +7436,7 @@ export default {
             ctx.waitUntil(
               saveSnapshot(env, payload).catch(err => console.error('❌ SNAPSHOT async save failed:', err?.message || err))
             );
+            ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload.symbol, rawPayload: JSON.stringify(payload), status: 'ok', responseMs: Date.now() - webhookStart }));
             return jsonResponse({ success: true, type: 'SNAPSHOT', message: 'Snapshot accepted' });
           }
 
@@ -7364,6 +7444,7 @@ export default {
             ctx.waitUntil(
               handlePriceUpdate(env, payload).catch(err => console.error('❌ PRICE_UPDATE async failed:', err?.message || err))
             );
+            // PRICE_UPDATE kommt sehr häufig — nicht loggen, um DB-Rotation nicht zu überlasten
             return jsonResponse({ success: true, type: 'PRICE_UPDATE', message: 'Price update accepted' });
           }
 
@@ -7372,6 +7453,7 @@ export default {
             const action    = normalizeAction(payload);
             if (!direction) {
               console.log('⏭️ SIGNAL_NEW skipped — no recognisable direction:', JSON.stringify(payload).substring(0, 300));
+              ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload.symbol, rawPayload: JSON.stringify(payload), status: 'skipped', errorMsg: 'no_actionable_direction', responseMs: Date.now() - webhookStart }));
               return jsonResponse({ success: true, type: 'SIGNAL_NEW', status: 'skipped', reason: 'no_actionable_direction', direction, action });
             }
             // Sofortige 200-Response — Verarbeitung läuft asynchron weiter.
@@ -7384,13 +7466,16 @@ export default {
                 .then(result => console.log(`✅ processSignal done in ${Date.now() - signalTs}ms:`, result?.status || result?.outcome || 'ok'))
                 .catch(err   => console.error('❌ processSignal async error:', err?.message || err, err?.stack))
             );
+            ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload.symbol, rawPayload: JSON.stringify(payload), status: 'ok', responseMs: Date.now() - webhookStart }));
             return jsonResponse({ success: true, type: 'SIGNAL_NEW', status: 'received', symbol: payload.symbol, direction });
           }
 
+          ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload.symbol, rawPayload: JSON.stringify(payload), status: 'ok', responseMs: Date.now() - webhookStart }));
           return jsonResponse({ success: true, type: eventType, message: 'Unsupported event_type accepted' });
         } catch (processingErr) {
           const errMsg = processingErr?.message || String(processingErr);
           console.error('❌ Webhook processing error:', errMsg, processingErr?.stack);
+          ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload?.symbol, rawPayload: JSON.stringify(payload), status: 'error', errorMsg: errMsg, responseMs: Date.now() - webhookStart }));
           return jsonResponse({
             success: false,
             type: eventType,
