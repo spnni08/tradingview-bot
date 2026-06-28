@@ -624,7 +624,7 @@ const DashboardPage = ({ user, navigate }) => {
           label="Abgelehnt / Übersprungen"
           value={`${stats.rejected || 0} / ${stats.skipped || 0}`}
           sub={`Score zu niedrig · Session/Pause`}
-          subTone={(stats.rejected || 0) > 0 ? 'loss' : 'neutral'}
+          subTone={(stats.rejected || 0) > 0 ? 'loss' : 'muted'}
         />
         <StatCard
           label="Heute PnL"
