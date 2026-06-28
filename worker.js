@@ -2690,13 +2690,37 @@ async function processSignal(env, signal) {
   console.log(`📊 Candidate score [${strategyKey}]: ${candidateScore}/${candidateThreshold} → ${passedCandidateGate ? 'PASS' : 'REJECT'}`);
 
   if (!passedCandidateGate) {
-    // Abgelehnter Kandidat: nur speichern, kein Trade
+    console.log(`❌ Candidate rejected [${strategyKey}]: ${signal.symbol} score=${candidateScore}/${candidateThreshold} → candidate_score_too_low`);
+    // Abgelehnter Kandidat: in signal_candidates speichern (Detaildaten)
     await saveSignalCandidate(env, {
       signal, strategyKey, strategyId: strategy?.id,
       candidateScore, threshold: candidateThreshold,
       scoreDetails: candidateScoreDetails,
       passedThreshold: false, signalId: null,
     });
+    // Auch in signals-Tabelle eintragen (outcome='REJECTED') damit kein Signal
+    // lautlos verschwindet — jedes eingehende Signal muss im Dashboard sichtbar sein.
+    try {
+      const rejectedId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await env.DB.prepare(`
+        INSERT INTO signals (id, symbol, timeframe, direction, price, ai_score,
+          telegram_reason, strategy_key, asset_class, created_at, outcome, is_test, source, trigger_reason)
+        VALUES (?, ?, ?, ?, ?, ?, 'candidate_score_too_low', ?, ?, ?, 'REJECTED', 0, 'WEBHOOK', ?)
+      `).bind(
+        rejectedId,
+        signal.symbol || 'UNKNOWN',
+        String(signal.timeframe || ''),
+        direction || null,
+        signal.price ?? signal.close ?? 0,
+        candidateScore,
+        strategyKey,
+        assetClass,
+        Date.now(),
+        signal.trigger || 'WEBHOOK'
+      ).run();
+    } catch (dbErr) {
+      console.error('❌ REJECTED signal INSERT fehlgeschlagen:', dbErr.message);
+    }
     return { status: 'candidate_rejected', candidateScore, candidateThreshold, strategyKey };
   }
 
@@ -3433,12 +3457,14 @@ async function getStats(env) {
     ).first();
     if (!tableCheck) return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, expectancy: 0 };
 
-    const total   = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals`).first();
-    const wins    = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'WIN'`).first();
-    const losses  = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'LOSS'`).first();
-    const open    = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'OPEN'`).first();
-    const avgWin  = await env.DB.prepare(`SELECT AVG(pnl_pct) as a FROM signals WHERE outcome = 'WIN'`).first();
-    const avgLoss = await env.DB.prepare(`SELECT AVG(pnl_pct) as a FROM signals WHERE outcome = 'LOSS'`).first();
+    const total    = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals`).first();
+    const wins     = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'WIN'`).first();
+    const losses   = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'LOSS'`).first();
+    const open     = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'OPEN'`).first();
+    const skipped  = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'SKIPPED'`).first();
+    const rejected = await env.DB.prepare(`SELECT COUNT(*) as count FROM signals WHERE outcome = 'REJECTED'`).first();
+    const avgWin   = await env.DB.prepare(`SELECT AVG(pnl_pct) as a FROM signals WHERE outcome = 'WIN'`).first();
+    const avgLoss  = await env.DB.prepare(`SELECT AVG(pnl_pct) as a FROM signals WHERE outcome = 'LOSS'`).first();
 
     const winRate    = computeWinRate(wins.count, losses.count);
     const avgWinPct  = parseFloat((avgWin.a || 0).toFixed(2));
@@ -3450,6 +3476,8 @@ async function getStats(env) {
       wins: wins.count || 0,
       losses: losses.count || 0,
       open: open.count || 0,
+      skipped: skipped.count || 0,
+      rejected: rejected.count || 0,
       winRate,
       avgWinPct,
       avgLossPct,
@@ -4255,6 +4283,57 @@ function _renderDashboardContent(data) {
   const pnlColor = v => (v >= 0 ? 'color:var(--win)' : 'color:var(--loss)');
   const pnlSign  = v => (v >= 0 ? '+' : '');
 
+  const forexSessionWidget = `
+<div id="forex-session-bar" style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-radius:8px;background:var(--bg-1);border:1px solid var(--border);margin-bottom:16px;font-size:13px">
+  <span id="forex-session-icon" style="font-size:16px">🌐</span>
+  <div>
+    <span style="color:var(--text-tertiary);font-size:11px;text-transform:uppercase;letter-spacing:.05em">Forex-Session</span>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:1px">
+      <span id="forex-session-name" style="font-weight:700;font-size:14px">Wird geladen…</span>
+      <span id="forex-session-desc" style="color:var(--text-tertiary);font-size:11px"></span>
+    </div>
+  </div>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
+    <span id="forex-session-dot" style="width:8px;height:8px;border-radius:50%;background:#6b7280;display:inline-block"></span>
+    <span id="forex-session-time" style="font-family:var(--font-mono);font-size:12px;color:var(--text-tertiary)"></span>
+  </div>
+</div>
+<script>
+(function() {
+  function getForexSession(h, m) {
+    var t = h * 60 + m;
+    var inAsia   = t >= 0   && t < 9*60;
+    var inLondon = t >= 8*60 && t < 17*60;
+    var inNY     = t >= 13*60 && t < 22*60;
+    if (inLondon && inNY) return { name: 'London/NY-Overlap', color: '#10b981', icon: '🔥', desc: 'Höchste Liquidität · 13:00–17:00 UTC' };
+    if (inLondon)          return { name: 'London-Session',    color: '#3b82f6', icon: '🏦', desc: '08:00–17:00 UTC' };
+    if (inNY)              return { name: 'NY-Session',        color: '#f59e0b', icon: '🗽', desc: '13:00–22:00 UTC' };
+    if (inAsia)            return { name: 'Asia-Session',      color: '#8b5cf6', icon: '🌏', desc: '00:00–09:00 UTC' };
+    return { name: 'Off-Session', color: '#6b7280', icon: '😴', desc: 'Ruhige Phase' };
+  }
+  function updateForexSession() {
+    var now = new Date();
+    var h = now.getUTCHours(), mi = now.getUTCMinutes(), s = now.getUTCSeconds();
+    var sess = getForexSession(h, mi);
+    var pad2 = function(n){return n<10?'0'+n:String(n);};
+    var timeStr = pad2(h)+':'+pad2(mi)+':'+pad2(s)+' UTC';
+    var nameEl = document.getElementById('forex-session-name');
+    var descEl = document.getElementById('forex-session-desc');
+    var dotEl  = document.getElementById('forex-session-dot');
+    var iconEl = document.getElementById('forex-session-icon');
+    var timeEl = document.getElementById('forex-session-time');
+    if (nameEl) nameEl.textContent = sess.name;
+    if (nameEl) nameEl.style.color = sess.color;
+    if (descEl) descEl.textContent = sess.desc;
+    if (dotEl)  dotEl.style.background = sess.color;
+    if (iconEl) iconEl.textContent = sess.icon;
+    if (timeEl) timeEl.textContent = timeStr;
+  }
+  updateForexSession();
+  setInterval(updateForexSession, 1000);
+})();
+</script>`;
+
   const statCards = `
 <div class="grid grid-4">
   <div class="stat">
@@ -4273,9 +4352,9 @@ function _renderDashboardContent(data) {
     <div class="sub muted">${s.wins || 0}W / ${s.losses || 0}L (${s.totalTrades || 0} Total)</div>
   </div>
   <div class="stat">
-    <div class="label">Offene Trades</div>
-    <div class="value" style="font-size:22px">${s.open || 0}</div>
-    <div class="sub muted">Aktive Positionen</div>
+    <div class="label">Offene / Abgelehnte</div>
+    <div class="value" style="font-size:22px">${s.open || 0} <span style="font-size:14px;color:var(--text-tertiary)">/ ${(s.rejected || 0) + (s.skipped || 0)}</span></div>
+    <div class="sub muted">Offen · <span style="color:var(--loss)">${s.rejected || 0} abgelehnt</span> · ${s.skipped || 0} übersprungen</div>
   </div>
 </div>`;
 
@@ -4353,16 +4432,21 @@ function _renderDashboardContent(data) {
       </tr></thead>
       <tbody>
         ${latestSignals.map(sig => {
-          const dc = sig.direction === 'LONG' ? 'badge-long' : 'badge-short';
+          const dc = sig.direction === 'LONG' ? 'badge-long' : sig.direction === 'SHORT' ? 'badge-short' : '';
           const oc = sig.outcome === 'WIN' ? 'win' : sig.outcome === 'LOSS' ? 'loss' : 'muted';
-          return `<tr>
+          const outcomeLabel = sig.outcome === 'REJECTED'
+            ? `<span style="color:var(--loss);font-size:11px" title="${_esc(sig.telegram_reason || '')}">✗ Abgelehnt</span>`
+            : sig.outcome === 'SKIPPED'
+            ? `<span style="color:var(--text-tertiary);font-size:11px">⏭ Übersprungen</span>`
+            : `<span class="${oc}">${_esc(sig.outcome || 'OPEN')}</span>`;
+          return `<tr${sig.outcome === 'REJECTED' ? ' style="opacity:0.65"' : ''}>
             <td style="font-family:var(--font-mono);font-weight:600">${_esc(sig.symbol || '')}</td>
-            <td><span class="badge ${dc}">${_esc(sig.direction || '')}</span></td>
-            <td class="mono">${sig.ai_score || '—'}</td>
-            <td class="mono">${_fmtNum(sig.entry_price, 4)}</td>
-            <td class="mono" style="color:var(--win)">${_fmtNum(sig.tp_price, 4)}</td>
-            <td class="mono" style="color:var(--loss)">${_fmtNum(sig.sl_price, 4)}</td>
-            <td class="${oc}">${_esc(sig.outcome || 'OPEN')}</td>
+            <td>${sig.direction ? `<span class="badge ${dc}">${_esc(sig.direction)}</span>` : '—'}</td>
+            <td class="mono">${sig.ai_score != null ? sig.ai_score : '—'}</td>
+            <td class="mono">${_fmtNum(sig.ai_entry || sig.entry_price, 4)}</td>
+            <td class="mono" style="color:var(--win)">${_fmtNum(sig.ai_tp || sig.tp_price, 4)}</td>
+            <td class="mono" style="color:var(--loss)">${_fmtNum(sig.ai_sl || sig.sl_price, 4)}</td>
+            <td>${outcomeLabel}</td>
             <td style="font-size:11px;color:var(--text-tertiary)">${_fmtDate(sig.created_at)}</td>
           </tr>`;
         }).join('')}
@@ -4378,6 +4462,7 @@ function _renderDashboardContent(data) {
     <h2>Dashboard</h2>
     <div class="subtitle">Live Portfolio &amp; Signale — WAVESCOUT v3.5</div>
   </div>
+  ${forexSessionWidget}
   ${statCards}
   <div class="grid grid-2" style="margin-bottom:0">
     <div>${bestSignalHtml}${biasHtml}</div>
@@ -6269,7 +6354,9 @@ export default {
             totalTrades: stats.total,
             wins: stats.wins,
             losses: stats.losses,
-            open: stats.open
+            open: stats.open,
+            skipped: stats.skipped || 0,
+            rejected: stats.rejected || 0,
           },
           bestSignal: bestSignal || null,
           latestSignals,
@@ -6309,7 +6396,7 @@ export default {
             `SELECT id, symbol, direction, timeframe, price, ai_score, ai_entry, ai_tp, ai_sl,
                     ai_reason, signal_quality, risk_reward, vp_zone, vp_score, created_at, dashboard_seen
              FROM signals
-             WHERE ai_score >= 70 AND outcome != 'SKIPPED'
+             WHERE ai_score >= 70 AND outcome NOT IN ('SKIPPED', 'REJECTED')
              ORDER BY created_at DESC LIMIT ?`
           ).bind(limit).all();
           const list   = rows.results || [];
