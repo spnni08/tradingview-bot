@@ -205,6 +205,53 @@ const LIVE_INTERVAL_MS       = 30 * 1000;
 const RADAR_INTERVAL_MS      = 5  * 60 * 1000;
 const BIAS_INTERVAL_MS       = 60 * 1000;
 
+// ─── Forex Session Badge ──────────────────────────────────────
+
+function getForexSession(h, m) {
+  const t = h * 60 + m;
+  const inAsia   = t >= 0    && t < 9  * 60;
+  const inLondon = t >= 8*60 && t < 17 * 60;
+  const inNY     = t >= 13*60 && t < 22 * 60;
+  if (inLondon && inNY) return { name: 'London/NY-Overlap', color: '#10b981', icon: '🔥', border: 'rgba(16,185,129,.45)', bg: 'rgba(16,185,129,.1)' };
+  if (inLondon)          return { name: 'London',            color: '#3b82f6', icon: '🏦', border: 'rgba(59,130,246,.45)', bg: 'rgba(59,130,246,.1)' };
+  if (inNY)              return { name: 'New York',          color: '#f59e0b', icon: '🗽', border: 'rgba(245,158,11,.45)', bg: 'rgba(245,158,11,.1)' };
+  if (inAsia)            return { name: 'Asia',              color: '#8b5cf6', icon: '🌏', border: 'rgba(139,92,246,.45)', bg: 'rgba(139,92,246,.1)' };
+  return { name: 'Off-Session', color: '#6b7280', icon: '😴', border: 'rgba(107,114,128,.3)', bg: 'var(--bg-2)' };
+}
+
+function ForexSessionBadge() {
+  const [sess, setSess] = React.useState(() => {
+    const now = new Date();
+    return getForexSession(now.getUTCHours(), now.getUTCMinutes());
+  });
+
+  React.useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      setSess(getForexSession(now.getUTCHours(), now.getUTCMinutes()));
+    };
+    const id = setInterval(tick, 60 * 1000); // update every minute
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <span
+      title={`Aktuelle Forex-Session (UTC): ${sess.name}`}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
+        padding: '5px 12px', borderRadius: 20, fontWeight: 700,
+        border: `1px solid ${sess.border}`,
+        background: sess.bg,
+        color: sess.color,
+        cursor: 'default',
+      }}
+    >
+      <span>{sess.icon}</span>
+      {sess.name}
+    </span>
+  );
+}
+
 // ─── Live-Modus toggle button ─────────────────────────────────
 
 function LiveModeButton({ liveMode, onToggle, refreshing }) {
@@ -453,6 +500,12 @@ const DashboardPage = ({ user, navigate }) => {
             <h2>Guten {greeting}, {user?.username || 'Trader'}</h2>
             <p className="subtitle">
               {stats.open ?? '–'} offene Signale · {stats.totalTrades ?? '–'} Total Trades
+              {(stats.rejected > 0) && (
+                <span style={{ color: 'var(--loss)' }}> · {stats.rejected} abgelehnt</span>
+              )}
+              {(stats.skipped > 0) && (
+                <span style={{ color: 'var(--text-quaternary)' }}> · {stats.skipped} übersprungen</span>
+              )}
               {lastUpdated && (
                 <span style={{ color: 'var(--text-quaternary)' }}> · Aktualisiert {lastUpdStr}</span>
               )}
@@ -461,6 +514,9 @@ const DashboardPage = ({ user, navigate }) => {
 
           {/* Right controls */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, flexWrap: 'wrap' }}>
+            {/* Forex session indicator */}
+            <ForexSessionBadge/>
+
             {/* Bias indicator */}
             {todayBias?.bias ? (
               <span style={{
@@ -565,17 +621,16 @@ const DashboardPage = ({ user, navigate }) => {
           subTone={winRate >= 50 ? 'win' : 'loss'}
         />
         <StatCard
+          label="Abgelehnt / Übersprungen"
+          value={`${stats.rejected || 0} / ${stats.skipped || 0}`}
+          sub={`Score zu niedrig · Session/Pause`}
+          subTone={(stats.rejected || 0) > 0 ? 'loss' : 'neutral'}
+        />
+        <StatCard
           label="Heute PnL"
           value={(todayPnL >= 0 ? '+' : '-') + `$${Math.abs(todayPnL).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
           sub="Profit & Loss heute"
           subTone={todayPnL >= 0 ? 'win' : 'loss'}
-        />
-        <StatCard
-          label="System"
-          value={liveMode ? 'LIVE' : 'PAUSE'}
-          sub={liveMode ? `Auto-Refresh ${LIVE_INTERVAL_MS / 1000}s` : 'Manueller Refresh aktiv'}
-          subTone={liveMode ? 'win' : 'loss'}
-          icon="signal"
         />
       </div>
 
@@ -894,6 +949,8 @@ const LatestTradesCard = ({ signals, onViewAll, onExecuteTrade, onSaveToJournal,
         <FilterPill active={statusFilter === 'OPEN'} onClick={() => setStatusFilter(statusFilter === 'OPEN' ? 'all' : 'OPEN')}>OPEN</FilterPill>
         <FilterPill active={statusFilter === 'WIN'} onClick={() => setStatusFilter(statusFilter === 'WIN' ? 'all' : 'WIN')}>WIN</FilterPill>
         <FilterPill active={statusFilter === 'LOSS'} onClick={() => setStatusFilter(statusFilter === 'LOSS' ? 'all' : 'LOSS')}>LOSS</FilterPill>
+        <FilterPill active={statusFilter === 'REJECTED'} onClick={() => setStatusFilter(statusFilter === 'REJECTED' ? 'all' : 'REJECTED')}>Abgelehnt</FilterPill>
+        <FilterPill active={statusFilter === 'SKIPPED'} onClick={() => setStatusFilter(statusFilter === 'SKIPPED' ? 'all' : 'SKIPPED')}>Übersprungen</FilterPill>
       </div>
 
       {filtered.length === 0 ? (
@@ -922,10 +979,10 @@ const LatestTradesCard = ({ signals, onViewAll, onExecuteTrade, onSaveToJournal,
               </thead>
               <tbody>
                 {filtered.map((s, i) => (
-                  <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setSelected(s)}>
+                  <tr key={i} style={{ cursor: 'pointer', opacity: s.outcome === 'REJECTED' ? 0.6 : 1 }} onClick={() => setSelected(s)}>
                     <td className="mono muted" style={{ fontSize: 11 }}>{getTimeAgo(s.created_at)}</td>
                     <td><AssetChip symbol={s.symbol}/></td>
-                    <td><span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span></td>
+                    <td>{s.direction ? <span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span> : <span className="muted">—</span>}</td>
                     <td className="mono">${(s.ai_entry || s.price || 0).toFixed(2)}</td>
                     <td className="mono" style={{ color: s.tp1_hit ? 'var(--win)' : 'var(--text-secondary)', fontSize: 11 }}>
                       {s.ai_tp1 ? `$${s.ai_tp1.toFixed(2)}${s.tp1_hit ? ' ✓' : ''}` : '–'}
@@ -935,9 +992,14 @@ const LatestTradesCard = ({ signals, onViewAll, onExecuteTrade, onSaveToJournal,
                     <td className="mono">{s.ai_score || 0}</td>
                     <td className="mono muted" style={{ fontSize: 10 }}>{s.strategy_key ? s.strategy_key.replace('crypto_', '').replace('forex_', '') : '–'}</td>
                     <td>
-                      <span className={`badge ${s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`}>
-                        {s.outcome || 'OPEN'}
-                      </span>
+                      {s.outcome === 'REJECTED'
+                        ? <span className="badge badge-loss" title={`Abgelehnt: ${s.telegram_reason || 'candidate_score_too_low'}`} style={{ opacity: 0.75 }}>✗ Abgelehnt</span>
+                        : s.outcome === 'SKIPPED'
+                        ? <span className="badge badge-neutral" style={{ opacity: 0.7 }}>⏭ Skip</span>
+                        : <span className={`badge ${s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`}>
+                            {s.outcome || 'OPEN'}
+                          </span>
+                      }
                     </td>
                   </tr>
                 ))}
@@ -949,15 +1011,17 @@ const LatestTradesCard = ({ signals, onViewAll, onExecuteTrade, onSaveToJournal,
             {filtered.map((s, i) => {
               const sc = s.ai_score || 0;
               const scoreColor = sc >= 90 ? 'var(--win)' : sc >= 75 ? 'var(--wait)' : 'var(--blue-400)';
-              const outcomeCls = s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait';
+              const outcomeCls = s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' || s.outcome === 'SKIPPED' ? 'badge-neutral' : s.outcome === 'REJECTED' ? 'badge-loss' : 'badge-wait';
               return (
-                <div key={i} className="signal-mobile-row" style={{ cursor: 'pointer' }} onClick={() => setSelected(s)}>
+                <div key={i} className="signal-mobile-row" style={{ cursor: 'pointer', opacity: s.outcome === 'REJECTED' ? 0.6 : 1 }} onClick={() => setSelected(s)}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <AssetChip symbol={s.symbol}/>
-                    <span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span>
+                    {s.direction && <span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span>}
                     <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: scoreColor, fontSize: 13, marginLeft: 4 }}>{sc}</span>
                     <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 2 }}>pts</span>
-                    <span className={`badge ${outcomeCls}`} style={{ marginLeft: 'auto', fontSize: 10 }}>{s.outcome || 'OPEN'}</span>
+                    <span className={`badge ${outcomeCls}`} style={{ marginLeft: 'auto', fontSize: 10 }}>
+                      {s.outcome === 'REJECTED' ? '✗ Abgelehnt' : s.outcome === 'SKIPPED' ? '⏭ Skip' : s.outcome || 'OPEN'}
+                    </span>
                   </div>
                   <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
                     <span style={{ fontFamily: 'var(--font-mono)' }}>E&nbsp;${(s.ai_entry || s.price || 0).toFixed(2)}</span>
