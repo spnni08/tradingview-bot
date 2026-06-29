@@ -8076,7 +8076,7 @@ export default {
 // unit-tested with `node --test`. They do not change runtime logic or
 // the default export.
 export {
-  analyzeWithRules, calcRR, safePct, getSignalQuality, DEFAULT_STRATEGY_CONFIG,
+  analyzeWithRules, processSignal, calcRR, safePct, getSignalQuality, DEFAULT_STRATEGY_CONFIG,
   evaluateExit, deriveTp1, EXIT_CONFIG,
   detectAssetClass, normalizeSymbol, resolveStrategyKey, exitConfigForStrategy,
   isWithinForexSession, STRATEGIES, FOREX_SESSIONS_UTC, resetStartingCapital,
