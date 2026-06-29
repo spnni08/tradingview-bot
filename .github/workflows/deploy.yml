@@ -40,8 +40,15 @@ jobs:
         run: npm run lint
 
       # c) Syntax-Check — schnelles Sanity-Gate noch vor den Tests.
+      #    Deckt worker.js UND alle src/**/*.js ab (eigener Parser-Pfad,
+      #    ergänzt ESLint). bash -e bricht beim ersten Syntaxfehler ab.
       - name: Syntax Check (node --check)
-        run: node --check worker.js
+        run: |
+          node --check worker.js
+          for f in $(find src -name '*.js'); do
+            echo "node --check $f"
+            node --check "$f"
+          done
 
       # d) Test-Suite inkl. Snapshot-Tests (analyzeWithRules / processSignal).
       - name: Tests
