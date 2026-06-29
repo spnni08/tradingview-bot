@@ -3951,18 +3951,33 @@ async function evaluateOpenTrades(env) {
       SELECT * FROM signals WHERE outcome = 'OPEN' AND ai_tp IS NOT NULL AND ai_sl IS NOT NULL
       ORDER BY created_at ASC
     `).all();
-    for (const signal of (open.results || [])) {
+    const rows = open.results || [];
+    // Fall A: ein einzelner kaputter Trade soll den Lauf NICHT abbrechen →
+    // pro Iteration weiter best-effort, Fehler aber sammeln statt verschlucken.
+    const failures = [];
+    for (const signal of rows) {
       try {
         const price = await getLivePrice(env, signal.symbol);
         if (!price) continue;
         await applySignalExit(env, signal, price);
       } catch (sigErr) {
         console.error(`❌ evaluateOpenTrades: Signal ${signal.id} (${signal.symbol}) übersprungen:`, sigErr.message);
+        failures.push(`${signal.symbol || signal.id}: ${sigErr.message}`);
       }
     }
     console.log('✅ evaluateOpenTrades done');
+    // Nach der Schleife: falls Einzelfehler auftraten, EINMAL zusammengefasst
+    // melden (kein Spam pro Trade). Wird vom scheduled()-Catch zu Telegram.
+    if (failures.length > 0) {
+      throw new Error(
+        `${failures.length}/${rows.length} offene Trades fehlgeschlagen (z.B. ${failures[0]})`
+      );
+    }
   } catch (err) {
+    // Fall B: bisher wurde hier nur geloggt → der äußere Cron-Catch/Alert blieb
+    // unerreichbar. Jetzt loggen UND durchreichen, damit scheduled() alarmiert.
     console.error('evaluateOpenTrades error:', err);
+    throw err;
   }
 }
 
