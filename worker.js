@@ -3499,7 +3499,8 @@ async function validateSession(env, requestOrId) {
   }
   if (!sessionId) return null;
   try {
-    // Join users to get blocked status so canViewDashboard is enforced correctly.
+    // Join users to get blocked status so blocked accounts are rejected here
+    // (see `if (session.blocked) return null` below) — no valid session, no access.
     const session = await env.DB.prepare(
       `SELECT s.id, s.user_id, s.username, s.role, s.must_change_password, s.expires_at, s.created_at, u.blocked
        FROM sessions s JOIN users u ON u.id = s.user_id
@@ -3532,7 +3533,6 @@ async function validateSession(env, requestOrId) {
 
 function isAdmin(session) { return session?.role === 'admin'; }
 function isTraderOrAdmin(session) { return session?.role === 'admin' || session?.role === 'trader'; }
-function canViewDashboard(session) { return session && !session.blocked; } // admin/trader/viewer/extern all can view
 
 async function logout(env, sessionId) {
   try {
@@ -3932,20 +3932,6 @@ async function sendDailySummary(env) {
   }
 }
 
-function evaluateOutcomeForSignal(signal, price) {
-  if (!price || !Number.isFinite(price)) return { outcome: 'NO_PRICE', hitLevel: null };
-  if (signal.ai_tp == null || signal.ai_sl == null) return { outcome: 'OPEN', hitLevel: null };
-  const isLong = signal.direction === 'LONG';
-  if (isLong) {
-    if (price >= signal.ai_tp) return { outcome: 'WIN', hitLevel: signal.ai_tp };
-    if (price <= signal.ai_sl) return { outcome: 'LOSS', hitLevel: signal.ai_sl };
-  } else {
-    if (price <= signal.ai_tp) return { outcome: 'WIN', hitLevel: signal.ai_tp };
-    if (price >= signal.ai_sl) return { outcome: 'LOSS', hitLevel: signal.ai_sl };
-  }
-  return { outcome: 'OPEN', hitLevel: null };
-}
-
 async function checkOpenSignals(env, onlySignalId = null) {
   await ensureTables(env);
   const rows = await env.DB.prepare(`
@@ -3962,9 +3948,9 @@ async function checkOpenSignals(env, onlySignalId = null) {
       id: signal.id, symbol: signal.symbol, direction: signal.direction,
       entry: signal.ai_entry, tp: signal.ai_tp, sl: signal.ai_sl, price
     };
-    // AUFGABE 2 Fix: gemeinsame TP1→Breakeven→TP2-Logik statt der alten binären
-    // Bewertung (evaluateOutcomeForSignal). So schließt der manuelle Admin-Check
-    // mit denselben Outcomes wie der automatische Pfad.
+    // AUFGABE 2 Fix: gemeinsame TP1→Breakeven→TP2-Logik (applySignalExit/evaluateExit)
+    // statt einer alten binären Win/Loss-Bewertung. So schließt der manuelle
+    // Admin-Check mit denselben Outcomes wie der automatische Pfad.
     const res = await applySignalExit(env, signal, price);
     if (res.status === 'no_price') {
       item.status = 'no_price'; item.outcome = null;
