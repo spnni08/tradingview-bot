@@ -261,6 +261,7 @@ function _renderSidebar(activePage, user) {
 </nav>`;
 }
 
+/** Wraps page content in the full HTML shell (head, CSS, sidebar, footer). @returns {string} HTML. */
 function _htmlPage({ title = 'WAVESCOUT', content, activePage, user }) {
   return `<!DOCTYPE html>
 <html lang="de" data-theme="dark">
@@ -303,6 +304,7 @@ function _htmlPage({ title = 'WAVESCOUT', content, activePage, user }) {
 </html>`;
 }
 
+/** Login page HTML; `error` shows an optional error banner. @returns {string} HTML. */
 function _renderLoginPage(error = '') {
   return `<!DOCTYPE html>
 <html lang="de">
@@ -361,6 +363,7 @@ function _renderLoginPage(error = '') {
 </html>`;
 }
 
+/** Forced password-change page HTML; `error` shows an optional banner. @returns {string} HTML. */
 function _renderChangePwPage(error = '') {
   return `<!DOCTYPE html>
 <html lang="de">
@@ -396,6 +399,7 @@ function _renderChangePwPage(error = '') {
 </html>`;
 }
 
+/** Dashboard page body (live signals / open positions) from prepared `data`. @returns {string} HTML. */
 function _renderDashboardContent(data) {
   const { stats: s = {}, bestSignal, latestSignals, marketBias } = data;
   const pnlColor = v => (v >= 0 ? 'color:var(--win)' : 'color:var(--loss)');
@@ -589,6 +593,7 @@ function _renderDashboardContent(data) {
 </div>`;
 }
 
+/** Generic placeholder body for pages that are not built yet. @returns {string} HTML. */
 function _renderPlaceholderPage(pageName) {
   const labels = { backtesting: 'Backtesting', statistiken: 'Statistiken', einstellungen: 'Einstellungen' };
   const label = labels[pageName] || pageName;
@@ -610,6 +615,7 @@ function _renderPlaceholderPage(pageName) {
 
 // ── Journal helpers ─────────────────────────────────────────────
 
+/** Journal signal table (HTMX partial) for the given outcome filter. @returns {string} HTML. */
 function _renderJournalTable(signals, outcome) {
   if (!signals || signals.length === 0) {
     return `<div id="journal-table" style="text-align:center;padding:40px;color:var(--text-tertiary);font-size:13px">Keine Trades für diesen Filter</div>`;
@@ -647,6 +653,7 @@ function _renderJournalTable(signals, outcome) {
   </div>`;
 }
 
+/** Journal page body: history table + practice stats + filter. @returns {string} HTML. */
 function _renderJournalContent({ history, practiceData, outcome }) {
   const outcomes = ['all', 'OPEN', 'WIN', 'LOSS', 'BE'];
   const outcomeLabels = { all: 'Alle', OPEN: 'Offen', WIN: 'Win', LOSS: 'Loss', BE: 'Break Even' };
@@ -750,6 +757,7 @@ function _applyNewsFilter(events, filter) {
   });
 }
 
+/** News/events list (HTMX partial) filtered by `filter`. @returns {string} HTML. */
 function _renderNewsList(events, filter) {
   const filtered = _applyNewsFilter(events, filter);
   if (!filtered.length) {
@@ -783,6 +791,7 @@ function _renderNewsList(events, filter) {
   return `<div id="news-list">${cards}</div>`;
 }
 
+/** News page body (filter bar + events list). @returns {string} HTML. */
 function _renderNewsContent({ events, filter }) {
   const filters = [
     { id: 'all',         label: 'Alle' },
@@ -831,6 +840,7 @@ function _renderNewsContent({ events, filter }) {
 
 // ── Backtesting helpers ─────────────────────────────────────────
 
+/** Backtesting tab bar; `isTrader` toggles trader-only tabs. @returns {string} HTML. */
 function _renderBTTabBar(activeTab, isTrader) {
   const tabs = [
     { id: 'practice',      label: 'Übungstrades'        },
@@ -1148,6 +1158,7 @@ function _renderBTSuggestionsTab(suggestions) {
   return `<div>${cards}</div>`;
 }
 
+/** Dispatcher: returns the HTML for the requested backtesting `tab`. @returns {string} HTML. */
 function _getBTTabContent(tab, data) {
   if (tab === 'practice')     return _renderBTPracticeTab(data.practiceTrades, data.practiceStats);
   if (tab === 'history')      return _renderBTHistoryTab(data.history, data.stats);
@@ -1160,6 +1171,7 @@ function _getBTTabContent(tab, data) {
   return _renderBTPracticeTab(data.practiceTrades, data.practiceStats);
 }
 
+/** Backtesting page body (tab bar + active tab content). @returns {string} HTML. */
 function _renderBacktestContent(tab, data, session) {
   const isTrader  = session?.role === 'admin' || session?.role === 'trader';
   const tabBar    = _renderBTTabBar(tab, isTrader);
@@ -1231,6 +1243,7 @@ function _renderPnLChart(history) {
 </div>`;
 }
 
+/** Statistics page body (KPIs, P&L chart, breakdowns). @returns {string} HTML. */
 function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
   const totalClosed = stats.wins + stats.losses;
   const winRate = computeWinRate(stats.wins, stats.losses);
@@ -1414,6 +1427,7 @@ function _renderStatistikenContent({ stats, history, analytics, breakdown }) {
 
 const _WEBHOOK_DISPLAY_URL = 'https://tradingview-bot.spnn08.workers.dev/webhook';
 
+/** Settings section navigation; admin-only entries gated by `isAdmin`. @returns {string} HTML. */
 function _renderSettingsNav(activeSection, isAdmin) {
   const secs = [
     { id: 'account',       label: 'Account',           icon: 'users'    },
@@ -2074,6 +2088,7 @@ async function doCreateUser(){
 </script>`;
 }
 
+/** Renders a single settings section selected by `section`. @returns {string} HTML. */
 function _renderSettingsSection(section, data, session) {
   const isAdmin = session?.role === 'admin';
   switch (section) {
@@ -2088,6 +2103,7 @@ function _renderSettingsSection(section, data, session) {
   }
 }
 
+/** Settings page body (section nav + active section). @returns {string} HTML. */
 function _renderSettingsPage(section, data, session) {
   const isAdmin = session?.role === 'admin';
   const nav = _renderSettingsNav(section, isAdmin);

@@ -2,6 +2,20 @@
 // WAVESCOUT v3.4 - PRODUCTION WORKER
 // Signal Processing · Snapshots · Telegram · Backtesting
 // ═══════════════════════════════════════════════════════════════
+//
+// Cloudflare-Worker-Entrypoint (default export `fetch` + Cron-Handler).
+// Enthält: Signal-Pipeline (analyzeWithRules, processSignal), die vier
+// Strategie-Logiken, Score-Optimizer, Auth/Sessions, HTTP-Router und Cron-Jobs.
+//
+// Abhängigkeitsrichtung (azyklisch):
+//   worker.js → src/render/pages.js → src/stats.js   (HTML-Rendering)
+//   worker.js → src/stats.js                          (computeWinRate/Expectancy)
+// Reine, seiteneffektfreie Bausteine liegen in src/ und werden hier re-exportiert.
+//
+// Annahmen: läuft in der Workers-Runtime (globale fetch/crypto/Date); D1 unter
+// env.DB; Secrets/Tokens über env.* (Telegram/Anthropic/Cloudflare).
+// Tests: test/analyzeWithRules.snapshot.test.js, test/processSignal.test.js
+// und die übrigen test/*.test.js (137 Tests, node:test).
 
 // ── Ausgelagerte Module (Schritt 3 Modularisierung) ──────────────────
 import { computeWinRate, computeExpectancy } from './src/stats.js';
@@ -518,6 +532,11 @@ function tryParseJSON(str) {
   try { return JSON.parse(str); } catch (_) { return null; }
 }
 
+/**
+ * Maps a numeric signal score (0–100) to a qualitative label.
+ * @param {number} score - Signal score.
+ * @returns {string} One of PREMIUM / GUT / OKAY / SCHWACH / SKIP / UNBEKANNT.
+ */
 function getSignalQuality(score) {
   if (score == null || isNaN(score)) return 'UNBEKANNT';
   if (score >= 90) return 'PREMIUM';
@@ -527,11 +546,25 @@ function getSignalQuality(score) {
   return 'SKIP';
 }
 
+/**
+ * Absolute percentage distance between two prices (always ≥ 0), rounded to 2dp.
+ * @param {number} target - Target price (e.g. TP or SL).
+ * @param {number} base - Reference price (e.g. entry).
+ * @returns {number|null} Percent distance, or null for missing/zero inputs.
+ */
 function safePct(target, base) {
   if (!target || !base || base === 0) return null;
   return parseFloat(((Math.abs(target - base) / Math.abs(base)) * 100).toFixed(2));
 }
 
+/**
+ * Reward-to-risk ratio for a trade. Works for LONG and SHORT.
+ * @param {number} entry - Entry price.
+ * @param {number} tp - Take-profit price.
+ * @param {number} sl - Stop-loss price.
+ * @param {boolean} isLong - true for LONG, false for SHORT.
+ * @returns {number|null} reward/risk rounded to 2dp, or null if inputs invalid or risk ≤ 0.
+ */
 function calcRR(entry, tp, sl, isLong) {
   const e = parseFloat(entry);
   const t = parseFloat(tp);
@@ -1416,6 +1449,15 @@ Bewerte das Signal nach v2.0 Kriterien. Antworte NUR als JSON:
   return analyzeWithRules(signal, strategyConfig);
 }
 
+/**
+ * Pure rule-based scoring of a signal (no env/DB/IO). Computes the weighted
+ * rule score and derives recommendation, risk tier and entry/TP/SL levels.
+ * Behaviour is locked by the snapshot tests in test/analyzeWithRules.snapshot.test.js.
+ * @param {object} signal - Raw signal payload (direction, rsi, ema50/200, trend, …).
+ * @param {object|null} [strategyConfig] - Rule weights/thresholds; defaults to DEFAULT_STRATEGY_CONFIG.
+ * @param {object} [exitCfg=EXIT_CONFIG] - Exit config (SL %, TP2 R-multiple) per strategy.
+ * @returns {object} { recommendation, score, risk, entry, tp, sl, reason, score_breakdown, … }.
+ */
 function analyzeWithRules(signal, strategyConfig = null, exitCfg = EXIT_CONFIG) {
   const cfg     = strategyConfig || DEFAULT_STRATEGY_CONFIG;
   const dir     = (signal.direction || signal.side || signal.signal || '').toUpperCase();
@@ -2716,6 +2758,16 @@ function normalizeAction(payload) {
   return raw || null;
 }
 
+/**
+ * End-to-end processing of one incoming TradingView/webhook signal: candidate
+ * gating, rule + VP scoring, optional Claude analysis, notifications and
+ * persistence into the `signals` table. Has side effects (D1, fetch); the
+ * happy/edge paths are covered by test/processSignal.test.js.
+ * @param {object} env - Worker env bindings (DB, secrets, …).
+ * @param {object} signal - Raw webhook payload.
+ * @returns {Promise<object>} { status, signalId, analysis } on success, or
+ *   { status: 'candidate_rejected', … } when the candidate gate is not met.
+ */
 async function processSignal(env, signal) {
   const direction = normalizeDirection(signal);
   const action    = normalizeAction(signal);
