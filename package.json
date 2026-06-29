@@ -5,6 +5,7 @@
   "type": "module",
   "main": "worker.js",
   "scripts": {
+    "lint": "eslint worker.js test",
     "test": "node --test \"test/**/*.test.js\"",
     "deploy": "wrangler deploy"
   },
@@ -12,6 +13,8 @@
     "node": ">=18"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
     "wrangler": "^3.0.0"
   }
 }

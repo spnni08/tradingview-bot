@@ -1,17 +1,63 @@
-name: Deploy to Cloudflare Workers
+name: CI & Deploy
 
+# CI-Gate vor jedem Deploy: kaputte Änderungen erreichen den Worker nicht.
+#   - Bei JEDEM Push auf main UND jedem Pull Request gegen main läuft der
+#     `test`-Job (npm ci → Lint → Syntax-Check → Tests), Schritt für Schritt,
+#     fail-fast (kein continue-on-error).
+#   - Der `deploy`-Job hängt via `needs: test` davon ab und läuft NUR bei
+#     Push auf main / manuellem Dispatch — niemals für Pull Requests.
 on:
   push:
+    branches:
+      - main
+  pull_request:
     branches:
       - main
   workflow_dispatch:
 
 jobs:
-  deploy:
+  # ── Qualitäts-Gate ────────────────────────────────────────────────────────
+  test:
+    name: Test & Lint
     runs-on: ubuntu-latest
-    name: Deploy
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'      # node:test Snapshot-API (t.assert.snapshot)
+          cache: npm              # nutzt package-lock.json → schnelle Re-Runs
+
+      # a) Reproduzierbarer Install (kein npm install) — bricht bei Lockfile-Drift ab.
+      - name: Install dependencies (npm ci)
+        run: npm ci
+
+      # b) Lint — permissive Basis-Config, fängt offensichtliche Fehler.
+      - name: Lint
+        run: npm run lint
+
+      # c) Syntax-Check — schnelles Sanity-Gate noch vor den Tests.
+      - name: Syntax Check (node --check)
+        run: node --check worker.js
+
+      # d) Test-Suite inkl. Snapshot-Tests (analyzeWithRules / processSignal).
+      - name: Tests
+        run: npm test
+
+  # ── Deploy (nur wenn das Gate grün ist UND es kein Pull Request ist) ──────
+  deploy:
+    name: Deploy to Cloudflare
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
