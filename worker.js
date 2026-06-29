@@ -5989,6 +5989,13 @@ export default {
       }
     } catch (err) {
       console.error('❌ Open-signals cron error:', err.message);
+      // Telegram-Alert wie im 4h-Block, damit ein stiller Fehlschlag auffällt.
+      // Eigenes .catch() um den Alert: schlägt Telegram fehl, wird das nur
+      // geloggt und eskaliert NICHT in den Cron-Handler. console.error bleibt.
+      ctx.waitUntil(
+        sendTelegramMessage(env, `⚠️ Cron-Fehler (Open-Signals-Re-Eval): ${err.message}`)
+          .catch((e) => console.error('⚠️ Telegram-Alert (Open-Signals) fehlgeschlagen:', e?.message))
+      );
     }
 
     if (event.cron === "0 7 * * *") {
@@ -5996,6 +6003,11 @@ export default {
         await sendDailySummary(env);
       } catch (err) {
         console.error('❌ Daily summary cron error:', err.message);
+        // Telegram-Alert wie im 4h-Block (eigenes .catch() → kein Eskalieren).
+        ctx.waitUntil(
+          sendTelegramMessage(env, `⚠️ Cron-Fehler (Daily Summary): ${err.message}`)
+            .catch((e) => console.error('⚠️ Telegram-Alert (Daily Summary) fehlgeschlagen:', e?.message))
+        );
       }
     }
 
