@@ -948,12 +948,109 @@ const CANDIDATE_SCORING_DEFAULTS = {
   },
 };
 
+// Leitet die Score-relevanten Feature-Felder aus dem ROHEN Pine-alert()-Payload
+// ab. Hintergrund (Bug aus PR #120): scoreCandidate() erwartete vorberechnete
+// Felder (emaDistPct, reclaim, breakoutAboveRange, volRatio, reclaimVAL,
+// distToVAL …), die KEIN Pine-Script jemals sendet — die Scripts liefern nur
+// Rohbausteine (close, ema200, range_high/low, candle_volume/avg_volume,
+// vah/val, support/resistance) PLUS das `trigger`-Feld. Dadurch blieb jedes
+// Bonus-Feld leer → Score = base (35-50) < 60 → 100 % REJECTED.
+//
+// Diese Funktion mappt die Rohfelder auf die Score-Features. Wichtig: der
+// `trigger` ist Ground-Truth — der Alert feuert NUR, wenn die Pine-Entry-
+// Bedingung (Reclaim / Breakdown / Breakout) erfüllt ist. Bereits explizit
+// gesetzte Felder werden NIE überschrieben (Rückwärtskompatibilität / Tests).
+function normalizeSignalForScoring(strategyKey, signal) {
+  if (!signal || typeof signal !== 'object') return signal;
+  const s = { ...signal };
+  const dir     = String(s.direction || '').toUpperCase();
+  const trigger = String(s.trigger || s.setup_type || '').toUpperCase();
+  const trend   = String(s.trend || '').toUpperCase();
+  const price   = parseFloat(s.price ?? s.close ?? NaN);
+  const ema50   = parseFloat(s.ema50 ?? NaN);
+  const ema200  = parseFloat(s.ema200 ?? NaN);
+
+  // Trend-Bestätigung: explizites Pine-`trend`-Feld ODER EMA50/EMA200-Lage.
+  const trendOkDerived =
+    (dir === 'LONG'  && (trend === 'BULLISH' || (ema50 > ema200))) ||
+    (dir === 'SHORT' && (trend === 'BEARISH' || (ema50 < ema200)));
+
+  if (strategyKey === 'crypto_baseline') {
+    // emaDistPct aus close & ema200 ableiten (Pine sendet beide, aber kein Pct).
+    if (s.emaDistPct == null && s.ema_dist_pct == null &&
+        Number.isFinite(price) && Number.isFinite(ema200) && ema200 !== 0) {
+      s.emaDistPct = Math.abs(price - ema200) / ema200 * 100;
+    }
+  }
+
+  else if (strategyKey === 'crypto_sr_volume') {
+    const zone = String(s.vp_zone || '').toUpperCase();
+    const isVah = trigger.includes('VAH') || zone === 'VAH';  // SHORT-Bounce
+    const isVal = trigger.includes('VAL') || zone === 'VAL';  // LONG-Bounce
+    if (s.reclaim == null)
+      s.reclaim = dir === 'LONG'  && (isVal || !isVah);
+    if (s.breakdown == null)
+      s.breakdown = dir === 'SHORT' && (isVah || !isVal);
+    if (s.trendOk == null && s.trend_ok == null) s.trendOk = trendOkDerived;
+    // RSI-Kontext: Snapshot-Proxy (Payload enthält keine RSI-Historie).
+    const rsi = parseFloat(s.rsi ?? NaN);
+    if (s.rsiWasOversold == null && s.rsi_was_oversold == null &&
+        dir === 'LONG' && Number.isFinite(rsi))
+      s.rsiWasOversold = rsi <= 42;
+    if (s.rsiWasOverbought == null && s.rsi_was_overbought == null &&
+        dir === 'SHORT' && Number.isFinite(rsi))
+      s.rsiWasOverbought = rsi >= 58;
+  }
+
+  else if (strategyKey === 'crypto_orderflow_breakout') {
+    const rangeHigh = parseFloat(s.range_high ?? s.rangeHigh ?? NaN);
+    const rangeLow  = parseFloat(s.range_low  ?? s.rangeLow  ?? NaN);
+    const candleVol = parseFloat(s.candle_volume ?? s.candleVolume ?? NaN);
+    const avgVol    = parseFloat(s.avg_volume    ?? s.avgVolume    ?? NaN);
+    if (s.breakoutAboveRange == null && s.breakout_above_range == null)
+      s.breakoutAboveRange = trigger.includes('UP') ||
+        (Number.isFinite(price) && Number.isFinite(rangeHigh) && price >= rangeHigh) ||
+        (dir === 'LONG' && trigger.includes('BREAK'));
+    if (s.breakoutBelowRange == null && s.breakout_below_range == null)
+      s.breakoutBelowRange = trigger.includes('DOWN') ||
+        (Number.isFinite(price) && Number.isFinite(rangeLow) && price <= rangeLow) ||
+        (dir === 'SHORT' && trigger.includes('BREAK'));
+    // volRatio aus candle_volume / avg_volume ableiten (Pine sendet beide).
+    if (s.volRatio == null && s.vol_ratio == null &&
+        Number.isFinite(candleVol) && Number.isFinite(avgVol) && avgVol > 0)
+      s.volRatio = candleVol / avgVol;
+    if (s.trendOk == null && s.trend_ok == null) s.trendOk = trendOkDerived;
+  }
+
+  else if (strategyKey === 'forex_sr_fib_rsi') {
+    const support    = parseFloat(s.support    ?? NaN);
+    const resistance = parseFloat(s.resistance ?? NaN);
+    // trigger = FIB_SR_RSI_LONG / FIB_SR_RSI_SHORT → LONG=Support-Reclaim,
+    // SHORT=Resistance-Breakdown.
+    if (s.reclaimVAL == null && s.reclaim_val == null)
+      s.reclaimVAL = dir === 'LONG'  && (trigger.includes('LONG')  || !trigger.includes('SHORT'));
+    if (s.breakdownVAH == null && s.breakdown_vah == null)
+      s.breakdownVAH = dir === 'SHORT' && (trigger.includes('SHORT') || !trigger.includes('LONG'));
+    if (s.distToVAL == null && s.dist_to_val == null &&
+        dir === 'LONG' && Number.isFinite(price) && Number.isFinite(support) && support > 0)
+      s.distToVAL = Math.abs(price - support) / support * 100;
+    if (s.distToVAH == null && s.dist_to_vah == null &&
+        dir === 'SHORT' && Number.isFinite(price) && Number.isFinite(resistance) && resistance > 0)
+      s.distToVAH = Math.abs(price - resistance) / resistance * 100;
+  }
+
+  return s;
+}
+
 // Berechnet den Kandidaten-Score (0-100) für eine gegebene Strategie.
 // customWeights überschreibt einzelne Einträge aus CANDIDATE_SCORING_DEFAULTS.
 // Gibt { score, details, threshold } zurück (pure Funktion, kein DB-Zugriff).
 function scoreCandidate(strategyKey, signal, customWeights = null) {
   const defaults = CANDIDATE_SCORING_DEFAULTS[strategyKey];
   if (!defaults) return { score: 50, details: {}, threshold: 60 };
+
+  // Rohen Pine-Payload auf Score-Features mappen (siehe normalizeSignalForScoring).
+  signal = normalizeSignalForScoring(strategyKey, signal);
 
   const w   = customWeights ? { ...defaults.weights, ...customWeights } : defaults.weights;
   const thr = (customWeights?._threshold ?? defaults.threshold);
@@ -2684,8 +2781,12 @@ async function processSignal(env, signal) {
   // gespeichert. Nur wenn der Score den Schwellenwert überschreitet, läuft die
   // volle Verarbeitungs-Pipeline (analyzeWithRules / Claude / Trade-Insert).
   const candidateScoringOverrides = await loadCandidateScoringConfig(env, strategyKey);
+  // Rohen Pine-Payload einmalig auf Score-Features mappen — sowohl fürs Scoring
+  // als auch für die Persistenz in signal_candidates (abgeleitete Felder werden
+  // so für spätere Kalibrierung mitgespeichert).
+  const scoringSignal = normalizeSignalForScoring(strategyKey, signal);
   const { score: candidateScore, details: candidateScoreDetails, threshold: candidateThreshold } =
-    scoreCandidate(strategyKey, signal, candidateScoringOverrides);
+    scoreCandidate(strategyKey, scoringSignal, candidateScoringOverrides);
   const passedCandidateGate = candidateScore >= candidateThreshold;
   console.log(`📊 Candidate score [${strategyKey}]: ${candidateScore}/${candidateThreshold} → ${passedCandidateGate ? 'PASS' : 'REJECT'}`);
 
@@ -2693,7 +2794,7 @@ async function processSignal(env, signal) {
     console.log(`❌ Candidate rejected [${strategyKey}]: ${signal.symbol} score=${candidateScore}/${candidateThreshold} → candidate_score_too_low`);
     // Abgelehnter Kandidat: in signal_candidates speichern (Detaildaten)
     await saveSignalCandidate(env, {
-      signal, strategyKey, strategyId: strategy?.id,
+      signal: scoringSignal, strategyKey, strategyId: strategy?.id,
       candidateScore, threshold: candidateThreshold,
       scoreDetails: candidateScoreDetails,
       passedThreshold: false, signalId: null,
@@ -3064,7 +3165,7 @@ async function processSignal(env, signal) {
 
   // Kandidaten-Eintrag mit signal_id verknüpfen (Kandidat hat den Gate passiert)
   await saveSignalCandidate(env, {
-    signal, strategyKey, strategyId: strategy?.id,
+    signal: scoringSignal, strategyKey, strategyId: strategy?.id,
     candidateScore, threshold: candidateThreshold,
     scoreDetails: candidateScoreDetails,
     passedThreshold: true, signalId,
@@ -7980,5 +8081,5 @@ export {
   detectAssetClass, normalizeSymbol, resolveStrategyKey, exitConfigForStrategy,
   isWithinForexSession, STRATEGIES, FOREX_SESSIONS_UTC, resetStartingCapital,
   setStrategyStatus, getStrategyStatuses, computeWinRate, computeExpectancy,
-  scoreCandidate, CANDIDATE_SCORING_DEFAULTS,
+  scoreCandidate, CANDIDATE_SCORING_DEFAULTS, normalizeSignalForScoring,
 };
