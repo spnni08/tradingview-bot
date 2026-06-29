@@ -12,7 +12,7 @@
 
 export default [
   {
-    files: ['worker.js', 'test/**/*.js'],
+    files: ['worker.js', 'src/**/*.js', 'test/**/*.js'],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'module',

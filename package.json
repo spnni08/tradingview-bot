@@ -5,7 +5,7 @@
   "type": "module",
   "main": "worker.js",
   "scripts": {
-    "lint": "eslint worker.js test",
+    "lint": "eslint worker.js src test",
     "test": "node --test \"test/**/*.test.js\"",
     "deploy": "wrangler deploy"
   },
