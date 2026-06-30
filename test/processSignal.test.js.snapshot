@@ -22,7 +22,7 @@ exports[`processSignal · crypto_baseline · reject 1`] = `
     "sl": 99
   },
   "signalsRow": {
-    "outcome": "SKIPPED",
+    "outcome": "OPEN",
     "direction": "LONG",
     "ai_score": 38,
     "ai_entry": 100,

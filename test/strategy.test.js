@@ -25,14 +25,15 @@ test('Registry enthält genau 4 Strategien (3 crypto, 1 forex)', () => {
   }
 });
 
-test('Score-Optimizer-Scope: nur crypto_baseline ist score-optimiert (useScoreGate)', () => {
-  // processSignal leitet `scoreOptimized` aus stratDef.useScoreGate ab: nur die
-  // score-optimierte Strategie durchläuft Rule-Score+Claude und den Telegram-
-  // Score-Filter (≥80). Die Pine-gefilterten Strategien laufen direkt durch.
+test('Score-Optimizer-Scope: KEINE Strategie ist rule-/AI-score-gated (alle candidate-gated)', () => {
+  // processSignal leitet `scoreOptimized` aus stratDef.useScoreGate ab. Seit der
+  // crypto_baseline-Umstellung (Final-Gate entfernt, weil analyzeWithRules den
+  // deployten v2-Payload nicht lesen kann) gated KEINE der 4 Strategien mehr über
+  // den analyzeWithRules-Score — alle vertrauen dem Pine-Entry + Candidate-Gate
+  // (scoreCandidate, Schwelle 60). analyzeWithRules.score ist nur noch Telemetrie.
   const optimized = Object.keys(STRATEGIES).filter(k => STRATEGIES[k].useScoreGate);
-  assert.deepEqual(optimized, ['crypto_baseline']);
-  // Die übrigen 3 vertrauen dem Pine-Entry (kein Score-Gate).
-  for (const k of ['crypto_sr_volume', 'crypto_orderflow_breakout', 'forex_sr_fib_rsi']) {
+  assert.deepEqual(optimized, []);
+  for (const k of Object.keys(STRATEGIES)) {
     assert.equal(STRATEGIES[k].useScoreGate, false, `${k} darf nicht score-gated sein`);
   }
 });

@@ -76,7 +76,10 @@ function snapshotView({ result, env }) {
 // Erwartete Kern-Entscheidung pro Fixture (status / outcome / score / strategy).
 const EXPECTED = {
   'crypto_baseline/trade':  { status: 'ok', outcome: 'OPEN',    score: 100 },
-  'crypto_baseline/reject': { status: 'ok', outcome: 'SKIPPED', score: 38  },
+  // Früher SKIPPED (Rule-Score 38 < 75). Seit der Umstellung auf reines
+  // Candidate-Gating (useScoreGate=false) öffnet jeder Kandidat, der den
+  // Candidate-Gate (≥60) passiert — der Rule-Score ist nur noch Telemetrie.
+  'crypto_baseline/reject': { status: 'ok', outcome: 'OPEN',    score: 38  },
   'crypto_baseline/edge':   { status: 'candidate_rejected', candidateScore: 50 },
 
   // crypto_sr_volume/trade: Rule-Score 88 + VP-Bonus 15 → 100 (VP-Konfluenz).
@@ -151,4 +154,60 @@ test('processSignal · Ergebnis ist reproduzierbar (zweimal gleiches Resultat)',
   const a = snapshotView(await run('crypto_orderflow_breakout', 'trade'));
   const b = snapshotView(await run('crypto_orderflow_breakout', 'trade'));
   assert.deepEqual(a, b);
+});
+
+// ── crypto_baseline Final-Gate-Umstellung (deployter Pine-v2-Payload) ────────
+// Das deployte Pine v2 sendet für crypto_baseline NICHT den Feldsatz, den
+// analyzeWithRules liest: kein price (sondern `entry`), kein ema50/ema200,
+// kein trend/timeframe/support/resistance/confidence — nur direction, entry,
+// rsi, emaDistPct, nearSup, nearRes, rsiDeadZone. Diese Tests sichern ab, dass
+// (1) solche Signale jetzt öffnen (Gate = nur Candidate-Score) und (2) der
+// Entry/TP/SL aus `entry` abgeleitet wird statt 0 zu sein.
+
+// Ein realer Gate-1-Payload (Spread-Quelle aus PR #134), in deployter v2-Form.
+const V2_BASELINE = {
+  strategy: 'crypto_baseline', symbol: 'BTCUSDT', assetClass: 'crypto',
+  direction: 'LONG', action: 'BUY',
+  entry: '62000', tp1: '62620', tp2: '63240', sl: '61380', time: '1717000000',
+  rsi: '30.45', emaDistPct: '-0.7899325815',
+  nearSup: 'true', nearRes: 'false', rsiDeadZone: 'false',
+};
+
+async function runRaw(signal) {
+  const restore = installDeterminism(NON_SESSION_UTC);
+  try {
+    const env = makeEnv();
+    const result = await processSignal(env, { ...signal });
+    return { result, env };
+  } finally {
+    restore();
+  }
+}
+
+test('processSignal · crypto_baseline v2-Payload öffnet jetzt (Gate = nur Candidate-Score)', async () => {
+  const { result, env } = await runRaw(V2_BASELINE);
+  assert.equal(result.status, 'ok');
+  const row = env.DB.insertedRow('signals');
+  assert.equal(row.outcome, 'OPEN', 'v2-Baseline-Signal muss öffnen (Final-Gate entfernt)');
+  assert.equal(row.strategy_key, 'crypto_baseline');
+  // analyzeWithRules-Score bleibt strukturell gedeckelt (nur RSI trägt bei) —
+  // er ist jetzt reine Telemetrie und entscheidet NICHT mehr über OPEN.
+  assert.ok(row.ai_score < 75, `Rule-Score sollte unter dem alten Gate (75) liegen, war ${row.ai_score}`);
+});
+
+test('processSignal · crypto_baseline: entry → price gemappt (kein Null-Level-Trade)', async () => {
+  const { result, env } = await runRaw(V2_BASELINE);
+  const row = env.DB.insertedRow('signals');
+  // Vor dem Fix: price/entry/tp/sl = 0 (analyzeWithRules las das fehlende
+  // `price`-Feld). Nach dem Fix kommt der Entry aus `entry` (62000).
+  assert.equal(row.price, 62000, 'price wird aus entry abgeleitet');
+  assert.equal(result.analysis.entry, 62000, 'analysis.entry == entry');
+  assert.ok(result.analysis.tp > 0 && result.analysis.sl > 0, 'TP/SL sind echte Levels, nicht 0');
+  assert.ok(row.ai_entry === 62000 && row.ai_tp > 0 && row.ai_sl > 0, 'persistierte Levels gültig');
+});
+
+test('processSignal · expliziter price-Wert wird durch entry NICHT überschrieben', async () => {
+  const { env } = await runRaw({ ...V2_BASELINE, price: 61500 });
+  const row = env.DB.insertedRow('signals');
+  assert.equal(row.price, 61500, 'vorhandener price hat Vorrang vor entry');
 });
