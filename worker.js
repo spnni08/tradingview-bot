@@ -876,8 +876,20 @@ const STRATEGIES = {
     label:        'Crypto Baseline (Kontrollgruppe)',
     display:      'Krypto-1 (RSI+EMA200)', // kurzes, menschenlesbares Label für Telegram
     assetClass:   'crypto',
-    useScoreGate: true,   // Score ≥ minScore entscheidet über OPEN (wie bisher)
-    minScore:     75,
+    // Gate = NUR der Candidate-Score (scoreCandidate, Schwelle 60). Der frühere
+    // Final-Gate `analyzeWithRules.score ≥ 75` ist entfernt (useScoreGate=false):
+    // das deployte Pine v2 sendet für crypto_baseline einen anderen Feldsatz
+    // (direction, entry, rsi, emaDistPct, nearSup, nearRes, rsiDeadZone) als
+    // analyzeWithRules liest (price, ema50/200, trend, timeframe, support,
+    // resistance, confidence). 6 von 8 Regeln finden „keine Daten" → der Score
+    // klebt strukturell bei 60/65 und konnte 75 nie erreichen (0 Trades trotz
+    // gültiger Signale). Der bereits gefixte Candidate-Score (Spread 27–82, PR
+    // #134) ist die aussagekräftige Bewertung und gated jetzt allein — wie bei
+    // den 3 Pine-getrusteten Schwester-Strategien. analyzeWithRules.score bleibt
+    // reine Telemetrie. HINWEIS: der Live-Auto-Trade-Pfad gated weiterhin
+    // unabhängig bei score≥75 (Sicherheits-Backstop, siehe AUTO_TRADE-Block).
+    useScoreGate: false,
+    minScore:     0,
     sessionGate:  false,
     exit:         {},     // EXIT_CONFIG-Defaults (1% SL, 1.5R TP2)
   },
@@ -2789,6 +2801,16 @@ async function processSignal(env, signal) {
   const direction = normalizeDirection(signal);
   const action    = normalizeAction(signal);
   signal.direction = direction;
+
+  // Das deployte Pine v2 sendet den Einstiegspreis als `entry` (String), NICHT
+  // als `price`/`close`. Ohne diese Abbildung berechnet analyzeWithRules
+  // entry/tp/sl = 0 (price ?? 0) und in der DB landet price 0 — d.h. jeder
+  // geöffnete Baseline-Trade hätte Null-Levels. `entry` → `price` mappen, wenn
+  // kein expliziter Preis vorliegt (überschreibt vorhandene Werte nie).
+  if (signal.price == null && signal.close == null && signal.entry != null) {
+    const entryNum = parseFloat(signal.entry);
+    if (Number.isFinite(entryNum) && entryNum > 0) signal.price = entryNum;
+  }
 
   console.log('📊 Processing signal:', signal.symbol, direction, '| action:', action, '| rsi:', signal.rsi);
 

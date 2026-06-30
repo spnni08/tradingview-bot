@@ -267,3 +267,41 @@ test('Helfer: getSignalQuality / calcRR / safePct liefern erwartete Werte', () =
   assert.equal(safePct(0, 100), null);
   assert.equal(safePct(101.5, 0), null);
 });
+
+// ── Diagnose-Regression: deployter crypto_baseline-v2-Payload ───────────────
+// Das deployte Pine v2 sendet für crypto_baseline einen Feldsatz, den
+// analyzeWithRules NICHT liest (direction, entry, rsi, emaDistPct, nearSup,
+// nearRes, rsiDeadZone) — es fehlen price, ema50/ema200, trend, timeframe,
+// support, resistance, confidence. Dadurch finden 6 von 8 Regeln „keine Daten",
+// nur RSI trägt bei (gedeckelt durch crossover@30/crossunder@70 → Teilwertung
+// +10), und der Score klebt strukturell bei 50+10 = 60 (Session aus). Er konnte
+// das alte Final-Gate (75) NIE erreichen. Dieser Test fixiert die Diagnose, die
+// zur Umstellung auf reines Candidate-Gating geführt hat.
+test('crypto_baseline v2-Payload: Score strukturell bei 60 gedeckelt (6/8 Regeln ohne Daten)', () => {
+  const v2 = {
+    direction: 'LONG', entry: '62000', rsi: '30.45', emaDistPct: '-0.7899325815',
+    nearSup: 'true', nearRes: 'false', rsiDeadZone: 'false',
+  };
+  const r = analyze(v2);                 // Session-Filter ist in STRATEGY aus
+  assert.equal(r.score, 60, 'nur Basis (50) + RSI-Teilwertung (10)');
+  assert.ok(r.score < 75, 'erreicht das alte Final-Gate nie');
+  assert.equal(r.score_breakdown.ema, 0,                'EMA: keine ema50/ema200 im Payload');
+  assert.equal(r.score_breakdown.trend, 0,              'Trend: kein trend-Feld');
+  assert.equal(r.score_breakdown.support_resistance, 0, 'S/R: kein price/support/resistance');
+  assert.equal(r.score_breakdown.timeframe, 0,          'Timeframe: kein timeframe-Feld');
+  assert.equal(r.score_breakdown.confidence, 0,         'Confidence: kein confidence-Feld');
+  // entry ist NICHT price → analyzeWithRules berechnet entry/tp/sl = 0
+  // (genau deshalb mappt processSignal entry→price vor dem Scoring).
+  assert.equal(r.entry, 0, 'ohne price-Mapping kein Entry-Level');
+});
+
+test('crypto_baseline v2-Payload + entry→price: Levels werden gültig (Score bleibt Telemetrie)', () => {
+  const v2 = {
+    direction: 'LONG', entry: '62000', price: 62000, rsi: '30.45',
+    emaDistPct: '-0.7899325815', nearSup: 'true', nearRes: 'false', rsiDeadZone: 'false',
+  };
+  const r = analyze(v2);
+  assert.equal(r.entry, 62000, 'Entry aus gemapptem price');
+  assert.ok(r.tp > 0 && r.sl > 0, 'TP/SL echte Levels');
+  assert.equal(r.score, 60, 'Score weiterhin gedeckelt (price füllt EMA/S/R nicht)');
+});
