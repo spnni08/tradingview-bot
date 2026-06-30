@@ -3632,7 +3632,10 @@ async function getStats(env) {
     };
   } catch (error) {
     console.error('Error in getStats:', error);
-    return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, expectancy: 0 };
+    // `error` wird NUR im Fehlerfall gesetzt (Happy-Path-Rückgabe unverändert) —
+    // erlaubt Aufrufern wie sendDailySummary, einen DB-Ausfall zu erkennen,
+    // ohne dass die bestehenden Dashboard-Aufrufer das Feld beachten müssen.
+    return { total: 0, wins: 0, losses: 0, open: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, expectancy: 0, error: error.message };
   }
 }
 
@@ -3951,18 +3954,33 @@ async function evaluateOpenTrades(env) {
       SELECT * FROM signals WHERE outcome = 'OPEN' AND ai_tp IS NOT NULL AND ai_sl IS NOT NULL
       ORDER BY created_at ASC
     `).all();
-    for (const signal of (open.results || [])) {
+    const rows = open.results || [];
+    // Fall A: ein einzelner kaputter Trade soll den Lauf NICHT abbrechen →
+    // pro Iteration weiter best-effort, Fehler aber sammeln statt verschlucken.
+    const failures = [];
+    for (const signal of rows) {
       try {
         const price = await getLivePrice(env, signal.symbol);
         if (!price) continue;
         await applySignalExit(env, signal, price);
       } catch (sigErr) {
         console.error(`❌ evaluateOpenTrades: Signal ${signal.id} (${signal.symbol}) übersprungen:`, sigErr.message);
+        failures.push(`${signal.symbol || signal.id}: ${sigErr.message}`);
       }
     }
     console.log('✅ evaluateOpenTrades done');
+    // Nach der Schleife: falls Einzelfehler auftraten, EINMAL zusammengefasst
+    // melden (kein Spam pro Trade). Wird vom scheduled()-Catch zu Telegram.
+    if (failures.length > 0) {
+      throw new Error(
+        `${failures.length}/${rows.length} offene Trades fehlgeschlagen (z.B. ${failures[0]})`
+      );
+    }
   } catch (err) {
+    // Fall B: bisher wurde hier nur geloggt → der äußere Cron-Catch/Alert blieb
+    // unerreichbar. Jetzt loggen UND durchreichen, damit scheduled() alarmiert.
     console.error('evaluateOpenTrades error:', err);
+    throw err;
   }
 }
 
@@ -3974,13 +3992,30 @@ async function sendDailySummary(env) {
       ? history.map(s => `• ${s.symbol} ${s.direction} · Score ${s.ai_score} · ${s.outcome}`).join('\n')
       : 'Keine aktuellen Trades';
 
+    // Bei einem Datenfehler (getStats meldet ihn via `error`) den Report TROTZDEM
+    // senden — aber mit explizitem Hinweis, statt still einen leeren Bericht zu
+    // verschicken. Der Fehler wird unten zusätzlich nach außen durchgereicht.
+    const incomplete = stats.error
+      ? `\n\n⚠️ Daten unvollständig: ${stats.error}`
+      : '';
+
     await sendTelegramMessage(env,
       `📊 <b>WAVESCOUT Tagesbericht</b>\n\n` +
       `📈 Statistiken:\n• Total: ${stats.total} Trades\n• Wins: ${stats.wins} | Losses: ${stats.losses} | Offen: ${stats.open}\n• Win-Rate: ${stats.winRate}%\n\n` +
-      `🕐 Letzte Signale:\n${recentList}\n\n⏰ ${new Date().toLocaleString('de-DE')}`
+      `🕐 Letzte Signale:\n${recentList}${incomplete}\n\n⏰ ${new Date().toLocaleString('de-DE')}`
     );
+
+    // Report ist raus (mit Hinweis) — Fehler trotzdem durchreichen, damit der
+    // scheduled()-Catch zusätzlich alarmiert (kein stiller leerer Report mehr).
+    if (stats.error) {
+      throw new Error(`Tagesbericht mit unvollständigen Daten: ${stats.error}`);
+    }
   } catch (err) {
+    // Fall B: bisher nur geloggt → äußerer Cron-Catch/Alert unerreichbar.
+    // Jetzt loggen UND durchreichen (sendDailySummary wird nur von scheduled()
+    // aufgerufen, daher kein anderer Aufrufer betroffen).
     console.error('sendDailySummary error:', err);
+    throw err;
   }
 }
 
