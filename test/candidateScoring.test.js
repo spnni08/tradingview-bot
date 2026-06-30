@@ -317,3 +317,64 @@ test('Alle 4 Strategien haben sinnvolle Default-Schwellenwerte (>0, ≤100)', ()
     assert.equal(typeof cfg.weights, 'object', `${key}: weights muss ein Objekt sein`);
   }
 });
+
+// ══════════════════════════════════════════════════════════════
+// crypto_baseline — Rekalibrierung (echte Payload-Felder)
+// ══════════════════════════════════════════════════════════════
+// Reale Pine-Payloads liefern emaDistPct VORZEICHENBEHAFTET (− = Preis unter
+// EMA200) und nearSup/nearRes/rsiDeadZone als STRINGS "true"/"false". Vorher
+// verwarf `emaDistPct > 0` jedes Below-EMA-Signal und `!!"false"` war truthy →
+// alle Scores klebten bei 54. Diese Tests sichern die Korrektur ab.
+
+test('crypto_baseline: signierter (negativer) emaDistPct wird über Magnitude bewertet', () => {
+  // |−0.79| = 0.79 → Sweet-Spot (+20). nearSup "true" (+12), nearRes "false" (0).
+  const r = scoreCandidate('crypto_baseline', {
+    direction: 'LONG', rsi: '34.07', emaDistPct: '-0.7899325815',
+    nearSup: 'true', nearRes: 'false', rsiDeadZone: 'false',
+  });
+  assert.equal(r.details.ema_dist, CANDIDATE_SCORING_DEFAULTS.crypto_baseline.weights.ema_dist_sweet_spot);
+  assert.equal(r.score, 82);          // vorher: 54 (ema komplett verworfen)
+  assert.ok(r.score >= r.threshold);
+});
+
+test('crypto_baseline: String-Booleans korrekt geparst — "false" ist NICHT truthy', () => {
+  // SHORT, nearSup "false" (kein Malus), nearRes "true" (+12), |−0.337|<0.5 → too_close (−12).
+  const r = scoreCandidate('crypto_baseline', {
+    direction: 'SHORT', rsi: '65.47', emaDistPct: '-0.3369177592',
+    nearSup: 'false', nearRes: 'true', rsiDeadZone: 'false',
+  });
+  assert.equal(r.details.near_sup, undefined, 'nearSup "false" darf keinen Effekt haben');
+  assert.equal(r.details.near_res, CANDIDATE_SCORING_DEFAULTS.crypto_baseline.weights.near_res_short);
+  assert.equal(r.score, 50);
+});
+
+test('crypto_baseline: rsiDeadZone als String "true" greift als Malus', () => {
+  // |0.52| Sweet-Spot (+20), rsiDeadZone "true" (−15), nearRes "true" (+12) → 67.
+  const r = scoreCandidate('crypto_baseline', {
+    direction: 'SHORT', rsi: '63.04', emaDistPct: '0.520238653',
+    nearSup: 'false', nearRes: 'true', rsiDeadZone: 'true',
+  });
+  assert.equal(r.details.rsi_dead_zone, CANDIDATE_SCORING_DEFAULTS.crypto_baseline.weights.rsi_dead_zone_penalty);
+  assert.equal(r.score, 67);
+});
+
+test('crypto_baseline: 10 reale Candidate-Payloads erzeugen sinnvolle Streuung (nicht alle bei 54)', () => {
+  const payloads = [
+    { direction:'SHORT', rsi:'65.47', emaDistPct:'-0.3369177592', nearSup:'false', nearRes:'true',  rsiDeadZone:'false' },
+    { direction:'LONG',  rsi:'30.45', emaDistPct:'-0.1316657777', nearSup:'true',  nearRes:'true',  rsiDeadZone:'false' },
+    { direction:'LONG',  rsi:'34.07', emaDistPct:'-0.7899325815', nearSup:'true',  nearRes:'false', rsiDeadZone:'false' },
+    { direction:'LONG',  rsi:'31.34', emaDistPct:'-0.1302639542', nearSup:'true',  nearRes:'true',  rsiDeadZone:'false' },
+    { direction:'SHORT', rsi:'63.04', emaDistPct:'0.520238653',   nearSup:'false', nearRes:'true',  rsiDeadZone:'true'  },
+    { direction:'LONG',  rsi:'30.43', emaDistPct:'-1.3665869987', nearSup:'true',  nearRes:'false', rsiDeadZone:'false' },
+    { direction:'LONG',  rsi:'32.19', emaDistPct:'-0.6774662072', nearSup:'true',  nearRes:'true',  rsiDeadZone:'false' },
+    { direction:'LONG',  rsi:'38.71', emaDistPct:'-1.0281079832', nearSup:'true',  nearRes:'false', rsiDeadZone:'false' },
+    { direction:'LONG',  rsi:'36.26', emaDistPct:'-1.352147608',  nearSup:'true',  nearRes:'false', rsiDeadZone:'false' },
+    { direction:'LONG',  rsi:'30.49', emaDistPct:'-0.6424644261', nearSup:'true',  nearRes:'true',  rsiDeadZone:'false' },
+  ];
+  const scores = payloads.map(p => scoreCandidate('crypto_baseline', p).score);
+  const spread = Math.max(...scores) - Math.min(...scores);
+  // Vorher: alle 54 (eine 74) → Spread 20. Nachher: deutlich breiter.
+  assert.ok(spread >= 35, `Streuung zu klein (${spread}) — Rekalibrierung greift nicht`);
+  assert.ok(scores.filter(s => s >= 60).length >= 5, 'mind. die Hälfte sollte den Gate passieren');
+  assert.ok(scores.some(s => s < 50), 'schwache Setups sollen klar unter 50 landen');
+});
