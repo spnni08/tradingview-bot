@@ -1081,6 +1081,14 @@ function normalizeSignalForScoring(strategyKey, signal) {
   return s;
 }
 
+// Robust boolean-Parser für Payload-Felder. Pine/Webhook liefert Flags als
+// STRINGS ("true"/"false") oder Zahlen (1/0). `!!"false"` wäre fälschlich true
+// und `"true" == 1` ist false — beides würde die Score-Flags verfälschen.
+function parseBool(v) {
+  return v === true || v === 1 || v === '1' ||
+         (typeof v === 'string' && v.trim().toLowerCase() === 'true');
+}
+
 // Berechnet den Kandidaten-Score (0-100) für eine gegebene Strategie.
 // customWeights überschreibt einzelne Einträge aus CANDIDATE_SCORING_DEFAULTS.
 // Gibt { score, details, threshold } zurück (pure Funktion, kein DB-Zugriff).
@@ -1100,7 +1108,11 @@ function scoreCandidate(strategyKey, signal, customWeights = null) {
 
   // ── crypto_baseline ─────────────────────────────────────────
   if (strategyKey === 'crypto_baseline') {
-    const emaDistPct = parseFloat(signal.emaDistPct ?? signal.ema_dist_pct ?? 0);
+    // emaDistPct ist VORZEICHENBEHAFTET, wenn Pine ihn direkt sendet (− = Preis
+    // unter EMA200). Die Sweet-Spot-Bänder bewerten die DISTANZ (Magnitude) —
+    // das Vorzeichen ist Trend-Richtung, nicht Abstand. `Math.abs`, weil das
+    // alte `> 0` jedes Below-EMA-Signal komplett verwarf → Score-Deckel.
+    const emaDistPct = Math.abs(parseFloat(signal.emaDistPct ?? signal.ema_dist_pct ?? 0));
     if (emaDistPct > 0) {
       if (emaDistPct >= 0.5 && emaDistPct <= 1.3) {
         score += w.ema_dist_sweet_spot;
@@ -1117,9 +1129,11 @@ function scoreCandidate(strategyKey, signal, customWeights = null) {
       }
     }
 
-    // RSI dead-zone: Pine sendet rsiDeadZone=1 explizit, oder wir leiten es her
+    // RSI dead-zone: explizites Flag (Pine sendet "true"/"false" ODER 1) ODER aus
+    // dem RSI-Bereich hergeleitet. parseBool, weil String-"true" mit `== 1` nie
+    // greifen würde (und "false" sonst als truthy zählte).
     const rsi = parseFloat(signal.rsi ?? 50);
-    const inDeadZone = signal.rsiDeadZone == 1 || signal.rsi_dead_zone == 1 ||
+    const inDeadZone = parseBool(signal.rsiDeadZone) || parseBool(signal.rsi_dead_zone) ||
       (dir === 'LONG'  && rsi >= 55 && rsi <= 65) ||
       (dir === 'SHORT' && rsi >= 35 && rsi <= 45);
     if (inDeadZone) {
@@ -1127,8 +1141,11 @@ function scoreCandidate(strategyKey, signal, customWeights = null) {
       details.rsi_dead_zone = w.rsi_dead_zone_penalty;
     }
 
-    const nearSup = !!(signal.nearSup || signal.near_sup);
-    const nearRes = !!(signal.nearRes || signal.near_res);
+    // nearSup/nearRes kommen als String "true"/"false" → parseBool statt !!(…),
+    // weil !!"false" === true wäre (jedes Signal bekäme sonst konstant beide
+    // Boni/Mali → der S/R-Faktor diskriminiert NICHT mehr).
+    const nearSup = parseBool(signal.nearSup ?? signal.near_sup);
+    const nearRes = parseBool(signal.nearRes ?? signal.near_res);
     if (dir === 'LONG') {
       if (nearSup) { score += w.near_sup_long;         details.near_sup = w.near_sup_long; }
       if (nearRes) { score += w.near_res_long_penalty; details.near_res = w.near_res_long_penalty; }
