@@ -6,6 +6,17 @@ const { useState, useEffect, useRef, useCallback } = React;
 
 const API_URL = 'https://tradingview-bot.spnn08.workers.dev';
 
+// Lesbare Namen für die 4 Routing-Strategien (spiegelt worker.js STRATEGIES[key].display).
+// Per-Signal-Zeilen sollen den `strategy_key` zeigen — NICHT strategy_name/version,
+// das ist der Name der EINEN aktiven Score-Optimizer-Config ("WAVESCOUT Standard v1.0").
+const STRATEGY_LABELS = {
+  crypto_baseline:           'Krypto-1 (RSI+EMA200)',
+  crypto_sr_volume:          'Krypto-2 (S&R+VP)',
+  crypto_orderflow_breakout: 'Krypto-3 (Order Flow/Breakout)',
+  forex_sr_fib_rsi:          'Forex (S&R/VP+Fib+RSI)',
+};
+const strategyLabel = (key) => STRATEGY_LABELS[key] || key || '–';
+
 // ─── Strategy config metadata (mirrors worker.js) ─────────────
 
 const RULE_META = {
@@ -327,9 +338,9 @@ function SignalDetailModal({ signal, onClose, onMarkLoss }) {
                 {signal.counts_for_strategy !== 0 ? 'Zählt zur Strategie' : 'Zählt nicht zur Strategie'}
               </span>
               <span style={{ color: biasStatus.color }}>{biasStatus.icon} {biasStatus.label}</span>
-              {signal.strategy_name && (
+              {signal.strategy_key && (
                 <span style={{ color: 'var(--text-tertiary)' }}>
-                  {signal.strategy_name} {signal.strategy_version || ''}
+                  {strategyLabel(signal.strategy_key)}
                 </span>
               )}
             </div>
@@ -823,7 +834,7 @@ function SignalHistoryTab() {
                           {trade.trigger_reason || trade.trigger || trade.action || '–'}
                         </td>
                         <td style={{ fontSize: 11, fontWeight: 600, color: qualColor }}>{trade.signal_quality || '–'}</td>
-                        <td style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{trade.strategy_name || 'Standard'} <span style={{ color: 'var(--text-quaternary)' }}>{trade.strategy_version || ''}</span></td>
+                        <td style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{strategyLabel(trade.strategy_key)}</td>
                         <td onClick={e => e.stopPropagation()}>
                           <OutcomeSelector tradeId={trade.id} current={trade.outcome} onChange={updateOutcome}/>
                         </td>
@@ -1707,7 +1718,7 @@ function LossAnalysisTab() {
                       <td><AssetChip symbol={t.symbol}/></td>
                       <td><span className={`badge ${t.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{t.direction}</span></td>
                       <td className="mono" style={{ color: 'var(--loss)' }}>{t.ai_score || 0}</td>
-                      <td style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{t.strategy_name || 'Standard'}</td>
+                      <td style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{strategyLabel(t.strategy_key)}</td>
                       <td>
                         {signalReasons.length > 0 ? (
                           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
