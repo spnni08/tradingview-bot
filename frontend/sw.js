@@ -1,6 +1,6 @@
 // WAVESCOUT Service Worker — shell caching for offline resilience
 // Bump CACHE version whenever index.html ?v= is bumped to flush stale assets
-const CACHE  = 'wavescout-v408';
+const CACHE  = 'wavescout-v409';
 const SHELL  = [
   '/',
   '/shared.css',
