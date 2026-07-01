@@ -87,18 +87,23 @@ const EXPECTED = {
   // crypto_sr_volume/trade: Rule-Score 88 + VP-Bonus 15 → 100 (VP-Konfluenz).
   'crypto_sr_volume/trade':  { status: 'ok', outcome: 'OPEN', score: 100 },
   'crypto_sr_volume/reject': { status: 'candidate_rejected', candidateScore: 40 },
-  // edge: useScoreGate=false → OPEN trotz niedrigem Rule-Score (Pine-Entry).
-  'crypto_sr_volume/edge':   { status: 'ok', outcome: 'OPEN', score: 37 },
+  // edge: Candidate-Score 65 lag unter der alten Schwelle 60 knapp DARÜBER
+  // (useScoreGate=false → OPEN trotz niedrigem Rule-Score), reicht seit der
+  // Kalibrierung auf 70 aber nicht mehr → candidate_rejected.
+  'crypto_sr_volume/edge':   { status: 'candidate_rejected', candidateScore: 65 },
 
   'crypto_orderflow_breakout/trade':  { status: 'ok', outcome: 'OPEN', score: 78 },
   'crypto_orderflow_breakout/reject': { status: 'candidate_rejected', candidateScore: 55 },
-  // edge: Candidate-Score liegt GENAU auf dem Threshold (60) → passiert.
-  'crypto_orderflow_breakout/edge':   { status: 'ok', outcome: 'OPEN', score: 37 },
+  // edge: Candidate-Score 60 lag GENAU auf der alten Schwelle (60) → passierte.
+  // Seit der Kalibrierung auf 70 liegt es klar darunter → candidate_rejected.
+  'crypto_orderflow_breakout/edge':   { status: 'candidate_rejected', candidateScore: 60 },
 
   // Forex: useScoreGate=false → innerhalb der Session OPEN, außerhalb SKIPPED.
   'forex_sr_fib_rsi/trade':  { status: 'ok', outcome: 'OPEN',    score: 65 },
   'forex_sr_fib_rsi/reject': { status: 'ok', outcome: 'SKIPPED', score: 65 },
-  'forex_sr_fib_rsi/edge':   { status: 'ok', outcome: 'OPEN',    score: 37 },
+  // edge: Candidate-Score 65 passierte die alte Schwelle (60), reicht seit der
+  // Kalibrierung auf 70 nicht mehr → candidate_rejected.
+  'forex_sr_fib_rsi/edge':   { status: 'candidate_rejected', candidateScore: 65 },
 };
 
 for (const [strat, cases] of Object.entries(signalFixtures)) {
@@ -247,4 +252,69 @@ test('processSignal · crypto_baseline: kein fetch()-Call (Claude) selbst bei st
     globalThis.fetch = spiedFetch;
     restore();
   }
+});
+
+// ── GUARD: kein validierbarer Entry-Preis → REJECTED, kein 0-Level-Trade ────
+// Live-Incident: SOLUSDT/SUIUSDT wurden mit price/ai_entry/ai_tp/ai_sl = NULL
+// eröffnet (alte Logik). Ein Trade ohne Entry/TP/SL ist gefährlicher als gar
+// kein Trade — diese Tests sichern ab, dass processSignal so ein Signal JETZT
+// ablehnt, statt es mit kaputten Levels zu öffnen.
+
+async function runGuardCase(signal) {
+  const restore = installDeterminism(NON_SESSION_UTC);
+  try {
+    const env = makeEnv();
+    const result = await processSignal(env, { ...signal });
+    return { result, env };
+  } finally {
+    restore();
+  }
+}
+
+test('processSignal · Signal ohne price/close/entry → missing_entry_price, REJECTED, kein OPEN-Trade', async () => {
+  const { result, env } = await runGuardCase({
+    strategy: 'crypto_baseline', symbol: 'SOLUSDT', direction: 'SHORT', action: 'SELL',
+    rsi: '75', emaDistPct: '1.2', nearRes: 'true', nearSup: 'false', rsiDeadZone: 'false',
+    // Kein price, kein close, kein entry — genau das SOLUSDT/SUIUSDT-Szenario.
+  });
+  assert.equal(result.status, 'missing_entry_price');
+  const row = env.DB.insertedRow('signals');
+  assert.ok(row, 'Signal wird trotzdem sichtbar persistiert (kein stilles Verschwinden)');
+  assert.equal(row.outcome, 'REJECTED');
+  assert.equal(row.telegram_reason, 'missing_entry_price');
+  assert.equal(env.DB.insertCount('signals'), 1, 'genau eine (REJECTED-)Zeile, kein OPEN-Trade');
+});
+
+test('processSignal · entry ist "0" (String) → gilt als ungültig, missing_entry_price', async () => {
+  const { result, env } = await runGuardCase({
+    strategy: 'crypto_baseline', symbol: 'SUIUSDT', direction: 'SHORT', action: 'SELL',
+    entry: '0', rsi: '75', emaDistPct: '1.2', nearRes: 'true', nearSup: 'false', rsiDeadZone: 'false',
+  });
+  assert.equal(result.status, 'missing_entry_price');
+  assert.equal(env.DB.insertedRow('signals').outcome, 'REJECTED');
+});
+
+test('processSignal · entry ist nicht-numerischer String ("NaN"/leer) → missing_entry_price, kein Crash', async () => {
+  const { result: r1 } = await runGuardCase({
+    strategy: 'crypto_baseline', symbol: 'BTCUSDT', direction: 'LONG', entry: 'NaN', rsi: '24',
+  });
+  assert.equal(r1.status, 'missing_entry_price');
+
+  const { result: r2 } = await runGuardCase({
+    strategy: 'crypto_baseline', symbol: 'BTCUSDT', direction: 'LONG', entry: '', rsi: '24',
+  });
+  assert.equal(r2.status, 'missing_entry_price');
+});
+
+test('processSignal · gültiger entry (String) passiert die Guard und öffnet ganz normal', async () => {
+  const { result, env } = await runGuardCase({
+    strategy: 'crypto_baseline', symbol: 'BTCUSDT', direction: 'LONG', action: 'BUY',
+    entry: '62000', rsi: '24', emaDistPct: '-1.5', nearSup: 'true', nearRes: 'false', rsiDeadZone: 'false',
+  });
+  assert.equal(result.status, 'ok', 'Guard darf valide Signale nicht blockieren');
+  const row = env.DB.insertedRow('signals');
+  assert.equal(row.price, 62000);
+  assert.equal(row.ai_entry, 62000);
+  assert.ok(row.ai_tp > 0 && row.ai_sl > 0, 'TP/SL sind echte Levels');
+  assert.equal(row.outcome, 'OPEN');
 });
