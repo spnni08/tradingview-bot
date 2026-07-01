@@ -3216,12 +3216,15 @@ async function processSignal(env, signal) {
   // score-optimierte Strategie (crypto_baseline). Dort sind Signale mit 75–79
   // zwar handelbar (practice/Dashboard-Bell ≥70), lösen aber bewusst KEINEN
   // Telegram-Alert aus. Die Pine-gefilterten Strategien benachrichtigen direkt,
-  // sobald das Signal handelbar ist (nicht pausiert / innerhalb Session) — sie
-  // sind bereits eine harte Ja/Nein-Entscheidung, kein Score-Gate.
+  // sobald das Signal handelbar ist (nicht pausiert / innerhalb Session) —
+  // aber auch dort gilt ein Mindest-Score von 75 (Marvin: keine Priority-
+  // Alerts unter 75, grundsätzlich keine Telegram-Nachrichten unter 70 — ein
+  // einziger Threshold von 75 deckt beides ab). Ohne dieses Gate hätte JEDES
+  // handelbare Pine-Signal benachrichtigt, unabhängig von analysis.score.
   const isTest       = signal.test === true || signal.is_test === 1;
   let   shouldNotify = isTest || (scoreOptimized
     ? analysis.score >= 80
-    : (!sessionClosed && !strategyPaused));
+    : (!sessionClosed && !strategyPaused && analysis.score >= 75));
   let telegramSent   = 0;
   let telegramReason = 'below_threshold';
 
@@ -3936,11 +3939,19 @@ async function getHistory(env, limit = 50) {
     const rows = await env.DB.prepare(
       `SELECT * FROM signals ORDER BY created_at DESC LIMIT ?`
     ).bind(limit).all();
-    return rows.results || [];
+    return (rows.results || []).map(withStrategyDisplay);
   } catch (error) {
     console.error('Error in getHistory:', error);
     return [];
   }
+}
+
+// Reichert eine signals-Zeile um `strategy_display` an (z.B. "Krypto-2 (S&R+VP)")
+// — Single Source of Truth bleibt STRATEGIES/strategyDisplayLabel, damit das
+// Dashboard nicht seine eigene Kopie der Strategie-Labels pflegen muss.
+function withStrategyDisplay(row) {
+  if (!row) return row;
+  return { ...row, strategy_display: strategyDisplayLabel(row.strategy_key) };
 }
 
 async function getSnapshot(env, symbol, timeframe = '5m') {
@@ -4018,9 +4029,10 @@ async function getEquityHistory(env) {
 
 async function getBestSignal(env) {
   try {
-    return await env.DB.prepare(
+    const row = await env.DB.prepare(
       `SELECT * FROM signals WHERE outcome = 'OPEN' ORDER BY ai_score DESC LIMIT 1`
     ).first();
+    return withStrategyDisplay(row);
   } catch (error) {
     console.error('Error in getBestSignal:', error);
     return null;
@@ -4818,6 +4830,34 @@ export default {
       }
 
       // ── DATA ─────────────────────────────────────────────────
+
+      // Score-Regeln pro Strategie fürs Dashboard (Tooltip/Info-Panel): welche
+      // Gewichte fließen aktuell in den Kandidaten-Score ein? Berücksichtigt
+      // aktive settings-Overrides (candidate_scoring_overrides), damit das
+      // Dashboard nie von den echten, live-wirksamen Gewichten abweicht.
+      if (request.method === "GET" && url.pathname === "/scoring-rules") {
+        const session = await validateSession(env, request);
+        if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+
+        const rules = {};
+        for (const [key, defaults] of Object.entries(CANDIDATE_SCORING_DEFAULTS)) {
+          const override = await loadCandidateScoringConfig(env, key);
+          const weights   = override ? { ...defaults.weights, ...override } : defaults.weights;
+          const threshold = override?._threshold ?? defaults.threshold;
+          const stratDef  = STRATEGIES[key] || {};
+          rules[key] = {
+            key,
+            label:        stratDef.label   || key,
+            display:      stratDef.display || key,
+            useScoreGate: !!stratDef.useScoreGate,
+            minScore:     stratDef.minScore ?? null,
+            base:         defaults.base,
+            threshold,
+            weights,
+          };
+        }
+        return jsonResponse({ rules });
+      }
 
       if (request.method === "GET" && url.pathname === "/stats") {
         const session = await validateSession(env, request);
