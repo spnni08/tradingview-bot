@@ -885,9 +885,10 @@ const STRATEGIES = {
     // nicht sendet (es sendet stattdessen direction/entry/rsi/emaDistPct/
     // nearSup/nearRes/rsiDeadZone). scoreMeanReversionBaseline liest den
     // tatsächlichen Feldsatz und bewertet Mean-Reversion-Qualität (Details
-    // s. dort). analyzeWithRules läuft weiterhin (Telemetrie: entry/tp/sl,
-    // matched/failed_rules, score_breakdown) — sein Score entscheidet aber
-    // über nichts mehr.
+    // s. dort) und ersetzt ruleAnalysis.score als Gate-2-Eingabe — inkl. als
+    // Auslöser für den (weiterhin aktiven) Claude-Enrichment-Call, siehe
+    // processSignal (preAiScore). analyzeWithRules bleibt für entry/tp/sl und
+    // Telemetrie (matched/failed_rules, score_breakdown) im Einsatz.
     useScoreGate: true,
     minScore:     75,
     sessionGate:  false,
@@ -1456,10 +1457,18 @@ function requireNonEmptyPrompt(prompt, context = 'AI call') {
   return prompt.trim();
 }
 
-async function analyzeSignalWithAI(env, signal, strategyConfig = null, abortSignal = null) {
+// `ruleFallback` überschreibt den internen Fallback (analyzeWithRules), falls
+// der Aufrufer einen besseren/deterministischen Ersatz hat. Wichtig für
+// crypto_baseline: analyzeWithRules ist für den v2-Payload strukturell blind
+// (siehe scoreMeanReversionBaseline oben) — OHNE ruleFallback würde jeder
+// Claude-Fehler (Timeout, Rate-Limit, kein API-Key) Gate 2 still auf genau
+// den kaputten Trendfolge-Score zurückfallen lassen, den dieser Scorer
+// ersetzen soll. processSignal übergibt dafür fallbackAnalysis.
+async function analyzeSignalWithAI(env, signal, strategyConfig = null, abortSignal = null, ruleFallback = null) {
+  const fallback = () => ruleFallback || analyzeWithRules(signal, strategyConfig);
   if (!env.ANTHROPIC_API_KEY) {
     console.log('⚠️ No AI API key, using rule-based analysis');
-    return analyzeWithRules(signal);
+    return fallback();
   }
   try {
     const setupType   = String(signal.setup_type || signal.trigger || '').toUpperCase();
@@ -1543,21 +1552,21 @@ Bewerte das Signal nach v2.0 Kriterien. Antworte NUR als JSON:
     if (!response.ok) {
       const errBody = await response.text();
       console.error(`❌ Anthropic API error ${response.status}:`, errBody);
-      return analyzeWithRules(signal, strategyConfig);
+      return fallback();
     }
 
     const data = await response.json();
     const text = data.content?.[0]?.text;
     if (!text) {
       console.error('❌ Anthropic API returned empty content block');
-      return analyzeWithRules(signal, strategyConfig);
+      return fallback();
     }
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) return JSON.parse(jsonMatch[0]);
   } catch (error) {
     console.error('AI analysis error:', error);
   }
-  return analyzeWithRules(signal, strategyConfig);
+  return fallback();
 }
 
 /**
@@ -3052,20 +3061,17 @@ async function processSignal(env, signal) {
   const aiTimer = setTimeout(() => aiAbort.abort(), AI_TIMEOUT_MS);
   let analysis;
   try {
-    // Claude läuft NIE für crypto_baseline: analyzeSignalWithAI() fragt im
-    // Prompt denselben Trendfolge-Feldsatz ab wie analyzeWithRules (price/
-    // ema50/ema200/trend/confidence) — für den deployten v2-Payload wären das
-    // fast durchgehend "n/a"-Werte, ein Claude-Call brächte dort keinen
-    // Erkenntnisgewinn, nur Kosten/Latenz. Der neue Mean-Reversion-Scorer ist
-    // das vollständige, deterministische Gate 2 für baseline (siehe oben).
-    // Die Pine-getrusteten Strategien (useScoreGate=false) riefen Claude
-    // ohnehin nie auf.
-    if (scoreOptimized && strategyKey !== 'crypto_baseline' && preAiScore >= aiThreshold) {
-      analysis = await analyzeSignalWithAI(env, signal, strategyConfig, aiAbort.signal) || fallbackAnalysis;
+    // Score-Optimizer/Claude nur für die score-optimierte Strategie (baseline).
+    // preAiScore ist für baseline der Mean-Reversion-Score (+ VP-Bonus) statt
+    // des alten, strukturell blinden Rule-Scores — Claude bewertet also ein
+    // bereits durch Gate-2-Logik vorgefiltertes Signal, nicht mehr "n/a"-Daten.
+    // Die Pine-gefilterten Strategien nutzen die deterministische Rule-Analyse
+    // (liefert Entry/TP/SL ebenfalls) und sparen den Claude-Call.
+    if (scoreOptimized && preAiScore >= aiThreshold) {
+      analysis = await analyzeSignalWithAI(env, signal, strategyConfig, aiAbort.signal, fallbackAnalysis) || fallbackAnalysis;
     } else {
-      if (strategyKey === 'crypto_baseline') console.log(`⏭️ ${strategyKey}: Mean-Reversion-Score ${fallbackAnalysis.score} → Claude übersprungen (Gate 2 ist deterministisch)`);
-      else if (!scoreOptimized)              console.log(`⏭️ ${strategyKey}: Pine-gefiltert → Score-Optimizer/Claude übersprungen`);
-      else                                   console.log(`⏭️ Score-Gate: ${preAiScore} < ${aiThreshold} → Claude-Call übersprungen`);
+      if (!scoreOptimized) console.log(`⏭️ ${strategyKey}: Pine-gefiltert → Score-Optimizer/Claude übersprungen`);
+      else                 console.log(`⏭️ Score-Gate: ${preAiScore} < ${aiThreshold} → Claude-Call übersprungen`);
       analysis = fallbackAnalysis;
     }
   } catch (aiErr) {
