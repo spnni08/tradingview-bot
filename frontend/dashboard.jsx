@@ -57,8 +57,36 @@ function _calcPnL(s) {
   return s.direction === 'LONG' ? pct : -pct;
 }
 
+// Strategie-Label + Gewichte-Tooltip: `strategy_display` kommt vorberechnet
+// aus dem Backend (Single Source of Truth: STRATEGIES in worker.js), ältere
+// gecachte Signale ohne dieses Feld fallen auf den rohen Key zurück.
+function strategyLabel(signal) {
+  return signal?.strategy_display || signal?.strategy_key || null;
+}
+
+const WEIGHT_LABELS = {
+  ema_dist_sweet_spot: 'EMA-Dist Sweet-Spot', ema_dist_acceptable: 'EMA-Dist ok', ema_dist_too_close: 'EMA-Dist zu nah', ema_dist_too_far: 'EMA-Dist zu weit',
+  rsi_dead_zone_penalty: 'RSI Dead-Zone', near_sup_long: 'Support nah (LONG)', near_res_short: 'Resistance nah (SHORT)',
+  near_res_long_penalty: 'Resistance über Preis (LONG)', near_sup_short_penalty: 'Support unter Preis (SHORT)',
+  reclaim: 'Level-Reclaim', breakdown: 'Level-Breakdown', rsi_was_oversold: 'RSI war überverkauft', rsi_was_overbought: 'RSI war überkauft',
+  rsi_rising: 'RSI steigt', rsi_falling: 'RSI fällt', trend_ok: 'EMA200-Trend passt',
+  breakout_above_range: 'Breakout über Range', breakout_below_range: 'Breakdown unter Range',
+  vol_ratio_high: 'Volumen hoch (≥2.0x)', vol_ratio_medium: 'Volumen mittel (1.5-2.0x)', vol_ratio_low_penalty: 'Volumen niedrig (<1.5x)',
+  reclaim_val: 'VAL-Reclaim', breakdown_vah: 'VAH-Breakdown', dist_very_close: 'Abstand < 0.1%', dist_close: 'Abstand 0.1-0.3%',
+};
+
+// Baut den Tooltip-Text für die Score-Regeln einer Strategie aus /scoring-rules.
+function scoringRulesTooltip(rules, strategyKey) {
+  const r = rules?.[strategyKey];
+  if (!r) return 'Score-Regeln werden geladen…';
+  const weightLines = Object.entries(r.weights || {})
+    .map(([k, v]) => `${WEIGHT_LABELS[k] || k} ${v >= 0 ? '+' : ''}${v}`)
+    .join('\n');
+  return `${r.display} — Basis ${r.base} · Schwelle ${r.threshold}\n${weightLines}`;
+}
+
 // ─── Signal Detail Modal ──────────────────────────────────────
-function DashSignalModal({ signal, onClose, onExecuteTrade, onSaveToJournal, onIgnoreSignal }) {
+function DashSignalModal({ signal, scoringRules, onClose, onExecuteTrade, onSaveToJournal, onIgnoreSignal }) {
   if (!signal) return null;
   const pnl        = _calcPnL(signal);
   const sc         = signal.ai_score || 0;
@@ -108,8 +136,11 @@ function DashSignalModal({ signal, onClose, onExecuteTrade, onSaveToJournal, onI
           {(signal.strategy_key || signal.asset_class) && (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
               {signal.strategy_key && (
-                <span style={{ padding: '3px 8px', borderRadius: 5, background: 'rgba(59,130,246,.12)', border: '1px solid rgba(59,130,246,.25)', fontSize: 11, color: 'var(--blue-400)', fontFamily: 'var(--font-mono)' }}>
-                  {signal.strategy_key}
+                <span
+                  style={{ padding: '3px 8px', borderRadius: 5, background: 'rgba(59,130,246,.12)', border: '1px solid rgba(59,130,246,.25)', fontSize: 11, color: 'var(--blue-400)', fontFamily: 'var(--font-mono)', cursor: 'help' }}
+                  title={scoringRulesTooltip(scoringRules, signal.strategy_key)}
+                >
+                  {strategyLabel(signal)}
                 </span>
               )}
               {signal.asset_class && (
@@ -293,6 +324,7 @@ const DashboardPage = ({ user, navigate }) => {
   const [todayBias, setTodayBias]   = useState(null);
   const [radar, setRadar]           = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [scoringRules, setScoringRules] = useState(null);
   const [liveMode, setLiveMode]     = useState(() => {
     const saved = localStorage.getItem('wavescout_livemode');
     return saved !== 'false'; // default: true
@@ -341,6 +373,15 @@ const DashboardPage = ({ user, navigate }) => {
     } catch { /* non-critical */ }
   }, []);
 
+  // Score-Regeln pro Strategie (für Tooltips) — ändern sich nur bei Kalibrierung,
+  // deshalb einmalig beim Mount laden statt zu pollen.
+  const loadScoringRules = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/scoring-rules`, { credentials: 'include' });
+      if (res.ok) setScoringRules((await res.json()).rules || null);
+    } catch { /* non-critical */ }
+  }, []);
+
   // ── Polling management ────────────────────────────────────────
   const stopPolling = useCallback(() => {
     [liveRef, radarRef, biasRef].forEach(ref => {
@@ -384,6 +425,7 @@ const DashboardPage = ({ user, navigate }) => {
     loadLiveData(false);
     loadTodayBias();
     loadMarketRadar();
+    loadScoringRules();
     if (liveMode) startPolling();
     return () => stopPolling(); // cleanup on unmount / page switch
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -597,6 +639,7 @@ const DashboardPage = ({ user, navigate }) => {
       <div className="dash-top-grid">
         <BestSignalCard
           signal={bestSignal}
+          scoringRules={scoringRules}
           onExecuteTrade={handleExecuteTrade}
           onSaveToJournal={handleSaveToJournal}
           onIgnore={handleIgnoreSignal}
@@ -637,6 +680,7 @@ const DashboardPage = ({ user, navigate }) => {
       {/* Latest signals table */}
       <LatestTradesCard
         signals={latestSignals}
+        scoringRules={scoringRules}
         onViewAll={() => navigate('backtest')}
         onExecuteTrade={handleExecuteTrade}
         onSaveToJournal={handleSaveToJournal}
@@ -699,7 +743,7 @@ const CryptoMarketRadar = ({ radar }) => {
 
 // ─── Sub-components ───────────────────────────────────────────
 
-const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) => {
+const BestSignalCard = ({ signal, scoringRules, onExecuteTrade, onSaveToJournal, onIgnore }) => {
   if (!signal) return (
     <div className="card">
       <div className="card-head">
@@ -732,6 +776,15 @@ const BestSignalCard = ({ signal, onExecuteTrade, onSaveToJournal, onIgnore }) =
                 {signal.direction}
               </span>
               <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{signal.timeframe}</span>
+              {strategyLabel(signal) && (
+                <span
+                  className="badge badge-tag"
+                  style={{ fontSize: 10, fontFamily: 'var(--font-mono)', cursor: 'help' }}
+                  title={scoringRulesTooltip(scoringRules, signal.strategy_key)}
+                >
+                  {strategyLabel(signal)}
+                </span>
+              )}
             </div>
 
             <div className="signal-meta">
@@ -879,7 +932,7 @@ const MarketBiasCard = ({ marketBias }) => {
   );
 };
 
-const LatestTradesCard = ({ signals, onViewAll, onExecuteTrade, onSaveToJournal, onIgnoreSignal }) => {
+const LatestTradesCard = ({ signals, scoringRules, onViewAll, onExecuteTrade, onSaveToJournal, onIgnoreSignal }) => {
   const [dirFilter,    setDirFilter]    = useState('all');
   const [scoreFilter,  setScoreFilter]  = useState(0);
   const [statusFilter, setStatusFilter] = useState('all');
@@ -962,6 +1015,7 @@ const LatestTradesCard = ({ signals, onViewAll, onExecuteTrade, onSaveToJournal,
           {selected && (
             <DashSignalModal
               signal={selected}
+              scoringRules={scoringRules}
               onClose={() => setSelected(null)}
               onExecuteTrade={onExecuteTrade || (() => {})}
               onSaveToJournal={onSaveToJournal || (() => {})}
@@ -974,7 +1028,9 @@ const LatestTradesCard = ({ signals, onViewAll, onExecuteTrade, onSaveToJournal,
               <thead>
                 <tr>
                   <th>Zeit</th><th>Asset</th><th>Richtung</th>
-                  <th>Entry</th><th>TP1</th><th>TP2</th><th>SL</th><th>Score</th><th>Strategie</th><th>Status</th>
+                  <th>Entry</th><th>TP1</th><th>TP2</th><th>SL</th><th>Score</th>
+                  <th title="Zeigt Strategie-Name — hover für die Score-Gewichte dieser Strategie">Strategie ℹ</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -990,7 +1046,9 @@ const LatestTradesCard = ({ signals, onViewAll, onExecuteTrade, onSaveToJournal,
                     <td className="mono win" style={{ fontSize: 11 }}>{s.ai_tp ? `$${s.ai_tp.toFixed(2)}` : '–'}</td>
                     <td className="mono loss" style={{ fontSize: 11 }}>{s.ai_sl ? `$${s.ai_sl.toFixed(2)}` : '–'}</td>
                     <td className="mono">{s.ai_score || 0}</td>
-                    <td className="mono muted" style={{ fontSize: 10 }}>{s.strategy_key ? s.strategy_key.replace('crypto_', '').replace('forex_', '') : '–'}</td>
+                    <td className="mono muted" style={{ fontSize: 10, cursor: s.strategy_key ? 'help' : 'default' }} title={s.strategy_key ? scoringRulesTooltip(scoringRules, s.strategy_key) : ''}>
+                      {strategyLabel(s) || '–'}
+                    </td>
                     <td>
                       {s.outcome === 'REJECTED'
                         ? <span className="badge badge-loss" title={`Abgelehnt: ${s.telegram_reason || 'candidate_score_too_low'}`} style={{ opacity: 0.75 }}>✗ Abgelehnt</span>
@@ -1029,6 +1087,13 @@ const LatestTradesCard = ({ signals, onViewAll, onExecuteTrade, onSaveToJournal,
                     {s.ai_sl && <span style={{ color: 'var(--loss)', fontFamily: 'var(--font-mono)' }}>SL&nbsp;${s.ai_sl.toFixed(2)}</span>}
                     <span style={{ marginLeft: 'auto' }}>{getTimeAgo(s.created_at)}</span>
                   </div>
+                  {strategyLabel(s) && (
+                    <div style={{ marginTop: 4 }}>
+                      <span className="badge badge-tag" style={{ fontSize: 9, fontFamily: 'var(--font-mono)' }} title={scoringRulesTooltip(scoringRules, s.strategy_key)}>
+                        {strategyLabel(s)}
+                      </span>
+                    </div>
+                  )}
                 </div>
               );
             })}
