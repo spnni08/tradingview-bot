@@ -265,11 +265,18 @@ test('crypto_orderflow_breakout: niedriger volRatio (<1.5) → Strafe -5', () =>
 // forex_sr_fib_rsi
 // ══════════════════════════════════════════════════════════════
 
-test('forex_sr_fib_rsi: reclaimVAL LONG + sehr geringer Abstand → hoher Score', () => {
+// distToVAL/distToVAH: wavescout_forex.pine sendet eine ROHE Preisdifferenz
+// (`close - fxVAL` bzw. `fxVAH - close`), nicht Prozent — der Worker
+// normalisiert das intern auf Prozent von `price` (siehe scoreCandidate).
+// Die Tests brauchen deshalb einen `price` und einen realistischen
+// Preis-Delta-Wert statt eines direkten Prozentwerts.
+
+test('forex_sr_fib_rsi: reclaimVAL LONG + sehr geringer Abstand (0.0005 bei price 1.08 → 0.046 %) → hoher Score', () => {
   const result = scoreCandidate('forex_sr_fib_rsi', {
     direction: 'LONG',
     reclaimVAL: true,
-    distToVAL: 0.05,    // < 0.1 % → sehr nah
+    price: 1.08,
+    distToVAL: 0.0005,  // 0.0005 / 1.08 * 100 = 0.046 % < 0.1 % → sehr nah
   });
   // base 35 + reclaimVAL 30 + dist_very_close 15 = 80
   assert.equal(result.score, 80);
@@ -277,11 +284,12 @@ test('forex_sr_fib_rsi: reclaimVAL LONG + sehr geringer Abstand → hoher Score'
   assert.equal(result.details.dist_to_level, CANDIDATE_SCORING_DEFAULTS.forex_sr_fib_rsi.weights.dist_very_close);
 });
 
-test('forex_sr_fib_rsi: breakdownVAH SHORT + mittlerer Abstand → solider Score', () => {
+test('forex_sr_fib_rsi: breakdownVAH SHORT + mittlerer Abstand (0.002 bei price 1.08 → 0.185 %) → solider Score', () => {
   const result = scoreCandidate('forex_sr_fib_rsi', {
     direction: 'SHORT',
     breakdownVAH: true,
-    distToVAH: 0.2,     // 0.1–0.3 % → dist_close
+    price: 1.08,
+    distToVAH: 0.002,   // 0.002 / 1.08 * 100 = 0.185 % → 0.1–0.3 % → dist_close
   });
   // base 35 + breakdownVAH 30 + dist_close 5 = 70
   assert.equal(result.score, 70);
@@ -301,9 +309,46 @@ test('forex_sr_fib_rsi: snake_case Felder (reclaim_val, dist_to_val) werden erka
   const result = scoreCandidate('forex_sr_fib_rsi', {
     direction: 'LONG',
     reclaim_val: true,
-    dist_to_val: 0.05,
+    price: 1.08,
+    dist_to_val: 0.0005,
   });
   assert.equal(result.score, 80);
+});
+
+// ── distToVAL/distToVAH — Prozent-Normalisierung (Payload-Contract-Fix) ─────
+// wavescout_forex.pine sendet eine ROHE Preisdifferenz, nicht Prozent. Für
+// EUR/USD (~1.08) wäre jede reale Differenz automatisch < 0.1 (die alten,
+// als Prozent gedachten Schwellen) — der dist_very_close-Bonus hätte praktisch
+// IMMER gefeuert, unabhängig von der tatsächlichen Nähe zum Level.
+
+test('forex_sr_fib_rsi: realistische EUR/USD-Distanz (0.0004 absolut) wird korrekt als sehr nah erkannt', () => {
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'LONG', price: 1.08, distToVAL: 0.0004, // → 0.037 % < 0.1 %
+  });
+  assert.equal(result.details.dist_to_level, CANDIDATE_SCORING_DEFAULTS.forex_sr_fib_rsi.weights.dist_very_close);
+});
+
+test('forex_sr_fib_rsi: realistische EUR/USD-Distanz, die WEIT vom Level entfernt ist, bekommt KEINEN Nah-Bonus', () => {
+  // 0.02 absolute Preisdifferenz bei price 1.08 = 1.85 % — weit weg, aber vor
+  // dem Fix wäre 0.02 < 0.3 gewesen und hätte fälschlich dist_close ausgelöst.
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'LONG', price: 1.08, distToVAL: 0.02,
+  });
+  assert.equal(result.details.dist_to_level, undefined, 'echte 1.85 % Abstand ist NICHT nah am Level');
+});
+
+test('forex_sr_fib_rsi: Vorzeichen von distToVAL (Preis über/unter Level) ist irrelevant für die Nähe', () => {
+  const below = scoreCandidate('forex_sr_fib_rsi', { direction: 'LONG', price: 1.08, distToVAL: 0.0004 });
+  const above = scoreCandidate('forex_sr_fib_rsi', { direction: 'LONG', price: 1.08, distToVAL: -0.0004 });
+  assert.equal(below.score, above.score, 'Math.abs() macht das Vorzeichen irrelevant, nur die Magnitude zählt');
+});
+
+test('forex_sr_fib_rsi: ohne price/entry kein Crash, kein (fälschlicher) Nah-Bonus', () => {
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'LONG', reclaimVAL: true, distToVAL: 0.0004, // kein price/entry im Payload
+  });
+  assert.equal(result.score, 65, 'base 35 + reclaimVAL 30, kein Dist-Bonus ohne Preisreferenz');
+  assert.equal(result.details.dist_to_level, undefined);
 });
 
 // ── forex_sr_fib_rsi — String-Boolean-Fix (wavescout_forex.pine sendet

@@ -1084,12 +1084,17 @@ function normalizeSignalForScoring(strategyKey, signal) {
       s.reclaimVAL = dir === 'LONG'  && (trigger.includes('LONG')  || !trigger.includes('SHORT'));
     if (s.breakdownVAH == null && s.breakdown_vah == null)
       s.breakdownVAH = dir === 'SHORT' && (trigger.includes('SHORT') || !trigger.includes('LONG'));
+    // RAW Preisdifferenz ableiten (nicht Prozent!) — wavescout_forex.pine
+    // sendet distToVAL/distToVAH ebenfalls als rohe Differenz (`close - fxVAL`
+    // bzw. `fxVAH - close`). scoreCandidate normalisiert einheitlich auf
+    // Prozent von `price`; würde hier bereits eine Prozentzahl abgelegt, würde
+    // sie dort ein zweites Mal normalisiert (falsches Ergebnis).
     if (s.distToVAL == null && s.dist_to_val == null &&
-        dir === 'LONG' && Number.isFinite(price) && Number.isFinite(support) && support > 0)
-      s.distToVAL = Math.abs(price - support) / support * 100;
+        dir === 'LONG' && Number.isFinite(price) && Number.isFinite(support))
+      s.distToVAL = price - support;
     if (s.distToVAH == null && s.dist_to_vah == null &&
-        dir === 'SHORT' && Number.isFinite(price) && Number.isFinite(resistance) && resistance > 0)
-      s.distToVAH = Math.abs(price - resistance) / resistance * 100;
+        dir === 'SHORT' && Number.isFinite(price) && Number.isFinite(resistance))
+      s.distToVAH = resistance - price;
   }
 
   return s;
@@ -1225,10 +1230,25 @@ function scoreCandidate(strategyKey, signal, customWeights = null) {
     if (reclaimVAL)   { score += w.reclaim_val;   details.reclaim_val   = w.reclaim_val; }
     if (breakdownVAH) { score += w.breakdown_vah; details.breakdown_vah = w.breakdown_vah; }
 
-    // Abstand zu VAL (LONG) oder VAH (SHORT)
-    const dist = dir === 'LONG'
-      ? parseFloat(signal.distToVAL ?? signal.dist_to_val ?? 999)
-      : parseFloat(signal.distToVAH ?? signal.dist_to_vah ?? 999);
+    // Abstand zu VAL (LONG) oder VAH (SHORT). wavescout_forex.pine sendet
+    // distToVAL/distToVAH als ROHE Preisdifferenz (`close - fxVAL` bzw.
+    // `fxVAH - close`, kann negativ sein) — NICHT als Prozent, obwohl der
+    // Feldname (parallel zu emaDistPct) das nahelegt und die Schwellen unten
+    // (0.1/0.3) als Prozent gedacht sind. Für ein Paar wie EUR/USD (~1.08)
+    // ist jede reale Preisdifferenz (z.B. 0.0005) automatisch < 0.1 → der
+    // dist_very_close-Bonus hätte praktisch IMMER gefeuert, unabhängig von
+    // der tatsächlichen Nähe zum Level. Auf Prozent von `price` normalisieren
+    // (Math.abs — das Vorzeichen sagt nur "über/unter Level", nichts über die
+    // Nähe), analog zur emaDistPct-Behandlung bei crypto_baseline. Ohne
+    // gültigen Preis (z.B. direkte scoreCandidate-Aufrufe ohne price/entry)
+    // bleibt dist bei 999 → kein Bonus, kein Crash.
+    const forexPrice = parseFloat(signal.price ?? signal.entry ?? NaN);
+    const rawDist = dir === 'LONG'
+      ? parseFloat(signal.distToVAL ?? signal.dist_to_val ?? NaN)
+      : parseFloat(signal.distToVAH ?? signal.dist_to_vah ?? NaN);
+    const dist = (Number.isFinite(rawDist) && Number.isFinite(forexPrice) && forexPrice > 0)
+      ? Math.abs(rawDist) / forexPrice * 100
+      : 999;
     if (dist < 0.1) {
       score += w.dist_very_close; details.dist_to_level = w.dist_very_close;
     } else if (dist < 0.3) {
