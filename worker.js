@@ -3216,15 +3216,15 @@ async function processSignal(env, signal) {
   // score-optimierte Strategie (crypto_baseline). Dort sind Signale mit 75–79
   // zwar handelbar (practice/Dashboard-Bell ≥70), lösen aber bewusst KEINEN
   // Telegram-Alert aus. Die Pine-gefilterten Strategien benachrichtigen direkt,
-  // sobald das Signal handelbar ist (nicht pausiert / innerhalb Session) —
-  // aber auch dort gilt ein Mindest-Score von 75 (Marvin: keine Priority-
-  // Alerts unter 75, grundsätzlich keine Telegram-Nachrichten unter 70 — ein
-  // einziger Threshold von 75 deckt beides ab). Ohne dieses Gate hätte JEDES
-  // handelbare Pine-Signal benachrichtigt, unabhängig von analysis.score.
+  // sobald das Signal handelbar ist (nicht pausiert / innerhalb Session) — ohne
+  // zusätzliches Score-Gate: analysis.score kommt aus dem auf crypto_baseline
+  // kalibrierten Trendfolge-Scorer (analyzeWithRules) und ist für Pine-Strategien
+  // nicht aussagekräftig (candidateScore/Gate 1 ≥70 + Pine-Entry-Logik filtern
+  // hier bereits die Qualität).
   const isTest       = signal.test === true || signal.is_test === 1;
   let   shouldNotify = isTest || (scoreOptimized
     ? analysis.score >= 80
-    : (!sessionClosed && !strategyPaused && analysis.score >= 75));
+    : (!sessionClosed && !strategyPaused));
   let telegramSent   = 0;
   let telegramReason = 'below_threshold';
 

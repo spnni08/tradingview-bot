@@ -157,8 +157,17 @@ export function makeFakeDB({ settings = {}, activeStrategy } = {}) {
 }
 
 // Mock-env OHNE Tokens → Telegram/ntfy/WebPush/Anthropic no-oppen automatisch.
-export function makeEnv(opts = {}) {
-  return { DB: makeFakeDB(opts) };
+// Mit { telegram: true } wird ein Fake-Bot-Token gesetzt, sodass sendAlertMessage
+// tatsächlich den (in installDeterminism gemockten) Telegram-API-Call durchführt —
+// nötig, um telegram_sent/telegram_reason in der persistierten signals-Zeile zu
+// prüfen, statt nur das no-op-Verhalten ohne Token zu testen.
+export function makeEnv({ telegram = false, ...dbOpts } = {}) {
+  const env = { DB: makeFakeDB(dbOpts) };
+  if (telegram) {
+    env.TELEGRAM_BOT_TOKEN = 'test-telegram-bot-token';
+    env.TELEGRAM_CHAT_ID   = 'test-telegram-chat-id';
+  }
+  return env;
 }
 
 // Friert Date / Math.random / fetch ein. Gibt eine restore()-Funktion zurück.
@@ -177,12 +186,16 @@ export function installDeterminism(fixedMs = NON_SESSION_UTC) {
   Math.random = () => 0.123456789;
 
   const realFetch = globalThis.fetch;
-  // Hermetisch: jeder versehentliche Netzwerk-Call schlägt benigne fehl.
-  globalThis.fetch = async () => ({
-    ok: false, status: 599,
-    json: async () => ({ ok: false }),
-    text: async () => '',
-  });
+  // Hermetisch: jeder versehentliche Netzwerk-Call schlägt benigne fehl — außer
+  // dem Telegram-Bot-API-Call, der (nur erreichbar, wenn makeEnv({ telegram: true })
+  // einen Fake-Token gesetzt hat) erfolgreich beantwortet wird, damit
+  // telegram_sent/telegram_reason in Tests verifizierbar sind.
+  globalThis.fetch = async (url) => {
+    if (typeof url === 'string' && url.startsWith('https://api.telegram.org/')) {
+      return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => '{"ok":true}' };
+    }
+    return { ok: false, status: 599, json: async () => ({ ok: false }), text: async () => '' };
+  };
 
   return () => {
     globalThis.Date = RealDate;
