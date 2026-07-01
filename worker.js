@@ -4214,6 +4214,135 @@ async function checkOpenSignals(env, onlySignalId = null) {
 // ── HTML-Rendering ausgelagert nach src/render/pages.js (Imports oben). ──
 
 // ═══════════════════════════════════════════════════════════════
+// WEBHOOK — gemeinsame Kernlogik für /webhook und die separaten
+// Pfade pro Strategie (/webhook/baseline, /webhook/sr-volume, /webhook/forex)
+// ═══════════════════════════════════════════════════════════════
+//
+// `/webhook` liest die Strategie aus dem Payload-Feld `strategy`
+// (resolveStrategyKey). Die separaten Pfade sollen sie stattdessen aus der
+// URL bekommen: bessere Sichtbarkeit in Cloudflare-Logs (der Pfad zeigt
+// sofort, welche Strategie betroffen ist), Strategien einzeln pausierbar
+// (TradingView-Alert für einen Pfad deaktivieren, ohne die anderen
+// anzufassen) und kein Fehlrouting mehr durch ein falsches/fehlendes
+// `strategy`-Feld im Payload möglich.
+//
+// Auth (X-Webhook-Secret/Body/Query), JSON-Parsing, Event-Type-Routing
+// (SNAPSHOT/PRICE_UPDATE/SIGNAL) und Logging sind für ALLE Endpunkte
+// identisch — deshalb hier EINE gemeinsame Funktion statt vier Kopien: kein
+// eigener Auth-Pfad, kein separates Secret, keine Chance, dass sich die
+// Endpunkte durch Copy-Paste-Drift auseinanderentwickeln.
+//
+// `forcedStrategy` kommt aus der URL (gesetzt vom jeweiligen Routen-Zweig
+// unten) und wird NACH dem Secret-Check ins Payload geschrieben — es
+// überschreibt ein eventuell vom Sender mitgeschicktes `strategy`-Feld
+// explizit, statt sich auf den Payload-Wert zu verlassen. Das ist der
+// eigentliche Sicherheitsgewinn der separaten Pfade: die URL entscheidet,
+// nicht ein Feld im (potenziell falsch konfigurierten) Payload.
+async function handleWebhookRequest(request, env, ctx, url, jsonResponse, forcedStrategy = null) {
+  const webhookStart = Date.now();
+  // Secret can come from three sources (checked after body parsing):
+  //   1. X-Webhook-Secret header  (recommended — never logged)
+  //   2. JSON body field "secret"  (acceptable)
+  //   3. URL query param "secret"  (deprecated — appears in server logs)
+  const urlSecret = url.searchParams.get("secret");
+  if (urlSecret) console.warn('⚠️ Webhook: secret in URL is deprecated — use X-Webhook-Secret header instead');
+
+  let rawBody = '';
+  let payload = null;
+
+  try {
+    rawBody = await request.text();
+  } catch (readErr) {
+    console.error('❌ Failed to read request body:', readErr.message);
+    ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, status: 'parse_error', errorMsg: 'Failed to read body', responseMs: Date.now() - webhookStart }));
+    return jsonResponse({ error: 'Failed to read body' }, 400);
+  }
+
+  try {
+    payload = JSON.parse(rawBody);
+    console.log('📦 Parsed payload:', JSON.stringify(payload).substring(0, 500));
+  } catch (parseErr) {
+    console.error('❌ JSON parse error:', parseErr.message);
+    ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, status: 'parse_error', rawPayload: rawBody, errorMsg: parseErr.message, responseMs: Date.now() - webhookStart }));
+    return jsonResponse({ error: 'Invalid JSON' }, 400);
+  }
+
+  // Validate secret now that body is available.
+  if (env.WEBHOOK_SECRET) {
+    const effectiveSecret = request.headers.get('X-Webhook-Secret')
+                         || payload.secret
+                         || urlSecret;
+    if (effectiveSecret !== env.WEBHOOK_SECRET) {
+      console.warn('⛔ Webhook: wrong or missing secret');
+      ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType: payload.event_type, symbol: payload.symbol, rawPayload: rawBody, status: 'auth_fail', errorMsg: 'Wrong or missing secret', responseMs: Date.now() - webhookStart }));
+      return jsonResponse({ error: "Unauthorized" }, 401);
+    }
+  }
+  // Remove secret from payload so it is not persisted to the database.
+  if (payload.secret !== undefined) delete payload.secret;
+
+  // URL-Strategie gewinnt IMMER über ein vom Sender mitgeschicktes
+  // `strategy`-Feld (siehe Kommentar oben).
+  if (forcedStrategy) payload.strategy = forcedStrategy;
+
+  const eventType = (payload.event_type || 'SIGNAL').toUpperCase();
+  console.log('🎯 event_type:', eventType, '| symbol:', payload.symbol, '| action:', payload.action);
+
+  try {
+    if (eventType === 'SNAPSHOT') {
+      ctx.waitUntil(
+        saveSnapshot(env, payload).catch(err => console.error('❌ SNAPSHOT async save failed:', err?.message || err))
+      );
+      ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload.symbol, rawPayload: JSON.stringify(payload), status: 'ok', responseMs: Date.now() - webhookStart }));
+      return jsonResponse({ success: true, type: 'SNAPSHOT', message: 'Snapshot accepted' });
+    }
+
+    if (eventType === 'PRICE_UPDATE') {
+      ctx.waitUntil(
+        handlePriceUpdate(env, payload).catch(err => console.error('❌ PRICE_UPDATE async failed:', err?.message || err))
+      );
+      // PRICE_UPDATE kommt sehr häufig — nicht loggen, um DB-Rotation nicht zu überlasten
+      return jsonResponse({ success: true, type: 'PRICE_UPDATE', message: 'Price update accepted' });
+    }
+
+    if (eventType === 'SIGNAL_NEW' || eventType === 'SIGNAL') {
+      const direction = normalizeDirection(payload);
+      const action    = normalizeAction(payload);
+      if (!direction) {
+        console.log('⏭️ SIGNAL_NEW skipped — no recognisable direction:', JSON.stringify(payload).substring(0, 300));
+        ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload.symbol, rawPayload: JSON.stringify(payload), status: 'skipped', errorMsg: 'no_actionable_direction', responseMs: Date.now() - webhookStart }));
+        return jsonResponse({ success: true, type: 'SIGNAL_NEW', status: 'skipped', reason: 'no_actionable_direction', direction, action });
+      }
+      // Sofortige 200-Response — Verarbeitung läuft asynchron weiter.
+      // ctx.waitUntil() garantiert, dass der Cloudflare-Isolate erst nach
+      // Abschluss von processSignal beendet wird → kein Signal geht verloren.
+      // (TradingView-Webhook-Timeout: ~10s; Claude-AI-Call allein kann 8s dauern.)
+      const signalTs = Date.now();
+      ctx.waitUntil(
+        processSignal(env, payload)
+          .then(result => console.log(`✅ processSignal done in ${Date.now() - signalTs}ms:`, result?.status || result?.outcome || 'ok'))
+          .catch(err   => console.error('❌ processSignal async error:', err?.message || err, err?.stack))
+      );
+      ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload.symbol, rawPayload: JSON.stringify(payload), status: 'ok', responseMs: Date.now() - webhookStart }));
+      return jsonResponse({ success: true, type: 'SIGNAL_NEW', status: 'received', symbol: payload.symbol, direction });
+    }
+
+    ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload.symbol, rawPayload: JSON.stringify(payload), status: 'ok', responseMs: Date.now() - webhookStart }));
+    return jsonResponse({ success: true, type: eventType, message: 'Unsupported event_type accepted' });
+  } catch (processingErr) {
+    const errMsg = processingErr?.message || String(processingErr);
+    console.error('❌ Webhook processing error:', errMsg, processingErr?.stack);
+    ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload?.symbol, rawPayload: JSON.stringify(payload), status: 'error', errorMsg: errMsg, responseMs: Date.now() - webhookStart }));
+    return jsonResponse({
+      success: false,
+      type: eventType,
+      error: errMsg,
+      message: 'Processing failed — signal NOT saved. Check Worker logs.'
+    }, 500);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // MAIN WORKER
 // ═══════════════════════════════════════════════════════════════
 
@@ -6024,105 +6153,43 @@ export default {
       }
 
       // ── WEBHOOK (TradingView) ────────────────────────────────
+      // Generischer Endpunkt: Strategie kommt aus dem Payload-Feld `strategy`
+      // (resolveStrategyKey). Bleibt unverändert/backward-compatible für
+      // Alerts, die noch nicht auf die separaten Pfade unten umgestellt sind.
 
       if (request.method === "POST" && url.pathname === "/webhook") {
-        const webhookStart = Date.now();
-        // Secret can come from three sources (checked after body parsing):
-        //   1. X-Webhook-Secret header  (recommended — never logged)
-        //   2. JSON body field "secret"  (acceptable)
-        //   3. URL query param "secret"  (deprecated — appears in server logs)
-        const urlSecret = url.searchParams.get("secret");
-        if (urlSecret) console.warn('⚠️ Webhook: secret in URL is deprecated — use X-Webhook-Secret header instead');
+        return handleWebhookRequest(request, env, ctx, url, jsonResponse);
+      }
 
-        let rawBody = '';
-        let payload = null;
+      // ── Separate Webhook-Endpunkte pro Strategie ─────────────
+      // Strategie kommt aus der URL statt aus dem Payload (siehe Kommentar
+      // bei handleWebhookRequest). Auth/Parsing/Event-Routing sind über
+      // handleWebhookRequest 1:1 identisch zu /webhook — nur forcedStrategy
+      // unterscheidet sich.
 
-        try {
-          rawBody = await request.text();
-        } catch (readErr) {
-          console.error('❌ Failed to read request body:', readErr.message);
-          ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, status: 'parse_error', errorMsg: 'Failed to read body', responseMs: Date.now() - webhookStart }));
-          return jsonResponse({ error: 'Failed to read body' }, 400);
-        }
+      if (request.method === "POST" && url.pathname === "/webhook/baseline") {
+        console.log('[webhook/baseline] received signal request');
+        return handleWebhookRequest(request, env, ctx, url, jsonResponse, 'crypto_baseline');
+      }
 
-        try {
-          payload = JSON.parse(rawBody);
-          console.log('📦 Parsed payload:', JSON.stringify(payload).substring(0, 500));
-        } catch (parseErr) {
-          console.error('❌ JSON parse error:', parseErr.message);
-          ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, status: 'parse_error', rawPayload: rawBody, errorMsg: parseErr.message, responseMs: Date.now() - webhookStart }));
-          return jsonResponse({ error: 'Invalid JSON' }, 400);
-        }
+      if (request.method === "POST" && url.pathname === "/webhook/sr-volume") {
+        console.log('[webhook/sr-volume] received signal request');
+        return handleWebhookRequest(request, env, ctx, url, jsonResponse, 'crypto_sr_volume');
+      }
 
-        // Validate secret now that body is available.
-        if (env.WEBHOOK_SECRET) {
-          const effectiveSecret = request.headers.get('X-Webhook-Secret')
-                               || payload.secret
-                               || urlSecret;
-          if (effectiveSecret !== env.WEBHOOK_SECRET) {
-            console.warn('⛔ Webhook: wrong or missing secret');
-            ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType: payload.event_type, symbol: payload.symbol, rawPayload: rawBody, status: 'auth_fail', errorMsg: 'Wrong or missing secret', responseMs: Date.now() - webhookStart }));
-            return jsonResponse({ error: "Unauthorized" }, 401);
-          }
-        }
-        // Remove secret from payload so it is not persisted to the database.
-        if (payload.secret !== undefined) delete payload.secret;
+      if (request.method === "POST" && url.pathname === "/webhook/forex") {
+        console.log('[webhook/forex] received signal request');
+        return handleWebhookRequest(request, env, ctx, url, jsonResponse, 'forex_sr_fib_rsi');
+      }
 
-        const eventType = (payload.event_type || 'SIGNAL').toUpperCase();
-        console.log('🎯 event_type:', eventType, '| symbol:', payload.symbol, '| action:', payload.action);
-
-        try {
-          if (eventType === 'SNAPSHOT') {
-            ctx.waitUntil(
-              saveSnapshot(env, payload).catch(err => console.error('❌ SNAPSHOT async save failed:', err?.message || err))
-            );
-            ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload.symbol, rawPayload: JSON.stringify(payload), status: 'ok', responseMs: Date.now() - webhookStart }));
-            return jsonResponse({ success: true, type: 'SNAPSHOT', message: 'Snapshot accepted' });
-          }
-
-          if (eventType === 'PRICE_UPDATE') {
-            ctx.waitUntil(
-              handlePriceUpdate(env, payload).catch(err => console.error('❌ PRICE_UPDATE async failed:', err?.message || err))
-            );
-            // PRICE_UPDATE kommt sehr häufig — nicht loggen, um DB-Rotation nicht zu überlasten
-            return jsonResponse({ success: true, type: 'PRICE_UPDATE', message: 'Price update accepted' });
-          }
-
-          if (eventType === 'SIGNAL_NEW' || eventType === 'SIGNAL') {
-            const direction = normalizeDirection(payload);
-            const action    = normalizeAction(payload);
-            if (!direction) {
-              console.log('⏭️ SIGNAL_NEW skipped — no recognisable direction:', JSON.stringify(payload).substring(0, 300));
-              ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload.symbol, rawPayload: JSON.stringify(payload), status: 'skipped', errorMsg: 'no_actionable_direction', responseMs: Date.now() - webhookStart }));
-              return jsonResponse({ success: true, type: 'SIGNAL_NEW', status: 'skipped', reason: 'no_actionable_direction', direction, action });
-            }
-            // Sofortige 200-Response — Verarbeitung läuft asynchron weiter.
-            // ctx.waitUntil() garantiert, dass der Cloudflare-Isolate erst nach
-            // Abschluss von processSignal beendet wird → kein Signal geht verloren.
-            // (TradingView-Webhook-Timeout: ~10s; Claude-AI-Call allein kann 8s dauern.)
-            const signalTs = Date.now();
-            ctx.waitUntil(
-              processSignal(env, payload)
-                .then(result => console.log(`✅ processSignal done in ${Date.now() - signalTs}ms:`, result?.status || result?.outcome || 'ok'))
-                .catch(err   => console.error('❌ processSignal async error:', err?.message || err, err?.stack))
-            );
-            ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload.symbol, rawPayload: JSON.stringify(payload), status: 'ok', responseMs: Date.now() - webhookStart }));
-            return jsonResponse({ success: true, type: 'SIGNAL_NEW', status: 'received', symbol: payload.symbol, direction });
-          }
-
-          ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload.symbol, rawPayload: JSON.stringify(payload), status: 'ok', responseMs: Date.now() - webhookStart }));
-          return jsonResponse({ success: true, type: eventType, message: 'Unsupported event_type accepted' });
-        } catch (processingErr) {
-          const errMsg = processingErr?.message || String(processingErr);
-          console.error('❌ Webhook processing error:', errMsg, processingErr?.stack);
-          ctx.waitUntil(logWebhookRequest(env, { receivedAt: webhookStart, eventType, symbol: payload?.symbol, rawPayload: JSON.stringify(payload), status: 'error', errorMsg: errMsg, responseMs: Date.now() - webhookStart }));
-          return jsonResponse({
-            success: false,
-            type: eventType,
-            error: errMsg,
-            message: 'Processing failed — signal NOT saved. Check Worker logs.'
-          }, 500);
-        }
+      // Krypto-3 (Orderflow) ist vorerst deaktiviert. Die URL wird schon
+      // reserviert (501, nicht 404 — der Pfad existiert bewusst, die
+      // Strategie ist nur noch nicht scharf), damit sie später nur noch
+      // aktiviert werden muss (forcedStrategy setzen), ohne nochmal am
+      // Router zu arbeiten.
+      if (request.method === "POST" && url.pathname === "/webhook/orderflow") {
+        console.log('[webhook/orderflow] received signal request (disabled)');
+        return jsonResponse({ error: 'Krypto-3 Orderflow temporarily disabled' }, 501);
       }
 
       // ── HEALTH CHECK ────────────────────────────────────────
@@ -6219,5 +6286,5 @@ export {
   isWithinForexSession, STRATEGIES, FOREX_SESSIONS_UTC, resetStartingCapital,
   setStrategyStatus, getStrategyStatuses, computeWinRate, computeExpectancy,
   scoreCandidate, CANDIDATE_SCORING_DEFAULTS, normalizeSignalForScoring,
-  scoreMeanReversionBaseline,
+  scoreMeanReversionBaseline, handleWebhookRequest,
 };
