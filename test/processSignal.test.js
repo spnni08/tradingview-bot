@@ -33,7 +33,10 @@ const clockFor = (strat, kind) => CLOCK[strat]?.[kind] ?? NON_SESSION_UTC;
 async function run(strat, kind) {
   const restore = installDeterminism(clockFor(strat, kind));
   try {
-    const env = makeEnv();
+    // telegram: true → Fake-Bot-Token gesetzt, damit sendAlertMessage den
+    // (gemockten) Telegram-Call tatsächlich durchführt und telegram_sent/
+    // telegram_reason in der persistierten Zeile verifizierbar sind.
+    const env = makeEnv({ telegram: true });
     const result = await processSignal(env, { ...signalFixtures[strat][kind] });
     return { result, env };
   } finally {
@@ -85,22 +88,31 @@ const EXPECTED = {
   'crypto_baseline/edge':   { status: 'candidate_rejected', candidateScore: 50 },
 
   // crypto_sr_volume/trade: Rule-Score 88 + VP-Bonus 15 → 100 (VP-Konfluenz).
-  'crypto_sr_volume/trade':  { status: 'ok', outcome: 'OPEN', score: 100 },
+  // Pine-gefiltert (useScoreGate=false) → Telegram feuert unconditional auf
+  // Score (Fix: analyzeWithRules-Score ist für diese Strategie nicht kalibriert).
+  'crypto_sr_volume/trade':  { status: 'ok', outcome: 'OPEN', score: 100, telegramSent: 1, telegramReason: 'pine_signal' },
   'crypto_sr_volume/reject': { status: 'candidate_rejected', candidateScore: 40 },
   // edge: Candidate-Score 65 lag unter der alten Schwelle 60 knapp DARÜBER
   // (useScoreGate=false → OPEN trotz niedrigem Rule-Score), reicht seit der
   // Kalibrierung auf 70 aber nicht mehr → candidate_rejected.
   'crypto_sr_volume/edge':   { status: 'candidate_rejected', candidateScore: 65 },
 
-  'crypto_orderflow_breakout/trade':  { status: 'ok', outcome: 'OPEN', score: 78 },
+  // Pine-gefiltert (useScoreGate=false) → Telegram feuert unconditional auf Score.
+  'crypto_orderflow_breakout/trade':  { status: 'ok', outcome: 'OPEN', score: 78, telegramSent: 1, telegramReason: 'pine_signal' },
   'crypto_orderflow_breakout/reject': { status: 'candidate_rejected', candidateScore: 55 },
   // edge: Candidate-Score 60 lag GENAU auf der alten Schwelle (60) → passierte.
   // Seit der Kalibrierung auf 70 liegt es klar darunter → candidate_rejected.
   'crypto_orderflow_breakout/edge':   { status: 'candidate_rejected', candidateScore: 60 },
 
   // Forex: useScoreGate=false → innerhalb der Session OPEN, außerhalb SKIPPED.
-  'forex_sr_fib_rsi/trade':  { status: 'ok', outcome: 'OPEN',    score: 65 },
-  'forex_sr_fib_rsi/reject': { status: 'ok', outcome: 'SKIPPED', score: 65 },
+  // trade (in-session): Regression für den Telegram-Bug (analysis.score 65 lag
+  // unter dem alten, für crypto_baseline kalibrierten 75er-Gate → Telegram
+  // feuerte NIE für forex_sr_fib_rsi, egal wie gut das Pine-Setup war).
+  'forex_sr_fib_rsi/trade':  { status: 'ok', outcome: 'OPEN',    score: 65, telegramSent: 1, telegramReason: 'pine_signal' },
+  // reject (außerhalb Session): sessionClosed blockt shouldNotify VOR jedem
+  // Score-Check → kein Telegram, unabhängig vom (für diese Strategie ohnehin
+  // irrelevanten) analysis.score.
+  'forex_sr_fib_rsi/reject': { status: 'ok', outcome: 'SKIPPED', score: 65, telegramSent: 0, telegramReason: 'below_threshold' },
   // edge: Candidate-Score 65 passierte die alte Schwelle (60), reicht seit der
   // Kalibrierung auf 70 nicht mehr → candidate_rejected.
   'forex_sr_fib_rsi/edge':   { status: 'candidate_rejected', candidateScore: 65 },
@@ -129,6 +141,10 @@ for (const [strat, cases] of Object.entries(signalFixtures)) {
         assert.equal(row.ai_score, exp.score, 'row.ai_score == analysis.score');
         assert.equal(row.strategy_key, strat, 'row.strategy_key');
         assert.equal(row.is_test, 0, 'kein Test-Signal');
+        if (exp.telegramSent !== undefined) {
+          assert.equal(row.telegram_sent, exp.telegramSent, `${strat}/${kind} telegram_sent`);
+          assert.equal(row.telegram_reason, exp.telegramReason, `${strat}/${kind} telegram_reason`);
+        }
         // TP1-Ableitung deterministisch aus entry/tp (60% des Weges zu TP2).
         assert.ok(
           Math.abs(row.ai_tp1 - deriveTp1(result.analysis.entry, result.analysis.tp)) < 1e-9,
