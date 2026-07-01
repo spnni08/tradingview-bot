@@ -885,10 +885,11 @@ const STRATEGIES = {
     // nicht sendet (es sendet stattdessen direction/entry/rsi/emaDistPct/
     // nearSup/nearRes/rsiDeadZone). scoreMeanReversionBaseline liest den
     // tatsächlichen Feldsatz und bewertet Mean-Reversion-Qualität (Details
-    // s. dort) und ersetzt ruleAnalysis.score als Gate-2-Eingabe — inkl. als
-    // Auslöser für den (weiterhin aktiven) Claude-Enrichment-Call, siehe
-    // processSignal (preAiScore). analyzeWithRules bleibt für entry/tp/sl und
-    // Telemetrie (matched/failed_rules, score_breakdown) im Einsatz.
+    // s. dort) und ist das VOLLSTÄNDIGE, deterministische Gate 2 — Claude läuft
+    // für baseline NICHT (siehe processSignal: analyzeSignalWithAI() prompted
+    // dieselben Trendfolge-Felder wie analyzeWithRules, ein API-Call brächte
+    // dort keinen Erkenntnisgewinn). analyzeWithRules bleibt nur für entry/tp/sl
+    // und Telemetrie (matched/failed_rules, score_breakdown) im Einsatz.
     useScoreGate: true,
     minScore:     75,
     sessionGate:  false,
@@ -1170,16 +1171,28 @@ function scoreCandidate(strategyKey, signal, customWeights = null) {
 
   // ── crypto_sr_volume ─────────────────────────────────────────
   else if (strategyKey === 'crypto_sr_volume') {
-    const reclaim   = !!(signal.reclaim);
-    const breakdown = !!(signal.breakdown);
+    // Das deployte wavescout_sr_volume.pine sendet reclaim/breakdown/
+    // rsiWasOversold/rsiWasOverbought/rsiRising/rsiFalling/trendOk als
+    // STRINGS ("true"/"false", via str.tostring()) — wie rsiDeadZone/nearSup
+    // bei crypto_baseline vor PR #134. `!!("false")` ist fälschlich true und
+    // ein Klartext-Truthy-Check (`signal.trendOk || …`) ist es ebenso → jedes
+    // Signal bekam bisher IMMER reclaim/breakdown/trendOk = true, unabhängig
+    // vom tatsächlichen Wert. parseBool (PR #134) behebt das identisch.
+    const reclaim          = parseBool(signal.reclaim);
+    const breakdown        = parseBool(signal.breakdown);
+    const rsiWasOversold   = parseBool(signal.rsiWasOversold   ?? signal.rsi_was_oversold);
+    const rsiWasOverbought = parseBool(signal.rsiWasOverbought ?? signal.rsi_was_overbought);
+    const rsiRising        = parseBool(signal.rsiRising        ?? signal.rsi_rising);
+    const rsiFalling       = parseBool(signal.rsiFalling       ?? signal.rsi_falling);
+    const trendOk          = parseBool(signal.trendOk          ?? signal.trend_ok);
+
     if (reclaim)   { score += w.reclaim;   details.reclaim   = w.reclaim; }
     if (breakdown) { score += w.breakdown; details.breakdown = w.breakdown; }
-
-    if (signal.rsiWasOversold  || signal.rsi_was_oversold)  { score += w.rsi_was_oversold;  details.rsi_was_oversold  = w.rsi_was_oversold; }
-    if (signal.rsiWasOverbought|| signal.rsi_was_overbought){ score += w.rsi_was_overbought; details.rsi_was_overbought= w.rsi_was_overbought; }
-    if (signal.rsiRising  || signal.rsi_rising)  { score += w.rsi_rising;  details.rsi_rising  = w.rsi_rising; }
-    if (signal.rsiFalling || signal.rsi_falling) { score += w.rsi_falling; details.rsi_falling = w.rsi_falling; }
-    if (signal.trendOk    || signal.trend_ok)    { score += w.trend_ok;    details.trend_ok    = w.trend_ok; }
+    if (rsiWasOversold)   { score += w.rsi_was_oversold;   details.rsi_was_oversold   = w.rsi_was_oversold; }
+    if (rsiWasOverbought) { score += w.rsi_was_overbought; details.rsi_was_overbought = w.rsi_was_overbought; }
+    if (rsiRising)  { score += w.rsi_rising;  details.rsi_rising  = w.rsi_rising; }
+    if (rsiFalling) { score += w.rsi_falling; details.rsi_falling = w.rsi_falling; }
+    if (trendOk)    { score += w.trend_ok;    details.trend_ok    = w.trend_ok; }
   }
 
   // ── crypto_orderflow_breakout ─────────────────────────────────
@@ -1203,8 +1216,14 @@ function scoreCandidate(strategyKey, signal, customWeights = null) {
 
   // ── forex_sr_fib_rsi ─────────────────────────────────────────
   else if (strategyKey === 'forex_sr_fib_rsi') {
-    if (signal.reclaimVAL || signal.reclaim_val) { score += w.reclaim_val;   details.reclaim_val   = w.reclaim_val; }
-    if (signal.breakdownVAH || signal.breakdown_vah) { score += w.breakdown_vah; details.breakdown_vah = w.breakdown_vah; }
+    // Das deployte wavescout_forex.pine sendet reclaimVAL/breakdownVAH
+    // ebenfalls als STRINGS ("true"/"false") — derselbe Bug wie oben bei
+    // crypto_sr_volume: `signal.reclaimVAL || …` ist für den String "false"
+    // truthy. parseBool behebt das.
+    const reclaimVAL   = parseBool(signal.reclaimVAL   ?? signal.reclaim_val);
+    const breakdownVAH = parseBool(signal.breakdownVAH ?? signal.breakdown_vah);
+    if (reclaimVAL)   { score += w.reclaim_val;   details.reclaim_val   = w.reclaim_val; }
+    if (breakdownVAH) { score += w.breakdown_vah; details.breakdown_vah = w.breakdown_vah; }
 
     // Abstand zu VAL (LONG) oder VAH (SHORT)
     const dist = dir === 'LONG'
@@ -3061,17 +3080,22 @@ async function processSignal(env, signal) {
   const aiTimer = setTimeout(() => aiAbort.abort(), AI_TIMEOUT_MS);
   let analysis;
   try {
-    // Score-Optimizer/Claude nur für die score-optimierte Strategie (baseline).
-    // preAiScore ist für baseline der Mean-Reversion-Score (+ VP-Bonus) statt
-    // des alten, strukturell blinden Rule-Scores — Claude bewertet also ein
-    // bereits durch Gate-2-Logik vorgefiltertes Signal, nicht mehr "n/a"-Daten.
-    // Die Pine-gefilterten Strategien nutzen die deterministische Rule-Analyse
-    // (liefert Entry/TP/SL ebenfalls) und sparen den Claude-Call.
-    if (scoreOptimized && preAiScore >= aiThreshold) {
+    // Claude läuft NIE für crypto_baseline: analyzeSignalWithAI() prompted
+    // Claude mit denselben Trendfolge-Feldern wie analyzeWithRules (price/
+    // ema50/ema200/trend/confidence) — Felder, die das deployte v2-Pine
+    // (wavescout_baseline.pine) für baseline gar nicht sendet. Ein Claude-Call
+    // dort würde nur Kosten/Latenz verursachen, ohne dass Claude mehr Signal
+    // hätte als "n/a". scoreMeanReversionBaseline (siehe oben) ist das
+    // vollständige, deterministische Gate 2 für baseline; analyzeWithRules
+    // bleibt nur für entry/tp/sl + Telemetrie im Einsatz (siehe fallbackAnalysis
+    // oben). Die Pine-getrusteten Strategien (useScoreGate=false) riefen
+    // Claude ohnehin nie auf.
+    if (scoreOptimized && strategyKey !== 'crypto_baseline' && preAiScore >= aiThreshold) {
       analysis = await analyzeSignalWithAI(env, signal, strategyConfig, aiAbort.signal, fallbackAnalysis) || fallbackAnalysis;
     } else {
-      if (!scoreOptimized) console.log(`⏭️ ${strategyKey}: Pine-gefiltert → Score-Optimizer/Claude übersprungen`);
-      else                 console.log(`⏭️ Score-Gate: ${preAiScore} < ${aiThreshold} → Claude-Call übersprungen`);
+      if (strategyKey === 'crypto_baseline') console.log(`⏭️ ${strategyKey}: Mean-Reversion-Score ${fallbackAnalysis.score} → Claude komplett übersprungen (Gate 2 ist deterministisch)`);
+      else if (!scoreOptimized)              console.log(`⏭️ ${strategyKey}: Pine-gefiltert → Score-Optimizer/Claude übersprungen`);
+      else                                   console.log(`⏭️ Score-Gate: ${preAiScore} < ${aiThreshold} → Claude-Call übersprungen`);
       analysis = fallbackAnalysis;
     }
   } catch (aiErr) {

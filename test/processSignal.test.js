@@ -216,3 +216,35 @@ test('processSignal · expliziter price-Wert wird durch entry NICHT überschrieb
   const row = env.DB.insertedRow('signals');
   assert.equal(row.price, 61500, 'vorhandener price hat Vorrang vor entry');
 });
+
+// ── crypto_baseline: Claude läuft NIE (kein API-Call für einen Scorer, der
+// die falschen Felder liest) ─────────────────────────────────────────────
+// Regression für die explizite Anforderung: analyzeSignalWithAI() prompted
+// Claude mit denselben Trendfolge-Feldern wie analyzeWithRules — für baseline
+// wäre das reine "n/a"-Daten. Ein starkes Setup (Mean-Reversion-Score weit
+// über der alten aiThreshold von 55) darf trotzdem KEINEN Netzwerk-Call
+// auslösen; die Gate-2-Entscheidung muss vollständig deterministisch bleiben.
+
+test('processSignal · crypto_baseline: kein fetch()-Call (Claude) selbst bei starkem Setup + gesetztem ANTHROPIC_API_KEY', async () => {
+  const restore = installDeterminism(NON_SESSION_UTC);
+  let fetchCalls = 0;
+  const spiedFetch = globalThis.fetch;
+  globalThis.fetch = async (...args) => { fetchCalls++; return spiedFetch(...args); };
+  try {
+    const env = { ...makeEnv(), ANTHROPIC_API_KEY: 'sk-test-would-trigger-claude' };
+    // RSI 24 extrem + starke EMA-Überdehnung + klares nearSup → Mean-Reversion-
+    // Score 100, weit über der alten Claude-Trigger-Schwelle (preAiScore ≥ 55).
+    const strongBaseline = {
+      strategy: 'crypto_baseline', symbol: 'BTCUSDT', direction: 'LONG', action: 'BUY',
+      entry: '62000', rsi: '24', emaDistPct: '-1.5',
+      nearSup: 'true', nearRes: 'false', rsiDeadZone: 'false',
+    };
+    const result = await processSignal(env, strongBaseline);
+    assert.equal(result.status, 'ok');
+    assert.equal(env.DB.insertedRow('signals').outcome, 'OPEN', 'starkes Setup öffnet trotzdem, rein über Gate 2');
+    assert.equal(fetchCalls, 0, 'kein einziger fetch()-Call — Claude darf für baseline nie aufgerufen werden');
+  } finally {
+    globalThis.fetch = spiedFetch;
+    restore();
+  }
+});
