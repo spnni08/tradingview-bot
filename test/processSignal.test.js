@@ -75,11 +75,13 @@ function snapshotView({ result, env }) {
 
 // Erwartete Kern-Entscheidung pro Fixture (status / outcome / score / strategy).
 const EXPECTED = {
+  // trade: Candidate-Gate 82 (Sweet-Spot + nearSup), Mean-Reversion-Score 100
+  // (RSI 24 extrem + EMA-Dist 1.2% + klares nearSup) → beide Gates passiert.
   'crypto_baseline/trade':  { status: 'ok', outcome: 'OPEN',    score: 100 },
-  // Früher SKIPPED (Rule-Score 38 < 75). Seit der Umstellung auf reines
-  // Candidate-Gating (useScoreGate=false) öffnet jeder Kandidat, der den
-  // Candidate-Gate (≥60) passiert — der Rule-Score ist nur noch Telemetrie.
-  'crypto_baseline/reject': { status: 'ok', outcome: 'OPEN',    score: 38  },
+  // reject: Candidate-Gate 82 (passiert Gate 1), aber RSI 34 ist nicht extrem
+  // und die EMA-Distanz (0.79%) reicht nicht → Mean-Reversion-Score 67 < 75
+  // (Gate 2) → SKIPPED. Zeigt, dass Gate 2 jetzt wieder echte Trennschärfe hat.
+  'crypto_baseline/reject': { status: 'ok', outcome: 'SKIPPED', score: 67  },
   'crypto_baseline/edge':   { status: 'candidate_rejected', candidateScore: 50 },
 
   // crypto_sr_volume/trade: Rule-Score 88 + VP-Bonus 15 → 100 (VP-Konfluenz).
@@ -156,15 +158,18 @@ test('processSignal · Ergebnis ist reproduzierbar (zweimal gleiches Resultat)',
   assert.deepEqual(a, b);
 });
 
-// ── crypto_baseline Final-Gate-Umstellung (deployter Pine-v2-Payload) ────────
+// ── crypto_baseline Gate 2 (Mean-Reversion-Scorer, deployter Pine-v2-Payload) ─
 // Das deployte Pine v2 sendet für crypto_baseline NICHT den Feldsatz, den
 // analyzeWithRules liest: kein price (sondern `entry`), kein ema50/ema200,
 // kein trend/timeframe/support/resistance/confidence — nur direction, entry,
 // rsi, emaDistPct, nearSup, nearRes, rsiDeadZone. Diese Tests sichern ab, dass
-// (1) solche Signale jetzt öffnen (Gate = nur Candidate-Score) und (2) der
-// Entry/TP/SL aus `entry` abgeleitet wird statt 0 zu sein.
+// (1) Gate 2 jetzt den dedizierten Mean-Reversion-Scorer nutzt (statt des
+// strukturell blinden analyzeWithRules) und (2) der Entry/TP/SL weiterhin aus
+// `entry` abgeleitet wird statt 0 zu sein.
 
-// Ein realer Gate-1-Payload (Spread-Quelle aus PR #134), in deployter v2-Form.
+// Ein realer Gate-1-Payload (Spread-Quelle aus PR #134, Signal #3), in
+// deployter v2-Form. RSI 30.45 ist nicht extrem genug und die EMA-Distanz
+// (0.79%) nur moderat → das ist genau der Fall, den Gate 2 aussieben soll.
 const V2_BASELINE = {
   strategy: 'crypto_baseline', symbol: 'BTCUSDT', assetClass: 'crypto',
   direction: 'LONG', action: 'BUY',
@@ -184,15 +189,15 @@ async function runRaw(signal) {
   }
 }
 
-test('processSignal · crypto_baseline v2-Payload öffnet jetzt (Gate = nur Candidate-Score)', async () => {
+test('processSignal · crypto_baseline v2-Payload: Gate 1 passiert, Gate 2 (Mean-Reversion) filtert → SKIPPED', async () => {
   const { result, env } = await runRaw(V2_BASELINE);
-  assert.equal(result.status, 'ok');
+  assert.equal(result.status, 'ok', 'Gate 1 (Candidate-Score) passiert (82 ≥ 60)');
   const row = env.DB.insertedRow('signals');
-  assert.equal(row.outcome, 'OPEN', 'v2-Baseline-Signal muss öffnen (Final-Gate entfernt)');
   assert.equal(row.strategy_key, 'crypto_baseline');
-  // analyzeWithRules-Score bleibt strukturell gedeckelt (nur RSI trägt bei) —
-  // er ist jetzt reine Telemetrie und entscheidet NICHT mehr über OPEN.
-  assert.ok(row.ai_score < 75, `Rule-Score sollte unter dem alten Gate (75) liegen, war ${row.ai_score}`);
+  // Mean-Reversion-Score: base 40 + RSI (30.45, nicht extrem) 0 + EMA-Dist
+  // (0.79 %, mittlere Stufe) 12 + nearSup 15 = 67 < 75 (Gate 2).
+  assert.equal(row.ai_score, 67, 'Mean-Reversion-Score ersetzt den alten, strukturell blinden Rule-Score');
+  assert.equal(row.outcome, 'SKIPPED', 'moderates Setup passiert Gate 1, aber nicht Gate 2 (≥75)');
 });
 
 test('processSignal · crypto_baseline: entry → price gemappt (kein Null-Level-Trade)', async () => {

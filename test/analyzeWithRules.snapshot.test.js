@@ -22,16 +22,36 @@ import { sessionDisabledConfig } from './helpers/fakeEnv.js';
 import { signalFixtures } from './fixtures/signals.js';
 
 const CFG = sessionDisabledConfig();
+
+// crypto_baseline-Fixtures spiegeln den tatsächlich deployten Pine-v2-Payload
+// (entry statt price) — processSignal mappt entry→price VOR jedem
+// analyzeWithRules-Aufruf (siehe worker.js). Damit dieser Test dieselbe
+// Eingabe wie die echte Pipeline sieht, wird dieselbe Abbildung hier
+// nachgebildet (nicht Teil von analyzeWithRules selbst — das bleibt pure).
+function mapEntryToPrice(sig) {
+  const s = { ...sig };
+  if (s.price == null && s.close == null && s.entry != null) {
+    const n = parseFloat(s.entry);
+    if (Number.isFinite(n) && n > 0) s.price = n;
+  }
+  return s;
+}
 const analyze = (sig) =>
-  analyzeWithRules({ ...sig }, CFG, exitConfigForStrategy(resolveStrategyKey(sig)));
+  analyzeWithRules(mapEntryToPrice(sig), CFG, exitConfigForStrategy(resolveStrategyKey(sig)));
 
 // Erwartete Kernfelder pro Fixture (decision + score). Explizit aufgelistet,
 // damit eine Logik-Änderung punktgenau sichtbar wird, nicht nur als
 // "Snapshot weicht ab".
 const EXPECTED = {
-  'crypto_baseline/trade':  { score: 100, recommendation: 'LONG', risk: 'LOW'  },
-  'crypto_baseline/reject': { score: 38,  recommendation: 'SKIP', risk: 'HIGH' },
-  'crypto_baseline/edge':   { score: 57,  recommendation: 'SKIP', risk: 'HIGH' },
+  // crypto_baseline: analyzeWithRules liest price/ema50/ema200/trend/
+  // confidence/support/resistance — Felder, die der deployte v2-Payload NICHT
+  // sendet (er sendet rsi/emaDistPct/nearSup/nearRes/rsiDeadZone). Nur RSI und
+  // Timeframe tragen bei → der Score bleibt für ALLE drei Fälle strukturell
+  // unter 75 (Telemetrie-Score, siehe worker.js STRATEGIES.crypto_baseline).
+  // Das eigentliche Gate 2 läuft über scoreMeanReversionBaseline, nicht hier.
+  'crypto_baseline/trade':  { score: 66, recommendation: 'SKIP', risk: 'HIGH' },
+  'crypto_baseline/reject': { score: 67, recommendation: 'SKIP', risk: 'HIGH' },
+  'crypto_baseline/edge':   { score: 57, recommendation: 'SKIP', risk: 'HIGH' },
 
   'crypto_sr_volume/trade':  { score: 88, recommendation: 'LONG', risk: 'LOW'  },
   'crypto_sr_volume/reject': { score: 32, recommendation: 'SKIP', risk: 'HIGH' },
@@ -63,8 +83,9 @@ for (const [strat, cases] of Object.entries(signalFixtures)) {
       assert.equal(result.risk, exp.risk, `${strat}/${kind} risk`);
       assert.equal(result.direction, (sig.direction || '').toUpperCase(), 'direction');
       assert.ok(result.score >= 0 && result.score <= 100, 'score in [0,100]');
-      // Entry = Preis; SL/TP liegen auf der korrekten Seite des Entries (LONG).
-      assert.equal(result.entry, sig.price, 'entry == price');
+      // Entry = Preis (oder gemapptes entry für crypto_baseline-v2-Payloads);
+      // SL/TP liegen auf der korrekten Seite des Entries (LONG).
+      assert.equal(result.entry, mapEntryToPrice(sig).price, 'entry == price (ggf. aus entry gemappt)');
       assert.ok(result.tp > result.entry, 'LONG: tp über entry');
       assert.ok(result.sl < result.entry, 'LONG: sl unter entry');
 
