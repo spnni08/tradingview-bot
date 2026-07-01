@@ -33,7 +33,7 @@ test('crypto_baseline: optimaler LONG (EMA sweet-spot + nearSup, kein DeadZone) 
     nearSup: true,
     nearRes: false,
   });
-  assert.equal(result.threshold, 60);
+  assert.equal(result.threshold, 70);
   // base 50 + sweet-spot 20 + nearSup 12 = 82
   assert.equal(result.score, 82);
   assert.equal(result.details.ema_dist, CANDIDATE_SCORING_DEFAULTS.crypto_baseline.weights.ema_dist_sweet_spot);
@@ -99,31 +99,26 @@ test('crypto_baseline: LONG + Resistance overhead → Gegenwind-Strafe -8', () =
 });
 
 // Schwellenwert-Grenzfall
-test('crypto_baseline: Score knapp über Threshold (61 ≥ 60) → passiert', () => {
-  // sweet-spot (20) + nearSup (12) = base 50 + 32 - dead-zone 15 = 67? nein:
-  // Wir bauen ein Szenario mit genau 61.
-  // base 50 + ema_acceptable (8) + nearSup (12) = 70; zu hoch. Probiere ohne nearSup:
-  // base 50 + ema_acceptable (8) = 58 < 60 → zu niedrig.
-  // base 50 + ema_acceptable (8) + nearSup (12) - dead-zone (15) = 55 (nein)
-  // Einfachster Weg: custom weight
+test('crypto_baseline: Score knapp über Threshold (71 ≥ 70) → passiert', () => {
+  // Einfachster Weg zu einem exakten Grenzfall: custom weight.
   const result = scoreCandidate('crypto_baseline', {
     direction: 'LONG',
     rsi: 38,
     emaDistPct: 0.9,    // sweet-spot +20
     nearSup: false,
     nearRes: false,
-  }, { ema_dist_sweet_spot: 11 }); // 50+11=61 → knapp über 60
-  assert.equal(result.score, 61);
+  }, { ema_dist_sweet_spot: 21 }); // 50+21=71 → knapp über 70
+  assert.equal(result.score, 71);
   assert.ok(result.score >= result.threshold, 'score knapp über threshold → würde Trade öffnen');
 });
 
-test('crypto_baseline: Score knapp unter Threshold (59 < 60) → abgelehnt', () => {
+test('crypto_baseline: Score knapp unter Threshold (69 < 70) → abgelehnt', () => {
   const result = scoreCandidate('crypto_baseline', {
     direction: 'LONG',
     rsi: 38,
     emaDistPct: 0.9,
-  }, { ema_dist_sweet_spot: 9 }); // 50+9=59 → knapp unter 60
-  assert.equal(result.score, 59);
+  }, { ema_dist_sweet_spot: 19 }); // 50+19=69 → knapp unter 70
+  assert.equal(result.score, 69);
   assert.ok(result.score < result.threshold, 'score knapp unter threshold → Kandidat abgelehnt');
 });
 
@@ -499,6 +494,6 @@ test('crypto_baseline: 10 reale Candidate-Payloads erzeugen sinnvolle Streuung (
   const spread = Math.max(...scores) - Math.min(...scores);
   // Vorher: alle 54 (eine 74) → Spread 20. Nachher: deutlich breiter.
   assert.ok(spread >= 35, `Streuung zu klein (${spread}) — Rekalibrierung greift nicht`);
-  assert.ok(scores.filter(s => s >= 60).length >= 5, 'mind. die Hälfte sollte den Gate passieren');
+  assert.ok(scores.filter(s => s >= 70).length >= 5, 'mind. die Hälfte sollte das (auf 70 angehobene) Gate passieren');
   assert.ok(scores.some(s => s < 50), 'schwache Setups sollen klar unter 50 landen');
 });

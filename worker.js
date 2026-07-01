@@ -944,10 +944,20 @@ const STRATEGIES = {
 // Gewichte und Schwellenwerte sind konfigurierbar über:
 //   settings-Key "candidate_scoring_overrides" (JSON-Map, pro strategyKey).
 // Fehlt der Key, greifen CANDIDATE_SCORING_DEFAULTS.
+//
+// KALIBRIERUNG (kein Bug-Fix): threshold für ALLE vier Strategien von 60 auf
+// 70 angehoben. Hintergrund: Gate 1 (Candidate-Score) soll breit vorfiltern,
+// aber "breit" bei 60 ließ zu viele schwache Setups bis zu Gate 2 (Mean-
+// Reversion-Scorer bei crypto_baseline) bzw. direkt zum Trade (Pine-
+// getrustete Strategien, useScoreGate=false) durch. Score 60-69 hat sich als
+// nicht aussagekräftig genug erwiesen, um überhaupt zu Gate 2 vorzudringen.
+// Gilt einheitlich für alle Strategien — kein strategie-spezifisches Tuning
+// in diesem Schritt (siehe test/candidateScoring.test.js für die Vorher/
+// Nachher-Auswirkung auf die 10 bekannten Live-Payloads).
 
 const CANDIDATE_SCORING_DEFAULTS = {
   crypto_baseline: {
-    threshold: 60,
+    threshold: 70,
     base: 50,
     weights: {
       // EMA-Distanz zum EMA200 (historisch: 0.5-1.3 % performte am besten)
@@ -965,7 +975,7 @@ const CANDIDATE_SCORING_DEFAULTS = {
     },
   },
   crypto_sr_volume: {
-    threshold: 60,
+    threshold: 70,
     base: 40,
     weights: {
       reclaim:              25,  // echter Level-Reclaim (nicht nur Touch)
@@ -978,7 +988,7 @@ const CANDIDATE_SCORING_DEFAULTS = {
     },
   },
   crypto_orderflow_breakout: {
-    threshold: 60,
+    threshold: 70,
     base: 35,
     weights: {
       breakout_above_range:  30,  // echter Range-Breakout nach oben
@@ -990,7 +1000,7 @@ const CANDIDATE_SCORING_DEFAULTS = {
     },
   },
   forex_sr_fib_rsi: {
-    threshold: 60,
+    threshold: 70,
     base: 35,
     weights: {
       reclaim_val:      30,  // echter VAL-Reclaim (LONG)
@@ -2979,6 +2989,42 @@ async function processSignal(env, signal) {
   const stratDef      = STRATEGIES[strategyKey];
   const assetClass    = detectAssetClass(signal.symbol);
   const exitCfg       = exitConfigForStrategy(strategyKey);
+
+  // ── GUARD: kein validierbarer Entry-Preis → Signal ablehnen ──────────
+  // Live-Incident: SOLUSDT/SUIUSDT wurden mit price/ai_entry/ai_tp/ai_sl = NULL
+  // eröffnet (alte Logik vor PR #139) — ein Trade ohne Entry/TP/SL-Levels ist
+  // gefährlicher als gar kein Trade (kaputte PnL-Berechnung beim Exit-Check,
+  // Fallback-Werte wie pnl_pct=-1). Nach der entry→price-Abbildung oben MUSS
+  // ein positiver, endlicher Preis vorliegen — sonst sofort REJECTED, bevor
+  // Kandidaten-Score/Claude/Telegram überhaupt anlaufen. `0` zählt explizit
+  // als ungültig (nicht nur `null`), analog zur Anforderung.
+  const entryPriceCandidate = parseFloat(signal.price ?? signal.close ?? NaN);
+  if (!Number.isFinite(entryPriceCandidate) || entryPriceCandidate <= 0) {
+    console.log(`❌ ${strategyKey} ${signal.symbol}: kein validierbarer Entry-Preis (price/close/entry fehlen oder ungültig) → REJECTED`);
+    try {
+      const rejectedId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await env.DB.prepare(`
+        INSERT INTO signals (id, symbol, timeframe, direction, price, ai_score,
+          telegram_reason, strategy_key, asset_class, created_at, outcome, is_test, source, trigger_reason)
+        VALUES (?, ?, ?, ?, ?, ?, 'missing_entry_price', ?, ?, ?, 'REJECTED', 0, 'WEBHOOK', ?)
+      `).bind(
+        rejectedId,
+        signal.symbol || 'UNKNOWN',
+        String(signal.timeframe || ''),
+        direction || null,
+        0,
+        0,
+        strategyKey,
+        assetClass,
+        Date.now(),
+        signal.trigger || 'WEBHOOK'
+      ).run();
+    } catch (dbErr) {
+      console.error('❌ REJECTED (missing_entry_price) INSERT fehlgeschlagen:', dbErr.message);
+    }
+    return { status: 'missing_entry_price', strategyKey, assetClass };
+  }
+
   // Forex-Strategien HART nur in den Handelsfenstern (London-Open / NY-Overlap):
   // außerhalb keine handelbaren Signale generieren.
   const sessionClosed = !!stratDef.sessionGate && assetClass === 'forex' && !isWithinForexSession();

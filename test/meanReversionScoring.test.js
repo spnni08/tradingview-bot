@@ -122,10 +122,10 @@ test('Score wird auf 0–100 geclampt', () => {
 // ══════════════════════════════════════════════════════════════
 // Dieselben 10 Payloads wie in candidateScoring.test.js ("10 reale
 // Candidate-Payloads"). Dokumentiert, wie beide Gates zusammenspielen:
-// Gate 1 (Candidate, ≥60) siebt breit vor, Gate 2 (Mean-Reversion, ≥75)
-// filtert daraus die tatsächlich starken Setups. Kein Overfitting auf exakte
-// Werte — die Assertions prüfen Trennschärfe (starke vs. schwache Setups),
-// nicht einzelne Score-Zahlen.
+// Gate 1 (Candidate, ≥70 seit der Kalibrierung — vorher 60) siebt breit vor,
+// Gate 2 (Mean-Reversion, ≥75) filtert daraus die tatsächlich starken Setups.
+// Kein Overfitting auf exakte Werte — die Assertions prüfen Trennschärfe
+// (starke vs. schwache Setups), nicht einzelne Score-Zahlen.
 
 const REAL_PAYLOADS = [
   { n: 1,  direction:'SHORT', rsi:'65.47', emaDistPct:'-0.3369177592', nearSup:'false', nearRes:'true',  rsiDeadZone:'false' },
@@ -153,29 +153,34 @@ test('10 reale Payloads: Gate 1 (Candidate) siebt breit vor, Gate 2 (Mean-Revers
     };
   });
 
-  // #1, #2, #4 scheitern bereits an Gate 1 (Candidate < 60) — Gate 2 wird nie erreicht.
-  for (const n of [1, 2, 4]) {
+  // #1, #2, #4, #5 scheitern an Gate 1 (Candidate < 70) — Gate 2 wird nie
+  // erreicht. #5 (Candidate 67) passierte vor der Schwellen-Anhebung von 60
+  // auf 70 noch Gate 1 (und wäre dann an Gate 2 wegen rsiDeadZone gescheitert)
+  // — jetzt wird es bereits an Gate 1 aussortiert.
+  for (const n of [1, 2, 4, 5]) {
     const row = rows.find(r => r.n === n);
-    assert.ok(!row.passedGate1, `#${n} sollte Gate 1 nicht passieren`);
+    assert.ok(!row.passedGate1, `#${n} sollte Gate 1 (≥70) nicht passieren`);
   }
 
-  // Von den 7 Gate-1-Passierern (#3, #5, #6, #7, #8, #9, #10) passieren nur
-  // die mit klarer EMA-Überdehnung (>1.3%) UND eindeutigem nearSup (kein
-  // ambivalentes nearRes) UND ohne Dead-Zone-Malus auch Gate 2.
+  // Von den 6 Gate-1-Passierern (#3, #6, #7, #8, #9, #10) passieren nur die
+  // mit klarer EMA-Überdehnung (>1.3%) UND eindeutigem nearSup (kein
+  // ambivalentes nearRes) auch Gate 2.
   const gate1Passed = rows.filter(r => r.passedGate1);
-  assert.equal(gate1Passed.length, 7, 'genau 7 Payloads passieren Gate 1');
+  assert.equal(gate1Passed.length, 6, 'genau 6 Payloads passieren Gate 1 (≥70)');
 
   const gate2Passed = gate1Passed.filter(r => r.passedGate2);
   const gate2Failed = gate1Passed.filter(r => !r.passedGate2);
   assert.deepEqual(gate2Passed.map(r => r.n), [6, 8, 9], 'nur die stärksten Setups passieren Gate 2');
-  assert.deepEqual(gate2Failed.map(r => r.n), [3, 5, 7, 10], 'moderate/schwache Setups bleiben unter Gate 2');
+  assert.deepEqual(gate2Failed.map(r => r.n), [3, 7, 10], 'moderate Setups bleiben unter Gate 2');
 
   // Klare Trennung: alle Gate-2-Passierer liegen mit Abstand über der Schwelle,
   // alle Ablehnungen mit Abstand darunter (kein Grenzfall-Wackeln durch Rauschen).
   for (const r of gate2Passed) assert.ok(r.meanReversionScore >= 76, `#${r.n} sollte klar über 75 liegen (war ${r.meanReversionScore})`);
   for (const r of gate2Failed) assert.ok(r.meanReversionScore <= 67, `#${r.n} sollte klar unter 75 liegen (war ${r.meanReversionScore})`);
 
-  // #5 (rsiDeadZone=true) landet am weitesten unten — der Dead-Zone-Malus wirkt.
+  // #5 (rsiDeadZone=true) wird jetzt schon an Gate 1 aussortiert (Candidate
+  // 67 < 70) — vorher demonstrierte es den Dead-Zone-Malus an Gate 2. Der
+  // Malus selbst ist weiterhin durch die dedizierten Unit-Tests oben abgedeckt.
   const five = rows.find(r => r.n === 5);
-  assert.ok(five.meanReversionScore <= 55, '#5 (Dead-Zone) sollte klar unter 75 liegen');
+  assert.ok(!five.passedGate1, '#5 (Dead-Zone, Candidate 67) scheitert jetzt schon an Gate 1');
 });

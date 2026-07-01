@@ -2,7 +2,7 @@ exports[`processSignal · crypto_baseline · edge 1`] = `
 {
   "status": "candidate_rejected",
   "candidateScore": 50,
-  "candidateThreshold": 60,
+  "candidateThreshold": 70,
   "strategyKey": "crypto_baseline",
   "signalsInserts": 1,
   "candidateInserts": 1
@@ -65,28 +65,12 @@ exports[`processSignal · crypto_baseline · trade 1`] = `
 
 exports[`processSignal · crypto_orderflow_breakout · edge 1`] = `
 {
-  "status": "ok",
-  "analysis": {
-    "score": 37,
-    "recommendation": "SKIP",
-    "risk": "HIGH",
-    "direction": "LONG",
-    "entry": 100,
-    "tp": 101.5,
-    "sl": 99
-  },
-  "signalsRow": {
-    "outcome": "OPEN",
-    "direction": "LONG",
-    "ai_score": 37,
-    "ai_entry": 100,
-    "ai_tp": 101.5,
-    "ai_sl": 99,
-    "ai_tp1": 100.9,
-    "strategy_key": "crypto_orderflow_breakout",
-    "asset_class": "crypto",
-    "is_test": 0
-  }
+  "status": "candidate_rejected",
+  "candidateScore": 60,
+  "candidateThreshold": 70,
+  "strategyKey": "crypto_orderflow_breakout",
+  "signalsInserts": 1,
+  "candidateInserts": 1
 }
 `;
 
@@ -94,7 +78,7 @@ exports[`processSignal · crypto_orderflow_breakout · reject 1`] = `
 {
   "status": "candidate_rejected",
   "candidateScore": 55,
-  "candidateThreshold": 60,
+  "candidateThreshold": 70,
   "strategyKey": "crypto_orderflow_breakout",
   "signalsInserts": 1,
   "candidateInserts": 1
@@ -130,28 +114,12 @@ exports[`processSignal · crypto_orderflow_breakout · trade 1`] = `
 
 exports[`processSignal · crypto_sr_volume · edge 1`] = `
 {
-  "status": "ok",
-  "analysis": {
-    "score": 37,
-    "recommendation": "SKIP",
-    "risk": "HIGH",
-    "direction": "LONG",
-    "entry": 100,
-    "tp": 101.5,
-    "sl": 99
-  },
-  "signalsRow": {
-    "outcome": "OPEN",
-    "direction": "LONG",
-    "ai_score": 37,
-    "ai_entry": 100,
-    "ai_tp": 101.5,
-    "ai_sl": 99,
-    "ai_tp1": 100.9,
-    "strategy_key": "crypto_sr_volume",
-    "asset_class": "crypto",
-    "is_test": 0
-  }
+  "status": "candidate_rejected",
+  "candidateScore": 65,
+  "candidateThreshold": 70,
+  "strategyKey": "crypto_sr_volume",
+  "signalsInserts": 1,
+  "candidateInserts": 1
 }
 `;
 
@@ -159,7 +127,7 @@ exports[`processSignal · crypto_sr_volume · reject 1`] = `
 {
   "status": "candidate_rejected",
   "candidateScore": 40,
-  "candidateThreshold": 60,
+  "candidateThreshold": 70,
   "strategyKey": "crypto_sr_volume",
   "signalsInserts": 1,
   "candidateInserts": 1
@@ -195,28 +163,12 @@ exports[`processSignal · crypto_sr_volume · trade 1`] = `
 
 exports[`processSignal · forex_sr_fib_rsi · edge 1`] = `
 {
-  "status": "ok",
-  "analysis": {
-    "score": 37,
-    "recommendation": "SKIP",
-    "risk": "HIGH",
-    "direction": "LONG",
-    "entry": 1.08,
-    "tp": 1.0848600000000002,
-    "sl": 1.0767600000000002
-  },
-  "signalsRow": {
-    "outcome": "OPEN",
-    "direction": "LONG",
-    "ai_score": 37,
-    "ai_entry": 1.08,
-    "ai_tp": 1.0848600000000002,
-    "ai_sl": 1.0767600000000002,
-    "ai_tp1": 1.0829160000000002,
-    "strategy_key": "forex_sr_fib_rsi",
-    "asset_class": "forex",
-    "is_test": 0
-  }
+  "status": "candidate_rejected",
+  "candidateScore": 65,
+  "candidateThreshold": 70,
+  "strategyKey": "forex_sr_fib_rsi",
+  "signalsInserts": 1,
+  "candidateInserts": 1
 }
 `;
 

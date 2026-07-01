@@ -29,6 +29,56 @@ export function sessionDisabledConfig() {
   return cfg;
 }
 
+// Findet die Klammergruppe, die auf `fromIndex` folgt (erste `(` ab dort),
+// und gibt ihren Inhalt bis zur PASSENDEN schließenden Klammer zurück
+// (Tiefenzählung statt gieriger/nicht-gieriger Regex — robust gegen Text
+// NACH der Gruppe wie `ON CONFLICT(id) DO UPDATE SET …`).
+function extractParenGroup(sql, fromIndex) {
+  const openIdx = sql.indexOf('(', fromIndex);
+  if (openIdx === -1) return null;
+  let depth = 0;
+  for (let i = openIdx; i < sql.length; i++) {
+    if (sql[i] === '(') depth++;
+    else if (sql[i] === ')') {
+      depth--;
+      if (depth === 0) return sql.slice(openIdx + 1, i);
+    }
+  }
+  return null;
+}
+
+// Splittet eine SQL-VALUES-Tupel-Liste an Kommas AUSSERHALB von Quotes.
+function splitSqlValueTokens(valuesInner) {
+  const tokens = [];
+  let current = '';
+  let inString = false;
+  for (const ch of valuesInner) {
+    if (ch === "'") inString = !inString;
+    if (ch === ',' && !inString) {
+      tokens.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim() !== '') tokens.push(current.trim());
+  return tokens;
+}
+
+// Löst eine SQL-VALUES-Tupel-Liste in die tatsächlich eingefügten Werte auf:
+// `?`-Tokens konsumieren das nächste bind()-Argument der Reihe nach, literale
+// Tokens ('str', Zahl, NULL) werden direkt geparst.
+function resolveInsertValues(valuesInner, bound) {
+  let boundIdx = 0;
+  return splitSqlValueTokens(valuesInner).map((token) => {
+    if (token === '?') return bound[boundIdx++];
+    if (/^'.*'$/.test(token)) return token.slice(1, -1);
+    if (/^-?\d+(\.\d+)?$/.test(token)) return Number(token);
+    if (/^NULL$/i.test(token)) return null;
+    return token; // Fallback: unbekanntes Token unverändert (z.B. Ausdrücke)
+  });
+}
+
 // In-memory D1-Attrappe. `settings` = Map für die settings-Tabelle (getSetting),
 // `activeStrategy` = Zeile für `SELECT * FROM strategies WHERE active=1`
 // (null → erzwingt initDefaultStrategy-Pfad).
@@ -66,7 +116,21 @@ export function makeFakeDB({ settings = {}, activeStrategy } = {}) {
           const m = sql.match(/INSERT(?:\s+OR\s+\w+)?\s+INTO\s+(\w+)\s*\(([\s\S]*?)\)\s*(?:VALUES|SELECT)/i);
           if (m) {
             const columns = m[2].split(',').map((s) => s.trim()).filter(Boolean);
-            inserts.push({ table: m[1], columns, values: bound });
+            // Manche INSERTs (z.B. der REJECTED-Pfad in worker.js) mischen
+            // Literale ('REJECTED', 0, 'WEBHOOK', …) MIT `?`-Platzhaltern in
+            // der VALUES-Klausel. Eine naive 1:1-Zippung von Spalten- und
+            // bind()-Argument-Indizes wäre dann falsch verschoben (Spalte N
+            // bekäme bind-Argument N statt des tatsächlich an Position N
+            // stehenden Werts). Die VALUES-Klausel wird deshalb per Klammer-
+            // Tiefenzählung extrahiert (robust gegen ON CONFLICT(...)-Anhänge
+            // wie bei trade_reviews) und geparst — `?`-Tokens konsumieren
+            // bind()-Argumente der Reihe nach, Literale werden direkt
+            // aufgelöst — nur dann stimmt insertedRow() mit dem überein, was
+            // D1 real einfügen würde.
+            const isValuesForm = /VALUES\s*$/i.test(m[0]);
+            const valuesInner  = isValuesForm ? extractParenGroup(sql, sql.indexOf(m[0]) + m[0].length) : null;
+            const values = valuesInner != null ? resolveInsertValues(valuesInner, bound) : bound;
+            inserts.push({ table: m[1], columns, values });
           }
           return { success: true, meta: { changes: 1 } };
         },
