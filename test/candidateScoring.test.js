@@ -180,6 +180,48 @@ test('crypto_sr_volume: snake_case Felder (rsi_was_oversold, rsi_rising) werden 
   assert.ok(result.details.rsi_rising != null);
 });
 
+// ── crypto_sr_volume — String-Boolean-Fix (wavescout_sr_volume.pine sendet
+// reclaim/breakdown/rsiWasOversold/rsiWasOverbought/rsiRising/rsiFalling/
+// trendOk als STRINGS "true"/"false" via str.tostring(), genau wie
+// crypto_baseline vor PR #134). `!!("false")` und Klartext-Truthy-Checks sind
+// für den String "false" fälschlich true — jedes Signal bekam bisher IMMER
+// den vollen Bonus, unabhängig vom tatsächlichen Wert.
+
+test('crypto_sr_volume: alle Flags als String "false" (echter Pine-Payload eines Touch OHNE Reclaim) → nur Basiswert', () => {
+  const result = scoreCandidate('crypto_sr_volume', {
+    direction: 'LONG',
+    reclaim: 'false', rsiWasOversold: 'false', rsiRising: 'false', trendOk: 'false',
+  });
+  // VORHER (Bug): !!("false") === true → base 40 + reclaim 25 + oversold 10
+  // + rising 8 + trendOk 10 = 93 (jeder Touch hätte das Gate JEDER passiert).
+  // NACHHER (Fix): kein Flag greift → nur Basiswert 40.
+  assert.equal(result.score, 40, 'String "false" darf keinen Bonus auslösen');
+  assert.equal(result.details.reclaim, undefined);
+  assert.equal(result.details.trend_ok, undefined);
+  assert.ok(result.score < result.threshold, 'reiner Touch ohne echten Reclaim fällt unter Threshold');
+});
+
+test('crypto_sr_volume: alle Flags als String "true" → voller Bonus (Regression, wie zuvor mit echten Booleans)', () => {
+  const result = scoreCandidate('crypto_sr_volume', {
+    direction: 'LONG',
+    reclaim: 'true', rsiWasOversold: 'true', rsiRising: 'true', trendOk: 'true',
+  });
+  // base 40 + reclaim 25 + oversold 10 + rising 8 + trendOk 10 = 93
+  assert.equal(result.score, 93);
+  assert.equal(result.details.reclaim, CANDIDATE_SCORING_DEFAULTS.crypto_sr_volume.weights.reclaim);
+});
+
+test('crypto_sr_volume: breakdown SHORT als String "false" mit echtem rsiWasOverbought="true" → nur der wahre Flag zählt', () => {
+  const result = scoreCandidate('crypto_sr_volume', {
+    direction: 'SHORT',
+    breakdown: 'false', rsiWasOverbought: 'true', rsiFalling: 'false',
+  });
+  // base 40 + overbought 10 = 50 (breakdown/falling bleiben aus, weil "false")
+  assert.equal(result.score, 50);
+  assert.equal(result.details.breakdown, undefined);
+  assert.equal(result.details.rsi_was_overbought, CANDIDATE_SCORING_DEFAULTS.crypto_sr_volume.weights.rsi_was_overbought);
+});
+
 // ══════════════════════════════════════════════════════════════
 // crypto_orderflow_breakout
 // ══════════════════════════════════════════════════════════════
@@ -223,11 +265,18 @@ test('crypto_orderflow_breakout: niedriger volRatio (<1.5) → Strafe -5', () =>
 // forex_sr_fib_rsi
 // ══════════════════════════════════════════════════════════════
 
-test('forex_sr_fib_rsi: reclaimVAL LONG + sehr geringer Abstand → hoher Score', () => {
+// distToVAL/distToVAH: wavescout_forex.pine sendet eine ROHE Preisdifferenz
+// (`close - fxVAL` bzw. `fxVAH - close`), nicht Prozent — der Worker
+// normalisiert das intern auf Prozent von `price` (siehe scoreCandidate).
+// Die Tests brauchen deshalb einen `price` und einen realistischen
+// Preis-Delta-Wert statt eines direkten Prozentwerts.
+
+test('forex_sr_fib_rsi: reclaimVAL LONG + sehr geringer Abstand (0.0005 bei price 1.08 → 0.046 %) → hoher Score', () => {
   const result = scoreCandidate('forex_sr_fib_rsi', {
     direction: 'LONG',
     reclaimVAL: true,
-    distToVAL: 0.05,    // < 0.1 % → sehr nah
+    price: 1.08,
+    distToVAL: 0.0005,  // 0.0005 / 1.08 * 100 = 0.046 % < 0.1 % → sehr nah
   });
   // base 35 + reclaimVAL 30 + dist_very_close 15 = 80
   assert.equal(result.score, 80);
@@ -235,11 +284,12 @@ test('forex_sr_fib_rsi: reclaimVAL LONG + sehr geringer Abstand → hoher Score'
   assert.equal(result.details.dist_to_level, CANDIDATE_SCORING_DEFAULTS.forex_sr_fib_rsi.weights.dist_very_close);
 });
 
-test('forex_sr_fib_rsi: breakdownVAH SHORT + mittlerer Abstand → solider Score', () => {
+test('forex_sr_fib_rsi: breakdownVAH SHORT + mittlerer Abstand (0.002 bei price 1.08 → 0.185 %) → solider Score', () => {
   const result = scoreCandidate('forex_sr_fib_rsi', {
     direction: 'SHORT',
     breakdownVAH: true,
-    distToVAH: 0.2,     // 0.1–0.3 % → dist_close
+    price: 1.08,
+    distToVAH: 0.002,   // 0.002 / 1.08 * 100 = 0.185 % → 0.1–0.3 % → dist_close
   });
   // base 35 + breakdownVAH 30 + dist_close 5 = 70
   assert.equal(result.score, 70);
@@ -259,9 +309,83 @@ test('forex_sr_fib_rsi: snake_case Felder (reclaim_val, dist_to_val) werden erka
   const result = scoreCandidate('forex_sr_fib_rsi', {
     direction: 'LONG',
     reclaim_val: true,
-    dist_to_val: 0.05,
+    price: 1.08,
+    dist_to_val: 0.0005,
   });
   assert.equal(result.score, 80);
+});
+
+// ── distToVAL/distToVAH — Prozent-Normalisierung (Payload-Contract-Fix) ─────
+// wavescout_forex.pine sendet eine ROHE Preisdifferenz, nicht Prozent. Für
+// EUR/USD (~1.08) wäre jede reale Differenz automatisch < 0.1 (die alten,
+// als Prozent gedachten Schwellen) — der dist_very_close-Bonus hätte praktisch
+// IMMER gefeuert, unabhängig von der tatsächlichen Nähe zum Level.
+
+test('forex_sr_fib_rsi: realistische EUR/USD-Distanz (0.0004 absolut) wird korrekt als sehr nah erkannt', () => {
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'LONG', price: 1.08, distToVAL: 0.0004, // → 0.037 % < 0.1 %
+  });
+  assert.equal(result.details.dist_to_level, CANDIDATE_SCORING_DEFAULTS.forex_sr_fib_rsi.weights.dist_very_close);
+});
+
+test('forex_sr_fib_rsi: realistische EUR/USD-Distanz, die WEIT vom Level entfernt ist, bekommt KEINEN Nah-Bonus', () => {
+  // 0.02 absolute Preisdifferenz bei price 1.08 = 1.85 % — weit weg, aber vor
+  // dem Fix wäre 0.02 < 0.3 gewesen und hätte fälschlich dist_close ausgelöst.
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'LONG', price: 1.08, distToVAL: 0.02,
+  });
+  assert.equal(result.details.dist_to_level, undefined, 'echte 1.85 % Abstand ist NICHT nah am Level');
+});
+
+test('forex_sr_fib_rsi: Vorzeichen von distToVAL (Preis über/unter Level) ist irrelevant für die Nähe', () => {
+  const below = scoreCandidate('forex_sr_fib_rsi', { direction: 'LONG', price: 1.08, distToVAL: 0.0004 });
+  const above = scoreCandidate('forex_sr_fib_rsi', { direction: 'LONG', price: 1.08, distToVAL: -0.0004 });
+  assert.equal(below.score, above.score, 'Math.abs() macht das Vorzeichen irrelevant, nur die Magnitude zählt');
+});
+
+test('forex_sr_fib_rsi: ohne price/entry kein Crash, kein (fälschlicher) Nah-Bonus', () => {
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'LONG', reclaimVAL: true, distToVAL: 0.0004, // kein price/entry im Payload
+  });
+  assert.equal(result.score, 65, 'base 35 + reclaimVAL 30, kein Dist-Bonus ohne Preisreferenz');
+  assert.equal(result.details.dist_to_level, undefined);
+});
+
+// ── forex_sr_fib_rsi — String-Boolean-Fix (wavescout_forex.pine sendet
+// reclaimVAL/breakdownVAH ebenfalls als STRINGS "true"/"false", derselbe Bug
+// wie bei crypto_sr_volume oben).
+
+test('forex_sr_fib_rsi: reclaimVAL als String "false" (echter Pine-Payload ohne Reclaim) → kein Bonus', () => {
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'LONG',
+    reclaimVAL: 'false',
+    distToVAL: 999, // fern vom Level, damit auch der Dist-Bonus nicht greift
+  });
+  // VORHER (Bug): signal.reclaimVAL || … ist für "false" (String) truthy →
+  // +30 obwohl kein echter Reclaim vorlag. NACHHER: nur Basiswert 35.
+  assert.equal(result.score, 35);
+  assert.equal(result.details.reclaim_val, undefined);
+});
+
+test('forex_sr_fib_rsi: reclaimVAL als String "true" → Bonus greift (Regression)', () => {
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'LONG',
+    reclaimVAL: 'true',
+    distToVAL: 999,
+  });
+  // base 35 + reclaimVAL 30 = 65
+  assert.equal(result.score, 65);
+  assert.equal(result.details.reclaim_val, CANDIDATE_SCORING_DEFAULTS.forex_sr_fib_rsi.weights.reclaim_val);
+});
+
+test('forex_sr_fib_rsi: breakdownVAH als String "false" → kein Bonus', () => {
+  const result = scoreCandidate('forex_sr_fib_rsi', {
+    direction: 'SHORT',
+    breakdownVAH: 'false',
+    distToVAH: 999,
+  });
+  assert.equal(result.score, 35);
+  assert.equal(result.details.breakdown_vah, undefined);
 });
 
 // ══════════════════════════════════════════════════════════════

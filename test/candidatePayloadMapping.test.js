@@ -79,8 +79,10 @@ test('forex_sr_fib_rsi: reclaimVAL & distToVAL werden abgeleitet', () => {
   const s = normalizeSignalForScoring('forex_sr_fib_rsi', FOREX_LONG);
   assert.equal(s.reclaimVAL, true);
   assert.equal(s.breakdownVAH, false);
-  // |1.0825 - 1.0820| / 1.0820 * 100 ≈ 0.046 %  → < 0.1 % (sehr nah)
-  assert.ok(s.distToVAL < 0.1, `distToVAL < 0.1, war ${s.distToVAL}`);
+  // distToVAL ist eine ROHE Preisdifferenz (nicht Prozent — wavescout_forex.pine
+  // sendet ebenfalls die rohe Differenz `close - fxVAL`). scoreCandidate
+  // normalisiert das erst dort auf Prozent von price. 1.0825 - 1.0820 = 0.0005.
+  assert.ok(Math.abs(s.distToVAL - 0.0005) < 1e-9, `distToVAL ≈ 0.0005 (roh), war ${s.distToVAL}`);
 });
 
 // ── Score-Gate: echte Payloads passieren jetzt den Threshold (vorher: nie) ────
