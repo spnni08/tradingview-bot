@@ -41,32 +41,31 @@ exports[`analyzeWithRules · crypto_baseline · edge 1`] = `
 exports[`analyzeWithRules · crypto_baseline · reject 1`] = `
 {
   "recommendation": "SKIP",
-  "score": 38,
+  "score": 67,
   "risk": "HIGH",
   "entry": 100,
   "tp": 101.5,
   "sl": 99,
   "tp2": 103,
-  "reason": "Setup A (Pullback) · EMA bearish · Trend: BEARISH · Bias: SHORT",
+  "reason": "Setup A (Pullback) · RSI 34",
   "direction": "LONG",
   "matched_rules": [
-    "RSI niedrig (38) – passt zu Setup A LONG",
+    "RSI niedrig (34) – passt zu Setup A LONG",
     "Timeframe 5min – Entry-Timeframe v2.0"
   ],
-  "failed_rules": [
-    "EMA bearish – Trend gegen LONG, kein Bias",
-    "Trend BEARISH – gegen LONG",
-    "Wave Bias SHORT – gegen LONG"
-  ],
+  "failed_rules": [],
   "unknown_rules": [
+    "EMA 50/200 (keine Daten)",
+    "Trend-Label (keine Daten)",
+    "Wave Bias (keine Daten)",
     "Konfidenz (keine Daten)",
     "Support/Resistance (keine Zonen)"
   ],
   "score_breakdown": {
     "rsi": 10,
-    "ema": -15,
-    "trend": -10,
-    "wave_bias": -4,
+    "ema": 0,
+    "trend": 0,
+    "wave_bias": 0,
     "timeframe": 7,
     "confidence": 0,
     "support_resistance": 0
@@ -74,46 +73,47 @@ exports[`analyzeWithRules · crypto_baseline · reject 1`] = `
   "risk_reward": 1.5,
   "planned_profit_pct": 1.5,
   "planned_risk_pct": 1,
-  "signal_quality": "SKIP",
+  "signal_quality": "OKAY",
   "setup_type": "SETUP_A"
 }
 `;
 
 exports[`analyzeWithRules · crypto_baseline · trade 1`] = `
 {
-  "recommendation": "LONG",
-  "score": 100,
-  "risk": "LOW",
+  "recommendation": "SKIP",
+  "score": 66,
+  "risk": "HIGH",
   "entry": 100,
   "tp": 101.5,
   "sl": 99,
   "tp2": 103,
-  "reason": "Setup A (Pullback) · EMA bullish · Trend: BULLISH · Bias: LONG",
+  "reason": "Setup A (Pullback) · RSI 24",
   "direction": "LONG",
   "matched_rules": [
-    "RSI niedrig (38) – passt zu Setup A LONG",
-    "EMA bullish (EMA50>EMA200, Dist 1.0%) – LONG",
-    "Trend BULLISH – passt zu LONG",
-    "Wave Bias LONG – passt zu LONG",
-    "Timeframe 5min – Entry-Timeframe v2.0",
-    "Konfidenz 80% – hoch",
-    "Preis nah an Support – günstig für LONG"
+    "RSI extrem überverkauft (24) – Setup A LONG",
+    "Timeframe 5min – Entry-Timeframe v2.0"
   ],
   "failed_rules": [],
-  "unknown_rules": [],
+  "unknown_rules": [
+    "EMA 50/200 (keine Daten)",
+    "Trend-Label (keine Daten)",
+    "Wave Bias (keine Daten)",
+    "Konfidenz (keine Daten)",
+    "Support/Resistance (keine Zonen)"
+  ],
   "score_breakdown": {
-    "rsi": 10,
-    "ema": 11,
-    "trend": 10,
-    "wave_bias": 8,
+    "rsi": 9,
+    "ema": 0,
+    "trend": 0,
+    "wave_bias": 0,
     "timeframe": 7,
-    "confidence": 7,
-    "support_resistance": 10
+    "confidence": 0,
+    "support_resistance": 0
   },
   "risk_reward": 1.5,
   "planned_profit_pct": 1.5,
   "planned_risk_pct": 1,
-  "signal_quality": "PREMIUM",
+  "signal_quality": "OKAY",
   "setup_type": "SETUP_A"
 }
 `;

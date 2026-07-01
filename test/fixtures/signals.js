@@ -11,30 +11,37 @@
 // (z.B. ema50/ema200-Lage passend zur Richtung).
 
 export const signalFixtures = {
-  // ── 1) crypto_baseline (RSI + EMA200, Score-Gate ≥ 75) ──────────────────
+  // ── 1) crypto_baseline (Mean-Reversion, Gate 1 ≥60 + Gate 2 ≥75) ────────
+  // Feldsatz entspricht dem tatsächlich deployten v2-Pine: direction, entry,
+  // rsi, emaDistPct, nearSup, nearRes, rsiDeadZone (KEIN price/ema50/ema200/
+  // trend/confidence — das ist der Feldsatz, den analyzeWithRules erwartet,
+  // aber Pine für diese Strategie nie sendet).
   crypto_baseline: {
-    // Starker Pullback-LONG: RSI tief, EMA bullish im Sweet-Spot, Trend/Bias long.
+    // Starker Mean-Reversion-LONG: RSI extrem überverkauft (24), deutliche
+    // EMA-Überdehnung (-1.5%), klares nearSup (kein nearRes) → passiert
+    // beide Gates deutlich (Candidate 82, Mean-Reversion-Score 100/geclampt).
     trade: {
       strategy: 'crypto_baseline', symbol: 'BTC/USDT', timeframe: '5',
       direction: 'LONG', action: 'BUY', trigger: 'PULLBACK',
-      price: 100, rsi: 38, ema50: 100.5, ema200: 99,
-      trend: 'BULLISH', wave_bias: 'LONG', confidence: 80,
-      support: 98.5, resistance: 110,
+      entry: '100', rsi: '24', emaDistPct: '-1.2',
+      nearSup: 'true', nearRes: 'false', rsiDeadZone: 'false',
     },
-    // Passiert den Candidate-Gate (EMA-Sweet-Spot), aber Gegentrend → Rule-Score
-    // < 75 → kein OPEN (SKIPPED).
+    // Passiert Gate 1 (EMA-Sweet-Spot + nearSup → Candidate 82), aber RSI
+    // (34, nicht extrem) und die moderate EMA-Distanz (-0.79%) reichen für
+    // Gate 2 nicht → Mean-Reversion-Score 67 < 75 → SKIPPED (Gate 2 greift).
     reject: {
       strategy: 'crypto_baseline', symbol: 'ETH/USDT', timeframe: '5',
       direction: 'LONG', action: 'BUY', trigger: 'PULLBACK',
-      price: 100, rsi: 38, ema50: 98, ema200: 99,
-      trend: 'BEARISH', wave_bias: 'SHORT',
+      entry: '100', rsi: '34.07', emaDistPct: '-0.79',
+      nearSup: 'true', nearRes: 'false', rsiDeadZone: 'false',
     },
-    // Grenzfall: kaputter RSI-Wert + fehlende EMA-Daten → darf NICHT crashen,
-    // landet mangels Score-Features unter dem Candidate-Threshold.
+    // Grenzfall: kaputter RSI-Wert + keine EMA/S/R-Daten → darf NICHT crashen,
+    // landet mangels Score-Features unter dem Candidate-Threshold (Gate 2 wird
+    // nie erreicht).
     edge: {
       strategy: 'crypto_baseline', symbol: 'SOL/USDT', timeframe: '5',
       direction: 'LONG', action: 'BUY', trigger: 'PULLBACK',
-      price: 100, rsi: 'not-a-number',
+      entry: '100', rsi: 'not-a-number',
     },
   },
 

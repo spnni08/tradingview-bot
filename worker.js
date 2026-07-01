@@ -876,20 +876,20 @@ const STRATEGIES = {
     label:        'Crypto Baseline (Kontrollgruppe)',
     display:      'Krypto-1 (RSI+EMA200)', // kurzes, menschenlesbares Label für Telegram
     assetClass:   'crypto',
-    // Gate = NUR der Candidate-Score (scoreCandidate, Schwelle 60). Der frühere
-    // Final-Gate `analyzeWithRules.score ≥ 75` ist entfernt (useScoreGate=false):
-    // das deployte Pine v2 sendet für crypto_baseline einen anderen Feldsatz
-    // (direction, entry, rsi, emaDistPct, nearSup, nearRes, rsiDeadZone) als
-    // analyzeWithRules liest (price, ema50/200, trend, timeframe, support,
-    // resistance, confidence). 6 von 8 Regeln finden „keine Daten" → der Score
-    // klebt strukturell bei 60/65 und konnte 75 nie erreichen (0 Trades trotz
-    // gültiger Signale). Der bereits gefixte Candidate-Score (Spread 27–82, PR
-    // #134) ist die aussagekräftige Bewertung und gated jetzt allein — wie bei
-    // den 3 Pine-getrusteten Schwester-Strategien. analyzeWithRules.score bleibt
-    // reine Telemetrie. HINWEIS: der Live-Auto-Trade-Pfad gated weiterhin
-    // unabhängig bei score≥75 (Sicherheits-Backstop, siehe AUTO_TRADE-Block).
-    useScoreGate: false,
-    minScore:     0,
+    // Zwei Gates: scoreCandidate (Gate 1, Schwelle 60, PR #134) siebt breit
+    // vor; scoreMeanReversionBaseline (Gate 2, Schwelle 75) filtert daraus die
+    // starken Setups. Der frühere Final-Gate `analyzeWithRules.score ≥ 75` war
+    // strukturell kaputt (PR #136 hatte ihn deshalb entfernt statt repariert):
+    // analyzeWithRules ist ein TRENDFOLGE-Scorer und liest price/ema50/ema200/
+    // trend/confidence — Felder, die das deployte v2-Pine für crypto_baseline
+    // nicht sendet (es sendet stattdessen direction/entry/rsi/emaDistPct/
+    // nearSup/nearRes/rsiDeadZone). scoreMeanReversionBaseline liest den
+    // tatsächlichen Feldsatz und bewertet Mean-Reversion-Qualität (Details
+    // s. dort). analyzeWithRules läuft weiterhin (Telemetrie: entry/tp/sl,
+    // matched/failed_rules, score_breakdown) — sein Score entscheidet aber
+    // über nichts mehr.
+    useScoreGate: true,
+    minScore:     75,
     sessionGate:  false,
     exit:         {},     // EXIT_CONFIG-Defaults (1% SL, 1.5R TP2)
   },
@@ -1218,6 +1218,88 @@ function scoreCandidate(strategyKey, signal, customWeights = null) {
 
   score = Math.max(0, Math.min(100, Math.round(score)));
   return { score, details, threshold: thr };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MEAN-REVERSION SCORER (crypto_baseline Gate 2, Schwelle 75)
+// ═══════════════════════════════════════════════════════════════
+//
+// scoreCandidate() (Gate 1, ≥60) ist ein breiter Filter, der grobe Kandidaten
+// aussiebt. Dieser Scorer ist Gate 2 (≥75) und soll aus den Gate-1-Kandidaten
+// die tatsächlich starken Setups herausfiltern. Er ersetzt analyzeWithRules als
+// Final-Gate für crypto_baseline: analyzeWithRules ist ein TRENDFOLGE-Scorer
+// (liest price/ema50/ema200/trend/confidence — Felder, die das deployte v2-
+// Pine für crypto_baseline NICHT sendet; 6 von 8 Regeln fanden „keine Daten",
+// der Score klappte strukturell bei ~60 und erreichte 75 nie — PR #136 hatte
+// das Gate deshalb ganz entfernt statt es zu reparieren). Diese Funktion nutzt
+// stattdessen die tatsächlich gesendeten Felder (rsi, emaDistPct, nearSup,
+// nearRes, rsiDeadZone) und bewertet MEAN-REVERSION-Qualität — das Gegenteil
+// von Trendfolge: ein starkes Setup ist vom EMA überdehnt (nicht knapp dran),
+// RSI im Extrembereich (nicht im mittleren Trend-Bereich) und idealerweise an
+// einem S/R-Level, das den Bounce stützt.
+//
+// Gewichtung (Base 40, validiert gegen die 10 realen Payloads aus PR #134,
+// siehe test/meanReversionScoring.test.js):
+//   - RSI-Extremität (bis zu +25): das stärkste Mean-Reversion-Signal — je
+//     extremer der RSI in Setup-Richtung, desto wahrscheinlicher der Bounce.
+//     RSI 30-70 (Normalbereich) trägt bewusst nichts bei.
+//   - EMA-Distanz (bis zu +22, |emaDistPct|): Überdehnung ist HIER gut (das
+//     Gegenteil von Trendfolge, wo Nähe zum EMA gut ist) — Richtung des
+//     Vorzeichens ist irrelevant, nur die Magnitude zählt (Math.abs). Die
+//     Top-Stufe wurde von einem anfänglichen +20 auf +22 angehoben: mit +20
+//     landeten die drei stärksten realen Setups (RSI 30-39, EMA-Dist >1.3%,
+//     klares nearSup) exakt auf der 75-Schwelle (40 base + 20 ema + 15 sr =
+//     75) — ein Gate, das auf der Kante balanciert, ist fragil gegenüber
+//     Rundungs-/Payload-Rauschen. +22 gibt den drei stärksten realen Setups
+//     2 Punkte Luft (Score 77), ohne die klar schwächeren Setups (die alle
+//     ≥8 Punkte unter der Schwelle bleiben) in Reichweite zu bringen.
+//   - S/R-Nähe (+15 bei eindeutiger Setup-Seite, +10 wenn beide Flags gesetzt): ein
+//     eindeutiges Level bestätigt das Setup stärker als ein ambivalentes
+//     Signal (Preis irgendwo im mittleren Bereich zwischen beiden Levels).
+//   - RSI-Dead-Zone (−15): RSI 55-65 (LONG) bzw. 45-35 (SHORT) ist per
+//     Definition KEIN Extremum — explizit kein Mean-Reversion-Setup, auch
+//     wenn andere Faktoren (EMA-Distanz, S/R) günstig aussehen.
+//
+// Gibt einen numerischen Score (0-100) zurück, kein Detail-Objekt — die
+// Aufrufstelle (processSignal) vergleicht ihn direkt gegen minScore (75).
+function scoreMeanReversionBaseline(signal) {
+  const dir     = String(signal.direction || '').toUpperCase();
+  const isLong  = dir === 'LONG';
+  const isShort = dir === 'SHORT';
+
+  const rsi      = parseFloat(signal.rsi ?? 50);
+  const emaDist  = Math.abs(parseFloat(signal.emaDistPct ?? signal.ema_dist_pct ?? 0));
+  const nearSup  = parseBool(signal.nearSup ?? signal.near_sup);
+  const nearRes  = parseBool(signal.nearRes ?? signal.near_res);
+  const deadZone = parseBool(signal.rsiDeadZone ?? signal.rsi_dead_zone);
+
+  let score = 40;
+
+  // RSI-Extremität: nur außerhalb des Normalbereichs (30-70) relevant.
+  if (isLong) {
+    if      (rsi < 25) score += 25;
+    else if (rsi < 28) score += 18;
+    else if (rsi < 30) score += 10;
+  } else if (isShort) {
+    if      (rsi > 75) score += 25;
+    else if (rsi > 72) score += 18;
+    else if (rsi > 70) score += 10;
+  }
+
+  // EMA-Distanz: Betrag zählt, Vorzeichen ist Trend-Richtung, nicht Abstand.
+  if      (emaDist >= 1.0) score += 22;
+  else if (emaDist >= 0.5) score += 12;
+  else if (emaDist >= 0.1) score += 5;
+
+  // S/R-Nähe: eindeutiges Level > ambivalentes Signal (beide Flags gesetzt).
+  if (nearSup && nearRes)          score += 10;
+  else if (isLong  && nearSup)     score += 15;
+  else if (isShort && nearRes)     score += 15;
+
+  // RSI-Dead-Zone: kein Extremum, kein Mean-Reversion-Setup.
+  if (deadZone) score -= 15;
+
+  return Math.max(0, Math.min(100, Math.round(score)));
 }
 
 // Lädt optionale Gewichts-Overrides aus der settings-Tabelle.
@@ -2919,8 +3001,27 @@ async function processSignal(env, signal) {
   // sind die mit useScoreGate=false — Single Source of Truth, kein Hardcoding.
   const scoreOptimized = stratDef.useScoreGate;
 
-  const ruleAnalysis     = analyzeWithRules(signal, strategyConfig, exitCfg);
-  const fallbackAnalysis = ruleAnalysis;
+  const ruleAnalysis = analyzeWithRules(signal, strategyConfig, exitCfg);
+
+  // crypto_baseline: ruleAnalysis bleibt im Einsatz für entry/tp/sl (rein aus
+  // price/direction/exitCfg — unabhängig von den Trendfolge-Feldern, die das
+  // v2-Pine nicht sendet) und für Telemetrie (matched/failed_rules,
+  // score_breakdown). Sein SCORE wird für baseline durch den dedizierten
+  // Mean-Reversion-Scorer ersetzt (siehe scoreMeanReversionBaseline oben) —
+  // recommendation/risk werden aus demselben Score neu abgeleitet, damit sie
+  // nicht mit dem (verworfenen) Trendfolge-Score inkonsistent bleiben.
+  const baselineMeanReversionScore = strategyKey === 'crypto_baseline'
+    ? scoreMeanReversionBaseline(scoringSignal)
+    : null;
+  const fallbackAnalysis = baselineMeanReversionScore == null
+    ? ruleAnalysis
+    : {
+        ...ruleAnalysis,
+        score: baselineMeanReversionScore,
+        recommendation: baselineMeanReversionScore >= (stratDef.minScore ?? 75) ? (direction || 'RECOMMENDED') : 'SKIP',
+        risk: baselineMeanReversionScore >= (stratDef.minScore ?? 75) + 12 ? 'LOW'
+            : baselineMeanReversionScore >= (stratDef.minScore ?? 75)      ? 'MEDIUM' : 'HIGH',
+      };
 
   // VP-Felder aus Payload parsen (defensiv — Pine sendet diese ab v3.6)
   const vpScore = Math.max(0, Math.min(25, parseInt(signal.vp_score, 10) || 0));
@@ -2940,7 +3041,9 @@ async function processSignal(env, signal) {
 
   // Score-Gate: (rule_score + vp_score) entscheidet ob Claude aufgerufen wird.
   // VP-Konfluenz senkt die Schwelle von 55 auf 50 (bessere Signalqualität erwartet).
-  const preAiScore  = ruleAnalysis.score + vpScoreAdjusted;
+  // fallbackAnalysis.score ist für baseline bereits der Mean-Reversion-Score
+  // (für alle anderen Strategien identisch zu ruleAnalysis.score).
+  const preAiScore  = fallbackAnalysis.score + vpScoreAdjusted;
   const aiThreshold = vpZone !== 'none' ? 50 : 55;
 
   // Use AbortController so the Anthropic fetch is actually cancelled when the
@@ -2949,14 +3052,20 @@ async function processSignal(env, signal) {
   const aiTimer = setTimeout(() => aiAbort.abort(), AI_TIMEOUT_MS);
   let analysis;
   try {
-    // Score-Optimizer/Claude nur für die score-optimierte Strategie. Die
-    // Pine-gefilterten Strategien nutzen die deterministische Rule-Analyse
-    // (liefert Entry/TP/SL ebenfalls) und sparen den Claude-Call.
-    if (scoreOptimized && preAiScore >= aiThreshold) {
+    // Claude läuft NIE für crypto_baseline: analyzeSignalWithAI() fragt im
+    // Prompt denselben Trendfolge-Feldsatz ab wie analyzeWithRules (price/
+    // ema50/ema200/trend/confidence) — für den deployten v2-Payload wären das
+    // fast durchgehend "n/a"-Werte, ein Claude-Call brächte dort keinen
+    // Erkenntnisgewinn, nur Kosten/Latenz. Der neue Mean-Reversion-Scorer ist
+    // das vollständige, deterministische Gate 2 für baseline (siehe oben).
+    // Die Pine-getrusteten Strategien (useScoreGate=false) riefen Claude
+    // ohnehin nie auf.
+    if (scoreOptimized && strategyKey !== 'crypto_baseline' && preAiScore >= aiThreshold) {
       analysis = await analyzeSignalWithAI(env, signal, strategyConfig, aiAbort.signal) || fallbackAnalysis;
     } else {
-      if (!scoreOptimized) console.log(`⏭️ ${strategyKey}: Pine-gefiltert → Score-Optimizer/Claude übersprungen`);
-      else                 console.log(`⏭️ Score-Gate: ${preAiScore} < ${aiThreshold} → Claude-Call übersprungen`);
+      if (strategyKey === 'crypto_baseline') console.log(`⏭️ ${strategyKey}: Mean-Reversion-Score ${fallbackAnalysis.score} → Claude übersprungen (Gate 2 ist deterministisch)`);
+      else if (!scoreOptimized)              console.log(`⏭️ ${strategyKey}: Pine-gefiltert → Score-Optimizer/Claude übersprungen`);
+      else                                   console.log(`⏭️ Score-Gate: ${preAiScore} < ${aiThreshold} → Claude-Call übersprungen`);
       analysis = fallbackAnalysis;
     }
   } catch (aiErr) {
@@ -6104,4 +6213,5 @@ export {
   isWithinForexSession, STRATEGIES, FOREX_SESSIONS_UTC, resetStartingCapital,
   setStrategyStatus, getStrategyStatuses, computeWinRate, computeExpectancy,
   scoreCandidate, CANDIDATE_SCORING_DEFAULTS, normalizeSignalForScoring,
+  scoreMeanReversionBaseline,
 };
