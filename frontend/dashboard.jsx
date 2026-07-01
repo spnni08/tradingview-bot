@@ -60,7 +60,16 @@ function _calcPnL(s) {
 // Strategie-Label + Gewichte-Tooltip: `strategy_display` kommt vorberechnet
 // aus dem Backend (Single Source of Truth: STRATEGIES in worker.js), ältere
 // gecachte Signale ohne dieses Feld fallen auf den rohen Key zurück.
-function strategyLabel(signal) {
+// Renamed from `strategyLabel` to avoid colliding with backtest.jsx's
+// top-level `strategyLabel` (key -> label). Babel-standalone compiles both
+// files' top-level const/function declarations to plain `var`s sharing one
+// global scope, so whichever <script> loads last silently overwrites the
+// other's binding — backtest.jsx loads after dashboard.jsx, so calls here
+// were actually invoking backtest.jsx's (key) => ... helper with a whole
+// signal object as `key`, which fell through to `|| key` and rendered the
+// raw signal object as a React child (crash: "Objects are not valid as a
+// React child").
+function dashSignalStrategyLabel(signal) {
   return signal?.strategy_display || signal?.strategy_key || null;
 }
 
@@ -140,7 +149,7 @@ function DashSignalModal({ signal, scoringRules, onClose, onExecuteTrade, onSave
                   style={{ padding: '3px 8px', borderRadius: 5, background: 'rgba(59,130,246,.12)', border: '1px solid rgba(59,130,246,.25)', fontSize: 11, color: 'var(--blue-400)', fontFamily: 'var(--font-mono)', cursor: 'help' }}
                   title={scoringRulesTooltip(scoringRules, signal.strategy_key)}
                 >
-                  {strategyLabel(signal)}
+                  {dashSignalStrategyLabel(signal)}
                 </span>
               )}
               {signal.asset_class && (
@@ -776,13 +785,13 @@ const BestSignalCard = ({ signal, scoringRules, onExecuteTrade, onSaveToJournal,
                 {signal.direction}
               </span>
               <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{signal.timeframe}</span>
-              {strategyLabel(signal) && (
+              {dashSignalStrategyLabel(signal) && (
                 <span
                   className="badge badge-tag"
                   style={{ fontSize: 10, fontFamily: 'var(--font-mono)', cursor: 'help' }}
                   title={scoringRulesTooltip(scoringRules, signal.strategy_key)}
                 >
-                  {strategyLabel(signal)}
+                  {dashSignalStrategyLabel(signal)}
                 </span>
               )}
             </div>
@@ -1047,7 +1056,7 @@ const LatestTradesCard = ({ signals, scoringRules, onViewAll, onExecuteTrade, on
                     <td className="mono loss" style={{ fontSize: 11 }}>{s.ai_sl ? `$${s.ai_sl.toFixed(2)}` : '–'}</td>
                     <td className="mono">{s.ai_score || 0}</td>
                     <td className="mono muted" style={{ fontSize: 10, cursor: s.strategy_key ? 'help' : 'default' }} title={s.strategy_key ? scoringRulesTooltip(scoringRules, s.strategy_key) : ''}>
-                      {strategyLabel(s) || '–'}
+                      {dashSignalStrategyLabel(s) || '–'}
                     </td>
                     <td>
                       {s.outcome === 'REJECTED'
@@ -1087,10 +1096,10 @@ const LatestTradesCard = ({ signals, scoringRules, onViewAll, onExecuteTrade, on
                     {s.ai_sl && <span style={{ color: 'var(--loss)', fontFamily: 'var(--font-mono)' }}>SL&nbsp;${s.ai_sl.toFixed(2)}</span>}
                     <span style={{ marginLeft: 'auto' }}>{getTimeAgo(s.created_at)}</span>
                   </div>
-                  {strategyLabel(s) && (
+                  {dashSignalStrategyLabel(s) && (
                     <div style={{ marginTop: 4 }}>
                       <span className="badge badge-tag" style={{ fontSize: 9, fontFamily: 'var(--font-mono)' }} title={scoringRulesTooltip(scoringRules, s.strategy_key)}>
-                        {strategyLabel(s)}
+                        {dashSignalStrategyLabel(s)}
                       </span>
                     </div>
                   )}
