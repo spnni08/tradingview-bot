@@ -94,12 +94,29 @@ function scoringRulesTooltip(rules, strategyKey) {
   return `${r.display} — Basis ${r.base} · Schwelle ${r.threshold}\n${weightLines}`;
 }
 
+// Kandidaten-Gate-Info für REJECTED-Zeilen. Dort enthält ai_score den
+// Kandidaten-Score (Gate 1) — NICHT den Analyse-Score verarbeiteter Signale.
+// Die Schwelle kommt bevorzugt aus dem verknüpften signal_candidates-Eintrag
+// (candidate_threshold, getHistory-Join); ältere REJECTED-Zeilen ohne
+// Verknüpfung fallen auf die aktuelle Schwelle aus /scoring-rules zurück.
+function candidateGateInfo(signal, scoringRules) {
+  if (signal?.outcome !== 'REJECTED') return null;
+  if (signal.telegram_reason === 'missing_entry_price') return { missingEntry: true };
+  const threshold = signal.candidate_threshold
+    ?? scoringRules?.[signal.strategy_key]?.threshold
+    ?? 70;
+  return { score: signal.candidate_score ?? signal.ai_score ?? 0, threshold };
+}
+
+const CANDIDATE_SCORE_HINT = 'Kandidaten-Score (Gate 1) — nicht vergleichbar mit dem Analyse-Score verarbeiteter Signale. Dieses Signal wurde nie analysiert und nie per Telegram versendet.';
+
 // ─── Signal Detail Modal ──────────────────────────────────────
 function DashSignalModal({ signal, scoringRules, onClose, onExecuteTrade, onSaveToJournal, onIgnoreSignal }) {
   if (!signal) return null;
   const pnl        = _calcPnL(signal);
+  const gate       = candidateGateInfo(signal, scoringRules);
   const sc         = signal.ai_score || 0;
-  const scoreColor = sc >= 80 ? 'var(--win)' : sc >= 65 ? 'var(--wait)' : 'var(--loss)';
+  const scoreColor = gate ? 'var(--loss)' : sc >= 80 ? 'var(--win)' : sc >= 65 ? 'var(--wait)' : 'var(--loss)';
   const fmt        = v => { const n = Number(v); return Number.isFinite(n) ? '$' + n.toFixed(2) : '–'; };
   const rr         = signal.risk_reward;
   const safeParse  = (s, def) => { try { return JSON.parse(s) ?? def; } catch { return def; } };
@@ -122,24 +139,53 @@ function DashSignalModal({ signal, scoringRules, onClose, onExecuteTrade, onSave
         </div>
 
         <div style={{ padding: '0 20px 20px' }}>
-          {/* Score */}
+          {/* Score — Zwei-Gate-System: Kandidaten-Score (Gate 1) und Analyse-
+              Score (Gate 2) sind getrennte Skalen. REJECTED-Zeilen haben nur
+              einen Kandidaten-Score; verarbeitete Signale zeigen beide. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '16px 0 12px', borderBottom: '1px solid var(--border)' }}>
-            <div style={{ textAlign: 'center', flexShrink: 0 }}>
-              <div style={{ fontSize: 32, fontWeight: 800, fontFamily: 'var(--font-mono)', color: scoreColor, lineHeight: 1 }}>{sc}</div>
-              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.08em', marginTop: 2 }}>Score</div>
-            </div>
+            {gate && !gate.missingEntry ? (
+              <div style={{ textAlign: 'center', flexShrink: 0 }} title={CANDIDATE_SCORE_HINT}>
+                <div style={{ fontSize: 32, fontWeight: 800, fontFamily: 'var(--font-mono)', color: scoreColor, lineHeight: 1 }}>{gate.score}<span style={{ fontSize: 16, color: 'var(--text-tertiary)' }}>/{gate.threshold}</span></div>
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.08em', marginTop: 2 }}>Kandidaten-Score</div>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', flexShrink: 0 }}>
+                <div style={{ fontSize: 32, fontWeight: 800, fontFamily: 'var(--font-mono)', color: scoreColor, lineHeight: 1 }}>{sc}</div>
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.08em', marginTop: 2 }}>Analyse-Score</div>
+              </div>
+            )}
+            {!gate && signal.candidate_score != null && (
+              <>
+                <div style={{ width: 1, height: 40, background: 'var(--border)', flexShrink: 0 }}/>
+                <div style={{ textAlign: 'center', flexShrink: 0 }} title={`Gate 1 (Kandidaten-Score): ${signal.candidate_score} von mind. ${signal.candidate_threshold ?? '–'} — eigene Skala, nicht mit dem Analyse-Score vergleichbar`}>
+                  <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{signal.candidate_score}<span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>/{signal.candidate_threshold ?? '–'}</span></div>
+                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '.08em' }}>Kandidat (Gate 1)</div>
+                </div>
+              </>
+            )}
             <div style={{ width: 1, height: 40, background: 'var(--border)', flexShrink: 0 }}/>
             <div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: scoreColor }}>{signal.signal_quality || '–'}</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: scoreColor }}>{gate ? (gate.missingEntry ? 'Kein gültiger Entry-Preis' : 'Kandidat abgelehnt (Gate 1)') : signal.signal_quality || '–'}</div>
               {signal.ai_risk && <span className={`badge ${signal.ai_risk === 'LOW' ? 'badge-win' : signal.ai_risk === 'HIGH' ? 'badge-loss' : 'badge-wait'}`} style={{ marginTop: 4 }}>{signal.ai_risk} RISK</span>}
             </div>
             <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Status</div>
-              <span className={`badge ${signal.outcome === 'WIN' ? 'badge-win' : signal.outcome === 'LOSS' ? 'badge-loss' : signal.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`} style={{ marginTop: 4 }}>
-                {signal.outcome || 'OPEN'}
+              <span className={`badge ${signal.outcome === 'WIN' ? 'badge-win' : signal.outcome === 'LOSS' || signal.outcome === 'REJECTED' ? 'badge-loss' : signal.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`} style={{ marginTop: 4 }}>
+                {signal.outcome === 'REJECTED' ? '✗ Kandidat abgelehnt' : signal.outcome || 'OPEN'}
               </span>
             </div>
           </div>
+
+          {/* REJECTED-Erklärung: verhindert den scheinbaren Widerspruch
+              "Dashboard zeigt 77, Telegram zeigt 30" — das sind zwei
+              verschiedene Signale mit zwei verschiedenen Score-Systemen. */}
+          {gate && !gate.missingEntry && (
+            <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-secondary)', background: 'rgba(239,68,68,.07)', border: '1px solid rgba(239,68,68,.2)', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6 }}>
+              Dieses Signal wurde am <b>Kandidaten-Gate (Gate 1)</b> abgelehnt: Score {gate.score} von mindestens {gate.threshold}.
+              Es wurde <b>nie analysiert</b> und <b>nie per Telegram versendet</b>. Der Kandidaten-Score ist eine eigene Skala
+              und nicht mit dem Analyse-Score verarbeiteter Signale vergleichbar.
+            </div>
+          )}
 
           {/* Strategy + Asset meta */}
           {(signal.strategy_key || signal.asset_class) && (
@@ -1043,7 +1089,9 @@ const LatestTradesCard = ({ signals, scoringRules, onViewAll, onExecuteTrade, on
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((s, i) => (
+                {filtered.map((s, i) => {
+                  const gate = candidateGateInfo(s, scoringRules);
+                  return (
                   <tr key={i} style={{ cursor: 'pointer', opacity: s.outcome === 'REJECTED' ? 0.6 : 1 }} onClick={() => setSelected(s)}>
                     <td className="mono muted" style={{ fontSize: 11 }}>{getTimeAgo(s.created_at)}</td>
                     <td><AssetChip symbol={s.symbol}/></td>
@@ -1054,13 +1102,23 @@ const LatestTradesCard = ({ signals, scoringRules, onViewAll, onExecuteTrade, on
                     </td>
                     <td className="mono win" style={{ fontSize: 11 }}>{s.ai_tp ? `$${s.ai_tp.toFixed(2)}` : '–'}</td>
                     <td className="mono loss" style={{ fontSize: 11 }}>{s.ai_sl ? `$${s.ai_sl.toFixed(2)}` : '–'}</td>
-                    <td className="mono">{s.ai_score || 0}</td>
+                    <td className="mono">
+                      {gate
+                        ? (gate.missingEntry
+                            ? <span className="muted">–</span>
+                            : <span className="muted" style={{ cursor: 'help' }} title={CANDIDATE_SCORE_HINT}>{gate.score}/{gate.threshold}</span>)
+                        : (s.ai_score || 0)}
+                    </td>
                     <td className="mono muted" style={{ fontSize: 10, cursor: s.strategy_key ? 'help' : 'default' }} title={s.strategy_key ? scoringRulesTooltip(scoringRules, s.strategy_key) : ''}>
                       {dashSignalStrategyLabel(s) || '–'}
                     </td>
                     <td>
-                      {s.outcome === 'REJECTED'
-                        ? <span className="badge badge-loss" title={`Abgelehnt: ${s.telegram_reason || 'candidate_score_too_low'}`} style={{ opacity: 0.75 }}>✗ Abgelehnt</span>
+                      {gate
+                        ? <span className="badge badge-loss"
+                            title={gate.missingEntry ? 'Abgelehnt: kein gültiger Entry-Preis im Webhook' : `Kandidat abgelehnt (Score ${gate.score}/${gate.threshold}) — ${CANDIDATE_SCORE_HINT}`}
+                            style={{ opacity: 0.75 }}>
+                            {gate.missingEntry ? '✗ Abgelehnt (kein Entry)' : `✗ Kandidat abgelehnt (${gate.score}/${gate.threshold})`}
+                          </span>
                         : s.outcome === 'SKIPPED'
                         ? <span className="badge badge-neutral" style={{ opacity: 0.7 }}>⏭ Skip</span>
                         : <span className={`badge ${s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' ? 'badge-neutral' : 'badge-wait'}`}>
@@ -1069,13 +1127,15 @@ const LatestTradesCard = ({ signals, scoringRules, onViewAll, onExecuteTrade, on
                       }
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
           {/* Mobile card list */}
           <div className="signal-mobile-list">
             {filtered.map((s, i) => {
+              const gate = candidateGateInfo(s, scoringRules);
               const sc = s.ai_score || 0;
               const scoreColor = sc >= 90 ? 'var(--win)' : sc >= 75 ? 'var(--wait)' : 'var(--blue-400)';
               const outcomeCls = s.outcome === 'WIN' ? 'badge-win' : s.outcome === 'LOSS' ? 'badge-loss' : s.outcome === 'IGNORED' || s.outcome === 'SKIPPED' ? 'badge-neutral' : s.outcome === 'REJECTED' ? 'badge-loss' : 'badge-wait';
@@ -1084,10 +1144,20 @@ const LatestTradesCard = ({ signals, scoringRules, onViewAll, onExecuteTrade, on
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <AssetChip symbol={s.symbol}/>
                     {s.direction && <span className={`badge ${s.direction === 'LONG' ? 'badge-long' : 'badge-short'}`}>{s.direction}</span>}
-                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: scoreColor, fontSize: 13, marginLeft: 4 }}>{sc}</span>
-                    <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 2 }}>pts</span>
-                    <span className={`badge ${outcomeCls}`} style={{ marginLeft: 'auto', fontSize: 10 }}>
-                      {s.outcome === 'REJECTED' ? '✗ Abgelehnt' : s.outcome === 'SKIPPED' ? '⏭ Skip' : s.outcome || 'OPEN'}
+                    {gate && !gate.missingEntry
+                      ? <>
+                          <span title={CANDIDATE_SCORE_HINT} style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--text-tertiary)', fontSize: 13, marginLeft: 4 }}>{gate.score}/{gate.threshold}</span>
+                          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 2 }}>Kandidat</span>
+                        </>
+                      : gate
+                      ? null
+                      : <>
+                          <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: scoreColor, fontSize: 13, marginLeft: 4 }}>{sc}</span>
+                          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 2 }}>pts</span>
+                        </>}
+                    <span className={`badge ${outcomeCls}`} style={{ marginLeft: 'auto', fontSize: 10 }}
+                      title={gate && !gate.missingEntry ? `Kandidat abgelehnt (Score ${gate.score}/${gate.threshold}) — ${CANDIDATE_SCORE_HINT}` : ''}>
+                      {gate ? (gate.missingEntry ? '✗ Abgelehnt (kein Entry)' : '✗ Kandidat abgelehnt') : s.outcome === 'SKIPPED' ? '⏭ Skip' : s.outcome || 'OPEN'}
                     </span>
                   </div>
                   <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
