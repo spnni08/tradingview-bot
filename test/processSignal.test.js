@@ -160,6 +160,17 @@ for (const [strat, cases] of Object.entries(signalFixtures)) {
 
 // ── Strukturelle Garantien ────────────────────────────────────────────────
 
+test('processSignal · REJECTED-Zeile und signal_candidates-Eintrag teilen dieselbe signal_id', async () => {
+  // Die Verknüpfung erlaubt getHistory(), Schwelle + Details des Kandidaten an
+  // die Dashboard-Zeile zu joinen ("Kandidat abgelehnt (Score X/Y)").
+  const { env } = await run('crypto_baseline', 'edge');
+  const sigRow  = env.DB.insertedRow('signals');
+  const candRow = env.DB.insertedRow('signal_candidates');
+  assert.equal(sigRow.outcome, 'REJECTED');
+  assert.ok(sigRow.id, 'REJECTED-Zeile hat eine id');
+  assert.equal(candRow.signal_id, sigRow.id, 'candidate.signal_id == signals.id');
+});
+
 test('processSignal · OPEN-Trade persistiert genau eine signals- + eine candidate-Zeile', async () => {
   const { env } = await run('crypto_baseline', 'trade');
   assert.equal(env.DB.insertCount('signals'), 1);

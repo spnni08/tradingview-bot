@@ -2426,6 +2426,13 @@ async function ensureTables(env) {
       )
     `).run();
 
+    // getHistory() joint pro signals-Zeile den zugehörigen Kandidaten über
+    // signal_id — ohne Index wäre das ein Full-Scan pro Zeile.
+    await env.DB.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_signal_candidates_signal_id
+      ON signal_candidates (signal_id)
+    `).run();
+
     _tablesReady = true;
   } catch (error) {
     console.error('❌ ensureTables error:', error.message);
@@ -3053,17 +3060,21 @@ async function processSignal(env, signal) {
 
   if (!passedCandidateGate) {
     console.log(`❌ Candidate rejected [${strategyKey}]: ${signal.symbol} score=${candidateScore}/${candidateThreshold} → candidate_score_too_low`);
+    // Die REJECTED-signals-Zeile und der signal_candidates-Eintrag teilen sich
+    // dieselbe signal_id, damit getHistory() Score-Schwelle und -Details des
+    // Kandidaten an die Dashboard-Zeile joinen kann (ai_score enthält hier den
+    // Kandidaten-Score, NICHT den Analyse-Score verarbeiteter Signale).
+    const rejectedId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     // Abgelehnter Kandidat: in signal_candidates speichern (Detaildaten)
     await saveSignalCandidate(env, {
       signal: scoringSignal, strategyKey, strategyId: strategy?.id,
       candidateScore, threshold: candidateThreshold,
       scoreDetails: candidateScoreDetails,
-      passedThreshold: false, signalId: null,
+      passedThreshold: false, signalId: rejectedId,
     });
     // Auch in signals-Tabelle eintragen (outcome='REJECTED') damit kein Signal
     // lautlos verschwindet — jedes eingehende Signal muss im Dashboard sichtbar sein.
     try {
-      const rejectedId = `signal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       await env.DB.prepare(`
         INSERT INTO signals (id, symbol, timeframe, direction, price, ai_score,
           telegram_reason, strategy_key, asset_class, created_at, outcome, is_test, source, trigger_reason)
@@ -3936,9 +3947,29 @@ async function getHistory(env, limit = 50) {
     ).first();
     if (!tableCheck) return [];
 
-    const rows = await env.DB.prepare(
-      `SELECT * FROM signals ORDER BY created_at DESC LIMIT ?`
-    ).bind(limit).all();
+    // Kandidaten-Score (Gate 1) + Schwelle mitliefern: für REJECTED-Zeilen ist
+    // ai_score der Kandidaten-Score — das Dashboard braucht die Schwelle, um
+    // "Kandidat abgelehnt (Score X/Y)" statt einer nackten Zahl anzuzeigen.
+    // Für verarbeitete Signale macht das Paar candidate_score/ai_score das
+    // Zwei-Gate-System in der Detail-Ansicht transparent. Fallback ohne Join,
+    // solange signal_candidates noch nicht existiert (ensureTables lief nie).
+    const candTable = await env.DB.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='signal_candidates'`
+    ).first();
+    const rows = candTable
+      ? await env.DB.prepare(`
+          SELECT s.*, c.candidate_score, c.score_threshold AS candidate_threshold
+          FROM signals s
+          LEFT JOIN signal_candidates c ON c.id = (
+            SELECT id FROM signal_candidates
+            WHERE signal_id = s.id
+            ORDER BY received_at DESC LIMIT 1
+          )
+          ORDER BY s.created_at DESC LIMIT ?
+        `).bind(limit).all()
+      : await env.DB.prepare(
+          `SELECT * FROM signals ORDER BY created_at DESC LIMIT ?`
+        ).bind(limit).all();
     return (rows.results || []).map(withStrategyDisplay);
   } catch (error) {
     console.error('Error in getHistory:', error);
